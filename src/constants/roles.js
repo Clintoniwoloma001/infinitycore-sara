@@ -1,0 +1,397 @@
+/**
+ * Role definitions and metadata for the role-aware application
+ * Replaces hardcoded role strings throughout the app
+ */
+
+export const ROLES = {
+  SUPER_ADMIN: 'super_admin',
+  ADMIN: 'admin',
+  BRANCH_MANAGER: 'branch_manager',
+  AREA_MANAGER: 'area_manager',
+  HEAD_OF_BUSINESS: 'head_of_business',
+  OPERATIONS_MANAGER: 'operations_manager',
+  LOAN_OFFICER: 'loan_officer',
+  RELATIONSHIP_MANAGER: 'relationship_manager',
+  CUSTOMER_SERVICE: 'customer_service',
+  HR_MANAGER: 'hr_manager',
+  HR_OFFICER: 'hr_officer',
+  STAFF: 'staff',
+  CUSTOMER: 'customer',
+}
+
+// Role hierarchy - higher number = more power
+export const ROLE_HIERARCHY = {
+  [ROLES.SUPER_ADMIN]: 100,
+  [ROLES.ADMIN]: 90,
+  [ROLES.BRANCH_MANAGER]: 80,
+  [ROLES.AREA_MANAGER]: 78,
+  [ROLES.HEAD_OF_BUSINESS]: 76,
+  [ROLES.OPERATIONS_MANAGER]: 75,
+  [ROLES.LOAN_OFFICER]: 60,
+  [ROLES.RELATIONSHIP_MANAGER]: 60,
+  [ROLES.HR_MANAGER]: 60,
+  [ROLES.CUSTOMER_SERVICE]: 50,
+  [ROLES.HR_OFFICER]: 50,
+  [ROLES.STAFF]: 40,
+  [ROLES.CUSTOMER]: 10,
+}
+
+// Role metadata for UI display
+export const ROLE_METADATA = {
+  [ROLES.SUPER_ADMIN]: {
+    label: 'Super Admin',
+    description: 'Full system access, can switch all views',
+    primaryModule: 'admin',
+    color: '#7c3aed',
+    icon: 'Shield',
+  },
+  [ROLES.ADMIN]: {
+    label: 'Admin',
+    description: 'System administration and user management',
+    primaryModule: 'admin',
+    color: '#7c3aed',
+    icon: 'Lock',
+  },
+  [ROLES.BRANCH_MANAGER]: {
+    label: 'Branch Manager',
+    description: 'Manage branch operations and staff',
+    primaryModule: 'dashboard',
+    color: '#2563eb',
+    icon: 'Building2',
+  },
+  [ROLES.AREA_MANAGER]: {
+    label: 'Area Manager',
+    description: 'Oversees multiple branches within a region',
+    primaryModule: 'dashboard',
+    color: '#1d4ed8',
+    icon: 'Map',
+  },
+  [ROLES.HEAD_OF_BUSINESS]: {
+    label: 'Head of Business',
+    description: 'Senior business leadership approval',
+    primaryModule: 'dashboard',
+    color: '#1e40af',
+    icon: 'Briefcase',
+  },
+  [ROLES.OPERATIONS_MANAGER]: {
+    label: 'Operations Manager',
+    description: 'Manage operational workflows',
+    primaryModule: 'my-work',
+    color: '#2563eb',
+    icon: 'Workflow',
+  },
+  [ROLES.LOAN_OFFICER]: {
+    label: 'Loan Officer',
+    description: 'Manage loan applications and assessments',
+    primaryModule: 'loans',
+    color: '#059669',
+    icon: 'Landmark',
+  },
+  [ROLES.RELATIONSHIP_MANAGER]: {
+    label: 'Relationship Manager',
+    description: 'Manage customer relationships',
+    primaryModule: 'customers',
+    color: '#0891b2',
+    icon: 'Users',
+  },
+  [ROLES.CUSTOMER_SERVICE]: {
+    label: 'Customer Service',
+    description: 'Handle customer support and inquiries',
+    primaryModule: 'support',
+    color: '#f59e0b',
+    icon: 'Headphones',
+  },
+  [ROLES.HR_MANAGER]: {
+    label: 'HR Manager',
+    description: 'Manage recruitment and HR processes',
+    primaryModule: 'hr',
+    color: '#dc2626',
+    icon: 'Users',
+  },
+  [ROLES.HR_OFFICER]: {
+    label: 'HR Officer',
+    description: 'HR administrative tasks',
+    primaryModule: 'hr',
+    color: '#dc2626',
+    icon: 'Briefcase',
+  },
+  [ROLES.STAFF]: {
+    label: 'Staff',
+    description: 'General staff member',
+    primaryModule: 'dashboard',
+    color: '#6b7280',
+    icon: 'User',
+  },
+  [ROLES.CUSTOMER]: {
+    label: 'Customer',
+    description: 'External customer',
+    primaryModule: 'customer-dashboard',
+    color: '#10b981',
+    icon: 'User',
+  },
+}
+
+// Permissions by role
+export const ROLE_PERMISSIONS = {
+  [ROLES.SUPER_ADMIN]: [
+    'customers.read',
+    'customers.create',
+    'customers.update',
+    'customers.delete',
+    'loans.read',
+    'loans.create',
+    'loans.assess',
+    'loans.approve_low',
+    'loans.approve_medium',
+    'loans.approve_high',
+    'loans.disburse',
+    'documents.upload',
+    'documents.read',
+    'documents.verify',
+    'documents.delete',
+    'hr.jobs.create',
+    'hr.jobs.manage',
+    'hr.applications.read',
+    'hr.applications.screen',
+    'hr.assessments.create',
+    'hr.interviews.schedule',
+    'hr.hire',
+    'hr.payroll.read',
+    'hr.offer_letters.read',
+    'branches.read',
+    'support.create',
+    'support.read',
+    'support.resolve',
+    'admin.manage_users',
+    'admin.view_audit',
+    'admin.manage_config',
+    'reports.read',
+  ],
+  [ROLES.ADMIN]: [
+    'customers.read',
+    'customers.create',
+    'customers.update',
+    'customers.delete',
+    'loans.read',
+    'loans.create',
+    'loans.assess',
+    'loans.approve_low',
+    'loans.approve_medium',
+    'loans.approve_high',
+    'loans.disburse',
+    'documents.upload',
+    'documents.read',
+    'documents.verify',
+    'documents.delete',
+    'hr.jobs.create',
+    'hr.jobs.manage',
+    'hr.applications.read',
+    'hr.applications.screen',
+    'hr.assessments.create',
+    'hr.interviews.schedule',
+    'hr.hire',
+    'hr.leave.manage',
+    'hr.payroll.read',
+    'hr.offer_letters.read',
+    'branches.read',
+    'support.create',
+    'support.read',
+    'support.resolve',
+    'admin.manage_users',
+    'admin.view_audit',
+    'admin.manage_config',
+    'reports.read',
+  ],
+  [ROLES.BRANCH_MANAGER]: [
+    'customers.read',
+    'customers.update',
+    'loans.read',
+    'loans.assess',
+    'loans.approve_medium',
+    'loans.disburse',
+    'documents.read',
+    'branches.read',
+    'reports.read',
+    'support.read',
+  ],
+  [ROLES.AREA_MANAGER]: [
+    'customers.read',
+    'loans.read',
+    'loans.approve_medium',
+    'loans.disburse',
+    'hr.leave.manage',
+    'branches.read',
+    'reports.read',
+  ],
+  [ROLES.HEAD_OF_BUSINESS]: [
+    'customers.read',
+    'loans.read',
+    'loans.approve_high',
+    'loans.disburse',
+    'hr.leave.manage',
+    'branches.read',
+    'reports.read',
+  ],
+  [ROLES.LOAN_OFFICER]: [
+    'customers.read',
+    'loans.read',
+    'loans.assess',
+    'loans.approve_low',
+    'loans.disburse',
+    'documents.upload',
+    'documents.read',
+    'documents.verify',
+    'support.read',
+  ],
+  [ROLES.RELATIONSHIP_MANAGER]: [
+    'customers.read',
+    'customers.update',
+    'loans.read',
+    'documents.read',
+    'support.create',
+    'support.read',
+  ],
+  [ROLES.CUSTOMER_SERVICE]: [
+    'customers.read',
+    'support.create',
+    'support.read',
+    'support.resolve',
+  ],
+  [ROLES.HR_MANAGER]: [
+    'hr.jobs.create',
+    'hr.jobs.manage',
+    'hr.applications.read',
+    'hr.applications.screen',
+    'hr.assessments.create',
+    'hr.interviews.schedule',
+    'hr.hire',
+    'hr.leave.manage',
+    'hr.payroll.read',
+    'hr.offer_letters.read',
+    'branches.read',
+    'reports.read',
+  ],
+  [ROLES.HR_OFFICER]: [
+    'hr.applications.read',
+    'hr.assessments.create',
+    'hr.interviews.schedule',
+    'hr.offer_letters.read',
+  ],
+  [ROLES.STAFF]: [
+    'customers.read',
+    'loans.read',
+    'documents.upload',
+  ],
+  [ROLES.CUSTOMER]: [
+    'customers.read', // Own customer data
+    'loans.read', // Own loans
+    'documents.upload', // Own documents
+    'support.create',
+    'support.read',
+  ],
+}
+
+// Module navigation by role
+export const ROLE_MODULES = {
+  [ROLES.SUPER_ADMIN]: [
+    'dashboard',
+    'customers',
+    'loans',
+    'my-work',
+    'hr',
+    'support',
+    'reports',
+    'audit-logs',
+    'users',
+  ],
+  [ROLES.ADMIN]: [
+    'dashboard',
+    'customers',
+    'loans',
+    'my-work',
+    'hr',
+    'support',
+    'reports',
+    'audit-logs',
+    'users',
+  ],
+  [ROLES.BRANCH_MANAGER]: [
+    'dashboard',
+    'my-work',
+    'customers',
+    'loans',
+    'support',
+  ],
+  [ROLES.AREA_MANAGER]: [
+    'dashboard',
+    'my-work',
+    'customers',
+    'loans',
+    'support',
+  ],
+  [ROLES.HEAD_OF_BUSINESS]: [
+    'dashboard',
+    'my-work',
+    'customers',
+    'loans',
+    'support',
+    'reports',
+  ],
+  [ROLES.OPERATIONS_MANAGER]: [
+    'dashboard',
+    'my-work',
+    'customers',
+    'loans',
+  ],
+  [ROLES.LOAN_OFFICER]: [
+    'my-work',
+    'loans',
+    'customers',
+  ],
+  [ROLES.RELATIONSHIP_MANAGER]: [
+    'my-work',
+    'customers',
+    'loans',
+  ],
+  [ROLES.CUSTOMER_SERVICE]: [
+    'my-work',
+    'support',
+    'customers',
+  ],
+  [ROLES.HR_MANAGER]: [
+    'hr',
+    'dashboard',
+  ],
+  [ROLES.HR_OFFICER]: [
+    'hr',
+  ],
+  [ROLES.STAFF]: [
+    'dashboard',
+    'customers',
+    'loans',
+  ],
+  [ROLES.CUSTOMER]: [
+    'customer-dashboard',
+    'my-loans',
+    'support',
+  ],
+}
+
+// ------------------------------------------------------------------
+// STAFF PROMOTION MATRIX — mirrors the DB trigger in
+// schema_phase5_role_security.sql (enforce_role_change_policy).
+// This copy is for UI purposes only (so a manager doesn't see options
+// they can't actually use) — the DATABASE trigger is the real
+// authority and rejects anything this matrix would incorrectly allow.
+// ------------------------------------------------------------------
+export function assignableRoles(actorRole) {
+  if (actorRole === ROLES.SUPER_ADMIN) return Object.values(ROLES)
+  if (actorRole === ROLES.ADMIN) return Object.values(ROLES).filter((r) => r !== ROLES.SUPER_ADMIN)
+  if (actorRole === ROLES.AREA_MANAGER || actorRole === ROLES.HR_MANAGER) {
+    return Object.values(ROLES).filter((r) => ![ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.AREA_MANAGER, ROLES.HEAD_OF_BUSINESS].includes(r))
+  }
+  if (actorRole === ROLES.BRANCH_MANAGER) {
+    return [ROLES.STAFF, ROLES.LOAN_OFFICER, ROLES.RELATIONSHIP_MANAGER, ROLES.CUSTOMER_SERVICE]
+  }
+  return []
+}
