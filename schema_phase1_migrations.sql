@@ -230,7 +230,7 @@ create table if not exists public.employees (
   email text,
   phone text,
   department text,
-  position text,
+  "position" text,
   manager_id uuid references auth.users(id) on delete set null,
   hire_date date,
   employment_status text default 'active' check (employment_status in ('active', 'on_leave', 'terminated', 'suspended')),

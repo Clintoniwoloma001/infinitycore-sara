@@ -306,7 +306,7 @@ create table if not exists public.employee_work_history (
   company_name text not null,
   company_address text,
   company_email text,
-  position text,
+  "position" text,
   duties text,
   salary numeric(12, 2),
   supervisor_name text,
@@ -376,7 +376,7 @@ create table if not exists public.employee_onboarding_links (
   candidate_name text not null,
   candidate_email text,
   candidate_phone text,
-  position text,
+  "position" text,
   department text,
   branch text,
   employment_type text check (employment_type in ('full_time', 'part_time', 'contract', 'intern')),
@@ -399,7 +399,7 @@ create table if not exists public.employee_onboarding_submissions (
   candidate_name text,
   email text,
   phone text,
-  position text,
+  "position" text,
   department text,
   employment_type text,
   payload jsonb,
@@ -661,7 +661,7 @@ create or replace function public.get_onboarding_link_details(
   candidate_name text,
   candidate_email text,
   candidate_phone text,
-  position text,
+  "position" text,
   department text,
   branch text,
   employment_type text,
@@ -671,7 +671,7 @@ create or replace function public.get_onboarding_link_details(
 language sql security definer volatile set search_path = public as $$
   with l as (
     select id, token_hash, candidate_name, candidate_email, candidate_phone,
-           position, department, branch, employment_type, expiry, status
+           "position", department, branch, employment_type, expiry, status
     from public.employee_onboarding_links
     where token_hash = encode(digest(p_token, 'sha256'), 'hex')
   ),
@@ -684,7 +684,7 @@ language sql security definer volatile set search_path = public as $$
     returning id
   )
   select l.id, l.candidate_name, l.candidate_email, l.candidate_phone,
-         l.position, l.department, l.branch, l.employment_type, l.expiry,
+         l."position", l.department, l.branch, l.employment_type, l.expiry,
          case
            when l.expiry <= now() then 'expired'
            when l.status = 'submitted' then 'submitted'
@@ -758,7 +758,7 @@ begin
   end;
 
   select id, candidate_name, candidate_email, candidate_phone, expiry, status,
-         position, department, branch, employment_type
+         "position", department, branch, employment_type
   into v_link
   from public.employee_onboarding_links
   where token_hash = v_hash
@@ -801,7 +801,7 @@ begin
     insert into public.employees (
       full_name, candidate_id, email, phone, sex, date_of_birth, state_of_origin, lga,
       town, residential_address, religion, denomination, nationality, marital_status,
-      employee_code, department, position, employment_type, employment_status,
+      employee_code, department, "position", employment_type, employment_status,
       next_of_kin_name, next_of_kin_address, next_of_kin_phone, next_of_kin_relationship,
       beneficiary_name, beneficiary_address, beneficiary_phone, beneficiary_relationship,
       pension_id, tax_id, bvn, nin, branch,
@@ -813,7 +813,7 @@ begin
       nullif(p_payload ->> 'lga', ''), nullif(p_payload ->> 'town', ''), nullif(p_payload ->> 'residential_address', ''),
       nullif(p_payload ->> 'religion', ''), nullif(p_payload ->> 'denomination', ''), nullif(p_payload ->> 'nationality', ''),
       nullif(p_payload ->> 'marital_status', ''), nullif(p_payload ->> 'employee_code', ''),
-      nullif(coalesce(p_payload ->> 'department', v_link.department), ''), nullif(coalesce(p_payload ->> 'position', v_link.position), ''),
+      nullif(coalesce(p_payload ->> 'department', v_link.department), ''), nullif(coalesce(p_payload ->> 'position', v_link."position"), ''),
       nullif(coalesce(p_payload ->> 'employment_type', v_link.employment_type), ''), 'onboarding',
       nullif(p_payload ->> 'next_of_kin_name', ''), nullif(p_payload ->> 'next_of_kin_address', ''),
       nullif(p_payload ->> 'next_of_kin_phone', ''), nullif(p_payload ->> 'next_of_kin_relationship', ''),
@@ -882,7 +882,7 @@ begin
     for v_row in select * from jsonb_array_elements(p_payload -> 'work_history')
     loop
       if (v_row.value ->> 'company_name') is not null and trim(v_row.value ->> 'company_name') <> '' then
-        insert into public.employee_work_history (employee_id, source, company_name, company_address, company_email, position, duties, salary,
+        insert into public.employee_work_history (employee_id, source, company_name, company_address, company_email, "position", duties, salary,
           supervisor_name, supervisor_phone, start_date, end_date, reason_for_leaving)
         values (v_employee, 'onboarding', v_row.value ->> 'company_name', v_row.value ->> 'company_address',
                 v_row.value ->> 'company_email', v_row.value ->> 'position', v_row.value ->> 'duties',
@@ -932,9 +932,9 @@ begin
     end loop;
   end if;
 
-  insert into public.employee_onboarding_submissions (link_id, employee_id, candidate_name, email, phone, position, department,
+  insert into public.employee_onboarding_submissions (link_id, employee_id, candidate_name, email, phone, "position", department,
     employment_type, payload, declaration_accepted, signature_data)
-  values (v_link.id, v_employee, v_full_name, nullif(v_email, ''), nullif(v_phone, ''), v_link.position, v_link.department,
+  values (v_link.id, v_employee, v_full_name, nullif(v_email, ''), nullif(v_phone, ''), v_link."position", v_link.department,
     v_link.employment_type, p_payload, coalesce((p_payload ->> 'declaration_accepted')::boolean, false), p_payload ->> 'declaration_signature')
   returning id into v_submission;
 
@@ -965,7 +965,7 @@ begin
   loop
     insert into public.notifications (user_id, title, message, type, link)
     values (v_hr_id, 'New employee onboarding submitted',
-            format('%s submitted onboarding information as %s.', v_full_name, coalesce(v_link.position, 'N/A')),
+            format('%s submitted onboarding information as %s.', v_full_name, coalesce(v_link."position", 'N/A')),
             'onboarding', '/onboarding-links');
   end loop;
 
@@ -1232,7 +1232,7 @@ begin
             email = coalesce(nullif(v_payload ->> 'email', ''), email),
             phone = coalesce(nullif(v_payload ->> 'phone', ''), phone),
             department = coalesce(nullif(v_payload ->> 'department', ''), department),
-            position = coalesce(nullif(v_payload ->> 'position', ''), position),
+            "position" = coalesce(nullif(v_payload ->> 'position', ''), "position"),
             employment_status = coalesce(nullif(v_payload ->> 'employment_status', ''), employment_status),
             salary = coalesce(nullif(v_payload ->> 'salary', '')::numeric, salary),
             bank_name = coalesce(nullif(v_payload ->> 'bank_name', ''), bank_name),
@@ -1243,7 +1243,7 @@ begin
           update public.data_import_records set status = 'updated', target_entity_id = v_dupe_id, match_type = v_match where id = v_row.id;
         else
           insert into public.employees (
-            full_name, email, phone, department, position, employment_status, salary,
+            full_name, email, phone, department, "position", employment_status, salary,
             bank_name, account_number, employee_code, sex, date_of_birth, hire_date,
             created_at, updated_at
           ) values (

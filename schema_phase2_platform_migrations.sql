@@ -89,7 +89,7 @@ create table if not exists public.offer_letters (
   id uuid primary key default gen_random_uuid(),
   candidate_id uuid references public.hr_candidates(id) on delete set null,
   candidate_name text,
-  position text,
+  "position" text,
   salary numeric(12, 2) default 0,
   employment_type text check (employment_type in ('full_time', 'part_time', 'contract', 'intern')),
   status text default 'draft' check (status in ('draft', 'issued', 'accepted', 'declined', 'withdrawn')),
