@@ -121,9 +121,9 @@ export default function OnboardingForm() {
       try {
         const details = await onboardingService.getDetails(token)
         if (!details) throw new Error('This onboarding link could not be found.')
-        if (details.status === 'expired') throw new Error('This onboarding link has expired. Please contact your HR office for a new one.')
-        if (details.status === 'revoked') throw new Error('This onboarding link has been revoked. Please contact your HR office.')
-        if (details.status === 'submitted') { if (active) setStatus('used'); return }
+        if (details.status === 'EXPIRED') throw new Error('This onboarding link has expired. Please contact your HR office for a new one.')
+        if (details.status === 'REVOKED') throw new Error('This onboarding link has been revoked. Please contact your HR office.')
+        if (details.status === 'SUBMITTED') { if (active) setStatus('used'); return }
         if (!active) return
         setLink(details)
         setForm((f) => ({

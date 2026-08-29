@@ -22,7 +22,7 @@ async function copyText(text) {
 }
 
 export default function OnboardingLinks() {
-  const { hasPermission } = useAuth()
+  const { hasPermission, user } = useAuth()
   const canManage = hasPermission('hr.onboarding.manage')
 
   const [links, setLinks] = useState([])
@@ -80,6 +80,7 @@ export default function OnboardingLinks() {
         branch: form.branch,
         employmentType: form.employment_type,
         expiresInDays: form.expires_in_days == null ? DEFAULT_EXPIRY_DAYS : form.expires_in_days,
+        createdBy: user?.id,
       })
       setCreatedLink(link)
       setForm({})
@@ -123,6 +124,7 @@ export default function OnboardingLinks() {
         branch: link.branch,
         employmentType: link.employment_type,
         expiresInDays: DEFAULT_EXPIRY_DAYS,
+        createdBy: user?.id,
       })
       setCreatedLink(fresh)
       setForm({})
@@ -141,9 +143,9 @@ export default function OnboardingLinks() {
 
   const stats = {
     total: links.length,
-    submitted: links.filter((l) => l.status === 'submitted').length,
-    opened: links.filter((l) => ['opened', 'in_progress'].includes(l.status)).length,
-    pending: links.filter((l) => l.status === 'pending').length,
+    submitted: links.filter((l) => l.status === 'SUBMITTED').length,
+    opened: links.filter((l) => ['OPENED', 'IN_PROGRESS'].includes(l.status)).length,
+    pending: links.filter((l) => l.status === 'PENDING').length,
   }
 
   return (
@@ -198,10 +200,10 @@ export default function OnboardingLinks() {
                   </td>
                   <td className="px-6 py-3 text-slate-600">{link.position || '-'}{link.department ? ` · ${link.department}` : ''}</td>
                   <td className="px-6 py-3 text-slate-600">{date(link.expiry)}</td>
-                  <td className="px-6 py-3">{status(link.status, ['submitted', 'active'])}</td>
+                  <td className="px-6 py-3">{status(link.status, ['SUBMITTED'])}</td>
                   <td className="px-6 py-3">
                     <div className="flex justify-end gap-2">
-                      {link.status !== 'revoked' && link.status !== 'submitted' && (
+                      {link.status !== 'REVOKED' && link.status !== 'SUBMITTED' && (
                         <>
                           {canManage && (
                             <button

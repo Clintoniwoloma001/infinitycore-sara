@@ -399,7 +399,7 @@ create table if not exists public.employee_onboarding_links (
   employment_type text check (employment_type in ('full_time', 'part_time', 'contract', 'intern')),
   expiry timestamptz not null,
   expires_at timestamptz,
-  status text default 'pending' check (status in ('pending', 'opened', 'in_progress', 'submitted', 'expired', 'revoked')),
+  status text default 'PENDING' check (status in ('PENDING', 'OPENED', 'IN_PROGRESS', 'SUBMITTED', 'EXPIRED', 'REVOKED')),
   created_by uuid references auth.users(id) on delete set null,
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
@@ -430,7 +430,7 @@ alter table public.employee_onboarding_links alter column expires_at set default
 update public.employee_onboarding_links
    set expires_at = expiry
  where expires_at is null and expiry is not null;
-alter table public.employee_onboarding_links add column if not exists status text default 'pending';
+alter table public.employee_onboarding_links add column if not exists status text default 'PENDING';
 alter table public.employee_onboarding_links add column if not exists created_by uuid;
 alter table public.employee_onboarding_links add column if not exists created_at timestamptz default now();
 alter table public.employee_onboarding_links add column if not exists updated_at timestamptz default now();
@@ -747,19 +747,19 @@ language sql security definer volatile set search_path = public as $$
   ),
   u as (
     update public.employee_onboarding_links
-    set status = 'opened', opened_at = now(), updated_at = now()
+    set status = 'OPENED', opened_at = now(), updated_at = now()
     where id in (select id from l)
-      and status = 'pending'
+      and status = 'PENDING'
       and p_mark_opened
     returning id
   )
   select l.id, l.candidate_name, l.candidate_email, l.candidate_phone,
          l."position", l.department, l.branch, l.employment_type, l.expiry,
          case
-           when l.expiry <= now() then 'expired'
-           when l.status = 'submitted' then 'submitted'
-           when l.status = 'revoked' then 'revoked'
-           when exists (select 1 from u where u.id = l.id) then 'opened'
+           when l.expiry <= now() then 'EXPIRED'
+           when l.status = 'SUBMITTED' then 'SUBMITTED'
+           when l.status = 'REVOKED' then 'REVOKED'
+           when exists (select 1 from u where u.id = l.id) then 'OPENED'
            else l.status
          end
   from l;
@@ -776,9 +776,9 @@ declare
   v_status text;
 begin
   update public.employee_onboarding_links
-  set status = 'in_progress', updated_at = now()
+  set status = 'IN_PROGRESS', updated_at = now()
   where token_hash = v_hash
-    and status in ('pending', 'opened')
+    and status in ('PENDING', 'OPENED')
     and expiry > now()
   returning status into v_status;
   if v_status is null then
@@ -837,10 +837,10 @@ begin
   if v_link.id is null then
     raise exception 'Invalid onboarding link.';
   end if;
-  if v_link.status = 'submitted' then
+  if v_link.status = 'SUBMITTED' then
     raise exception 'This onboarding link has already been used.';
   end if;
-  if v_link.status = 'revoked' then
+  if v_link.status = 'REVOKED' then
     raise exception 'This onboarding link has been revoked.';
   end if;
   if v_link.expiry <= now() then
@@ -1009,7 +1009,7 @@ begin
   returning id into v_submission;
 
   update public.employee_onboarding_links
-  set status = 'submitted', submitted_at = now(), updated_at = now()
+  set status = 'SUBMITTED', submitted_at = now(), updated_at = now()
   where id = v_link.id;
 
   -- Audit trail

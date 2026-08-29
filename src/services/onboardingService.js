@@ -103,7 +103,7 @@ export function resolveExpiresAt(expiresInDays) {
 }
 
 export const onboardingService = {
-  async createLink({ candidateName, candidateEmail, candidatePhone, position, department, branch, employmentType, expiresInDays = DEFAULT_EXPIRY_DAYS }) {
+  async createLink({ candidateName, candidateEmail, candidatePhone, position, department, branch, employmentType, expiresInDays = DEFAULT_EXPIRY_DAYS, createdBy }) {
     if (!candidateName) throw new Error('Candidate name is required.')
     const token = generateToken()
     const tokenHash = md5Hex(token)
@@ -113,7 +113,7 @@ export const onboardingService = {
       .insert({
         token_hash: tokenHash,
         candidate_name: candidateName,
-        candidate_email: candidateEmail || null,
+        candidate_email: candidateEmail || '',
         candidate_phone: candidatePhone || null,
         position,
         department,
@@ -121,7 +121,8 @@ export const onboardingService = {
         employment_type: employmentType || null,
         expiry: expiresAt,
         expires_at: expiresAt,
-        status: 'pending',
+        status: 'PENDING',
+        created_by: createdBy || null,
       })
       .select()
       .single()
@@ -142,7 +143,7 @@ export const onboardingService = {
   async revokeLink(id) {
     const { data, error } = await supabase
       .from('employee_onboarding_links')
-      .update({ status: 'revoked', updated_at: new Date().toISOString() })
+      .update({ status: 'REVOKED', updated_at: new Date().toISOString() })
       .eq('id', id)
       .select()
       .single()
