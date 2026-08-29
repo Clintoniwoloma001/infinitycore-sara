@@ -106,6 +106,22 @@ create table if not exists public.payroll_periods (
 
 alter table public.payroll_periods enable row level security;
 
+-- Self-heal: if payroll_periods pre-existed before phase 6 without these
+-- columns (create table if not exists would otherwise skip them), add the
+-- missing ones so the indexes / RPCs below can always rely on them.
+alter table public.payroll_periods add column if not exists period_label text;
+alter table public.payroll_periods add column if not exists start_date date;
+alter table public.payroll_periods add column if not exists end_date date;
+alter table public.payroll_periods add column if not exists status text default 'draft';
+alter table public.payroll_periods add column if not exists created_by uuid;
+alter table public.payroll_periods add column if not exists created_at timestamptz default now();
+alter table public.payroll_periods add column if not exists updated_at timestamptz default now();
+alter table public.payroll_periods add column if not exists approved_by uuid;
+alter table public.payroll_periods add column if not exists approved_at timestamptz;
+alter table public.payroll_periods add column if not exists processed_at timestamptz;
+alter table public.payroll_periods add column if not exists paid_at timestamptz;
+alter table public.payroll_periods add column if not exists notes text;
+
 create index if not exists idx_payroll_periods_status on public.payroll_periods(status);
 create index if not exists idx_payroll_item_period on public.payroll(payroll_period);
 
@@ -389,6 +405,26 @@ create table if not exists public.employee_onboarding_links (
   submitted_at timestamptz
 );
 alter table public.employee_onboarding_links enable row level security;
+
+-- Self-heal: if employee_onboarding_links predates phase 6 it may lack the
+-- newer columns (create table if not exists silently skips them). Add the
+-- missing ones BEFORE the expiry index below so it never errors.
+alter table public.employee_onboarding_links add column if not exists token_hash text;
+alter table public.employee_onboarding_links add column if not exists candidate_name text;
+alter table public.employee_onboarding_links add column if not exists candidate_email text;
+alter table public.employee_onboarding_links add column if not exists candidate_phone text;
+alter table public.employee_onboarding_links add column if not exists "position" text;
+alter table public.employee_onboarding_links add column if not exists department text;
+alter table public.employee_onboarding_links add column if not exists branch text;
+alter table public.employee_onboarding_links add column if not exists employment_type text;
+alter table public.employee_onboarding_links add column if not exists expiry timestamptz;
+alter table public.employee_onboarding_links add column if not exists status text default 'pending';
+alter table public.employee_onboarding_links add column if not exists created_by uuid;
+alter table public.employee_onboarding_links add column if not exists created_at timestamptz default now();
+alter table public.employee_onboarding_links add column if not exists updated_at timestamptz default now();
+alter table public.employee_onboarding_links add column if not exists opened_at timestamptz;
+alter table public.employee_onboarding_links add column if not exists submitted_at timestamptz;
+
 create index if not exists idx_onb_links_status on public.employee_onboarding_links(status);
 create index if not exists idx_onb_links_expiry on public.employee_onboarding_links(expiry);
 
