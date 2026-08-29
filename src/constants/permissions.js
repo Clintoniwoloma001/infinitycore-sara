@@ -37,6 +37,19 @@ export const PERMISSIONS = {
   HR_LEAVE_MANAGE: 'hr.leave.manage',
   BRANCHES_READ: 'branches.read',
 
+  // HR platform (phase 6)
+  HR_ONBOARDING_READ: 'hr.onboarding.read',
+  HR_ONBOARDING_MANAGE: 'hr.onboarding.manage',
+  HR_EMPLOYEE_READ: 'hr.employee.read',
+  HR_EMPLOYEE_UPDATE: 'hr.employee.update',
+  HR_ATTENDANCE_SELF: 'hr.attendance.self',
+  HR_ATTENDANCE_MANAGE: 'hr.attendance.manage',
+  PAYROLL_MANAGE: 'payroll.manage',
+
+  // Data import & migration centre
+  DATA_IMPORT_VIEW: 'data.import.view',
+  DATA_IMPORT_EXECUTE: 'data.import.execute',
+
   // Support
   SUPPORT_CREATE: 'support.create',
   SUPPORT_READ: 'support.read',

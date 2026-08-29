@@ -24,6 +24,12 @@ import Payroll from './pages/Payroll'
 import OfferLetters from './pages/OfferLetters'
 import Branches from './pages/Branches'
 import Reports from './pages/Reports'
+import OnboardingLinks from './pages/OnboardingLinks'
+import OnboardingForm from './pages/OnboardingForm'
+import Attendance from './pages/Attendance'
+import AttendanceManagement from './pages/AttendanceManagement'
+import EmployeeProfile from './pages/EmployeeProfile'
+import DataImport from './pages/DataImport'
 
 const pageComponents = {
   Dashboard,
@@ -44,6 +50,10 @@ const pageComponents = {
   OfferLetters,
   Branches,
   Reports,
+  OnboardingLinks,
+  Attendance,
+  AttendanceManagement,
+  DataImport,
 }
 
 function Protected({ children }) {
@@ -88,10 +98,12 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/" element={<Protected><Home /></Protected>} />
+          <Route path="/onboarding/:token" element={<OnboardingForm />} />
           {protectedRoutes.filter((route) => route.path !== '/').map((route) => (
             <Route key={route.path} path={route.path} element={<Protected><ProtectedModule route={route} /></Protected>} />
           ))}
           <Route path="/customers/:id" element={<Protected><ProtectedModule route={{ path: '/customers', element: 'Customers', permissions: ['customers.read'] }} /></Protected>} />
+          <Route path="/employees/:id" element={<Protected><ProtectedModule route={{ path: '/employees', element: 'EmployeeProfile', permissions: ['hr.employee.read'] }} /></Protected>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </HashRouter>

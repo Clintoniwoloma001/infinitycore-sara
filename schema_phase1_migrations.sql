@@ -170,7 +170,7 @@ create table if not exists public.hr_candidates (
   screening_notes text,
   screened_by uuid references auth.users(id) on delete set null,
   screened_at timestamptz,
-  ai_screening_summary text, -- AI-generated summary of CV
+  ai_screening_summary text, -- stores the AI screening summary for the candidate
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );

@@ -1,9 +1,9 @@
 node_modules
 dist
+.env
 .env.local
 *.log
 .DS_Store
 
 # Un-block the example file so it can be pushed
 !.env.example
-!.env

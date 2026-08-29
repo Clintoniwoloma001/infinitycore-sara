@@ -1,34 +1,56 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Mic, MicOff, Send, X, Volume2, VolumeX, Sparkles } from 'lucide-react'
+import { Mic, MicOff, Send, Settings, Volume2, VolumeX, X, Sparkles, Loader2 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { useMyLeaveApprovals } from '../../hooks/useMyLeaveApprovals'
 import { runSaraCommand, executeConfirmedDecision } from '../../services/agentService'
-import { parseSaraCommand } from '../../services/saraCommandParser'
+import { analyzeIntent } from '../../services/saraNlu'
+import { useSaraSettings, isQuietHours } from '../../services/saraSettings'
+import { useSaraVoice, speakText, cancelSpeech, MIC_STATES } from '../../services/saraVoice'
+import { useSaraAlerts, pushBrowserNotification, buildLeaveAlert } from '../../services/saraAlerts'
 import { formatDate } from '../../lib/utils'
 import { LEAVE_TYPE_LABELS } from '../../services/leaveBalanceService'
 
-const VOICE_PREF_KEY = 'sara_voice_enabled'
-const GREETED_KEY = 'sara_greeted_session'
-
-function speak(text) {
-  try {
-    if (!('speechSynthesis' in window)) return
-    window.speechSynthesis.cancel()
-    const u = new window.SpeechSynthesisUtterance(text)
-    u.rate = 1
-    u.pitch = 1
-    window.speechSynthesis.speak(u)
-  } catch { /* speech synthesis is a progressive enhancement, never fatal */ }
+export const PHASES = {
+  IDLE: 'idle',           // ⚪ Idle
+  WAKE: 'wake',           // 🔵 Listening (wake word, mic actually active)
+  ACK: 'ack',             // 🟢 SARA activated
+  LISTEN: 'listen',       // 🟡 Listening for instruction
+  THINK: 'think',         // 🟠 Processing
+  CONFIRM: 'confirm',     // 🔴 Action requires confirmation
+  SPEAK: 'speak',         // 🟢 Speaking
+  FALLBACK: 'fallback',   // mic unavailable → push-to-talk
 }
 
-function getRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-  if (!SR) return null
-  const rec = new SR()
-  rec.continuous = false
-  rec.interimResults = false
-  rec.lang = 'en-US'
-  return rec
+const STATUS_META = {
+  [PHASES.IDLE]: { dot: 'bg-slate-400', label: 'Idle', pulse: false },
+  [PHASES.WAKE]: { dot: 'bg-sky-500', label: 'Listening for "SARA"', pulse: true },
+  [PHASES.ACK]: { dot: 'bg-emerald-500', label: 'SARA activated', pulse: false },
+  [PHASES.LISTEN]: { dot: 'bg-amber-500', label: 'Listening for instruction', pulse: true },
+  [PHASES.THINK]: { dot: 'bg-orange-500', label: 'Processing', pulse: false },
+  [PHASES.CONFIRM]: { dot: 'bg-rose-500', label: 'Action requires confirmation', pulse: true },
+  [PHASES.SPEAK]: { dot: 'bg-emerald-500', label: 'Speaking', pulse: false },
+  [PHASES.FALLBACK]: { dot: 'bg-slate-400', label: 'Microphone unavailable — use push-to-talk', pulse: false },
+}
+
+function Switch({ label, checked, onChange, disabled, hint }) {
+  return (
+    <label className={`flex items-center justify-between gap-3 py-2 text-sm ${disabled ? 'opacity-50' : ''}`}>
+      <span>
+        <span className="font-medium text-slate-700">{label}</span>
+        {hint && <span className="block text-xs text-slate-400">{hint}</span>}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={`relative w-10 h-6 rounded-full transition-colors shrink-0 ${checked ? 'bg-[#009944]' : 'bg-slate-300'}`}
+      >
+        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${checked ? 'left-[18px]' : 'left-0.5'}`} />
+      </button>
+    </label>
+  )
 }
 
 function RequestCard({ r }) {
@@ -42,53 +64,60 @@ function RequestCard({ r }) {
 }
 
 export default function Sara() {
-  const { user, name: userName, role, isAdmin } = useAuth()
+  const { user, name: userName, role, isAdmin, userPermissions } = useAuth()
   const { queue, count, oldest, refresh } = useMyLeaveApprovals()
 
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState([]) // { from: 'sara'|'user', text, requests? }
   const [input, setInput] = useState('')
-  const [listening, setListening] = useState(false)
-  const [voiceOn, setVoiceOn] = useState(() => { try { return localStorage.getItem(VOICE_PREF_KEY) !== 'off' } catch { return true } })
-  const [pendingConfirm, setPendingConfirm] = useState(null) // { matches, decision, message }
   const [busy, setBusy] = useState(false)
-  const [speechSupported, setSpeechSupported] = useState(false)
-  const recognitionRef = useRef(null)
+  const [phase, setPhase] = useState(PHASES.IDLE)
+  const [pendingConfirm, setPendingConfirm] = useState(null) // { matches, decision, message }
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [micNotice, setMicNotice] = useState('')
 
-  useEffect(() => { setSpeechSupported(!!(window.SpeechRecognition || window.webkitSpeechRecognition)) }, [])
+  const { settings, update: updateSettings } = useSaraSettings()
+  const voice = useSaraVoice()
+  const alerts = useSaraAlerts({ settings, count, oldest })
 
-  useEffect(() => {
-    try { localStorage.setItem(VOICE_PREF_KEY, voiceOn ? 'on' : 'off') } catch { /* no-op */ }
-  }, [voiceOn])
-
-  // One greeting per session, once we actually know there's something to say.
-  useEffect(() => {
-    if (!user || count === 0) return
-    let already = false
-    try { already = sessionStorage.getItem(GREETED_KEY) === '1' } catch { /* no-op */ }
-    if (already) return
-    try { sessionStorage.setItem(GREETED_KEY, '1') } catch { /* no-op */ }
-    const greeting = `Hi Boss. You have ${count} pending leave approval${count === 1 ? '' : 's'}.${oldest ? ` The oldest request has been pending since ${formatDate(oldest.created_at)}.` : ''}`
-    setMessages([{ from: 'sara', text: greeting }])
-    if (voiceOn) speak(greeting)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, count])
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
+  const committingRef = useRef(false)
 
   const say = (text, extra = {}) => {
     setMessages((m) => [...m, { from: 'sara', text, ...extra }])
-    if (voiceOn) speak(text)
+    const s = settingsRef.current
+    if (s.voiceOn && !isQuietHours(s)) {
+      setPhase(PHASES.SPEAK)
+      speakText(text, { volume: s.volume, onEnd: () => setPhase((p) => (p === PHASES.SPEAK ? (pendingConfirm ? PHASES.CONFIRM : PHASES.IDLE) : p)) })
+    }
   }
 
+  // Proactive alerts — spoken and/or browser, deduped, quiet-hours aware.
+  useEffect(() => {
+    const evt = alerts.evaluate()
+    if (!evt) return
+    setMessages((m) => [...m, { from: 'sara', text: evt.text }])
+    if (evt.browser) pushBrowserNotification('SARA — attention needed', evt.text, '/leave-requests')
+    if (settingsRef.current.voiceOn) {
+      setPhase(PHASES.SPEAK)
+      speakText(evt.text, { volume: settingsRef.current.volume, onEnd: () => setPhase((p) => (p === PHASES.SPEAK ? PHASES.IDLE : p)) })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [count, oldest])
+
   const handleCommand = async (raw, method) => {
+    if (!raw) return
     setMessages((m) => [...m, { from: 'user', text: raw }])
     setBusy(true)
+    setPhase(PHASES.THINK)
     try {
       if (pendingConfirm) {
-        const parsed = parseSaraCommand(raw)
+        const parsed = await analyzeIntent(raw, { role, isAdmin, permissions: userPermissions })
         if (parsed.intent === 'CONFIRM') {
           const { matches, decision } = pendingConfirm
           setPendingConfirm(null)
-          const results = await executeConfirmedDecision({ matches, decision, ctx: { approverId: user.id, approverName: userName, method }, command: raw })
+          const results = await executeConfirmedDecision({ matches, decision, ctx: { approverId: user.id, approverName: userName, method }, command: raw, intent: parsed.intent })
           const okCount = results.filter((r) => r.ok).length
           await refresh()
           say(okCount === results.length
@@ -98,14 +127,18 @@ export default function Sara() {
         }
         if (parsed.intent === 'CANCEL') {
           setPendingConfirm(null)
-          say('Okay, cancelled — no changes made.')
+          say('Understood. I haven\u2019t changed anything.')
           return
         }
         say('That action requires confirmation. Say "yes" to proceed or "cancel" to stop.')
         return
       }
 
-      const result = await runSaraCommand({ command: raw, pool: queue, ctx: { userId: user.id, role, isAdmin } })
+      const result = await runSaraCommand({
+        command: raw,
+        pool: queue,
+        ctx: { userId: user.id, role, isAdmin, permissions: userPermissions, intent: null },
+      })
       if (result.type === 'confirm') {
         setPendingConfirm({ matches: result.matches, decision: result.decision })
         say(result.message, { requests: result.matches })
@@ -118,8 +151,89 @@ export default function Sara() {
       say(`I couldn't complete that — ${e?.message || 'something went wrong'}.`)
     } finally {
       setBusy(false)
+      setPhase(pendingConfirm ? PHASES.CONFIRM : PHASES.IDLE)
     }
   }
+
+  // Re-capture the confirmation answer from the voice channel when the
+  // panel is expecting one and voice mode is on.
+  useEffect(() => {
+    if (!pendingConfirm || !settings.voiceOn || settings.micMuted) return
+    setPhase(PHASES.CONFIRM)
+    committingRef.current = true
+    voice.captureCommand({
+      onResult: (text) => {
+        committingRef.current = false
+        if (text) handleCommand(text, 'voice')
+      },
+      onNoMicrophone: () => { committingRef.current = false },
+      timeoutMs: 20000,
+      liveInterim: () => {},
+    })
+    return () => cancelSpeech()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingConfirm, settings.voiceOn, settings.micMuted])
+
+  // ------------------------------------------------------------------
+  // Wake-word lifecycle. Arm only when the user actually enables voice
+  // mode; the engine stops itself when the panel is idle or when the
+  // user mutes/disables. `committingRef` pauses re-arming while a
+  // command is being captured or processed so we never restart the
+  // recognizer mid-flow.
+  // ------------------------------------------------------------------
+  const shouldArm = !!(user && settings.voiceOn && !settings.micMuted && voice.micSupported)
+  const micBlocked = voice.micState === MIC_STATES.DENIED || voice.micState === MIC_STATES.UNAVAILABLE
+
+  useEffect(() => {
+    if (shouldArm && !micBlocked) {
+      if (!voice.wakeListening && !committingRef.current) {
+        setPhase(PHASES.WAKE)
+        voice.startWake()
+      }
+    } else if (shouldArm && micBlocked) {
+      setPhase(PHASES.FALLBACK)
+    } else {
+      committingRef.current = false
+      voice.stopWake()
+      setPhase(PHASES.IDLE)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldArm, micBlocked, voice.wakeListening, voice.micState])
+
+  useEffect(() => {
+    voice.setHandlers({
+      onWake(command) {
+        committingRef.current = true
+        setPhase(PHASES.ACK)
+        const s = settingsRef.current
+        if (s.voiceOn) speakText("Yes, boss. I'm listening.", { volume: s.volume })
+        setPhase(PHASES.LISTEN)
+        voice.captureCommand({
+          onResult: (text) => {
+            committingRef.current = false
+            if (text) handleCommand(text, 'voice')
+            else {
+              say("I didn't catch that. You can also type your request.")
+              setPhase(PHASES.IDLE)
+            }
+          },
+          onNoMicrophone: () => { setMicNotice("I couldn't get microphone access for the command.") },
+        })
+      },
+      onWakeError(type) {
+        // Network / service errors keep the app functional — push-to-talk
+        // and text input remain available.
+        if (type === MIC_STATES.DENIED) {
+          setMicNotice('Microphone permission denied — you can use push-to-talk or type instead.')
+          setPhase(PHASES.FALLBACK)
+        } else {
+          setMicNotice('Voice recognition hiccup — you can still type.')
+          setPhase(PHASES.IDLE)
+        }
+      },
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const submitText = () => {
     const text = input.trim()
@@ -128,27 +242,41 @@ export default function Sara() {
     handleCommand(text, 'text')
   }
 
-  const startListening = () => {
-    const rec = getRecognition()
-    if (!rec) { say("Voice input isn't supported in this browser — you can type instead.") ; return }
-    recognitionRef.current = rec
-    setListening(true)
-    say("I'm listening.")
-    rec.onresult = (e) => {
-      const transcript = e.results?.[0]?.[0]?.transcript
-      if (transcript) handleCommand(transcript, 'voice')
+  const pushToTalk = async () => {
+    if (busy || !settings.voiceOn) return
+    cancelSpeech()
+    setMicNotice('')
+    // Explicit permission request so a previously-denied mic can be
+    // retried (re-prompts in most browsers), then capture one command.
+    const ok = await voice.requestMic()
+    if (!ok) {
+      setMicNotice('Microphone permission was not granted, so I can\u2019t listen. Please enable it for this site and try again — or type below.')
+      setPhase(PHASES.FALLBACK)
+      return
     }
-    rec.onerror = () => { setListening(false); say("I didn't catch that — you can type instead.") }
-    rec.onend = () => setListening(false)
-    try { rec.start() } catch { setListening(false) }
+    setPhase(PHASES.LISTEN)
+    voice.captureCommand({
+      onResult: (text) => {
+        committingRef.current = false
+        if (text) handleCommand(text, 'voice')
+        else { say("I didn't catch that. Please try again or type your request."); setPhase(PHASES.IDLE) }
+      },
+      onNoMicrophone: () => setMicNotice("I couldn't reach the microphone for that command."),
+    })
   }
 
-  const stopListening = () => {
-    try { recognitionRef.current?.stop() } catch { /* no-op */ }
-    setListening(false)
+  const requestBrowser = () => {
+    if (!settings.browserNotifs && !pushBrowserNotificationPerm()) {
+      setMicNotice('Browser notifications are blocked for this site — enable them in your browser settings.')
+      return
+    }
+    updateSettings({ browserNotifs: !settings.browserNotifs })
   }
 
   if (!user) return null
+
+  const status = STATUS_META[phase]
+  const micActive = voice.wakeListening || phase === PHASES.LISTEN
 
   return (
     <>
@@ -157,6 +285,7 @@ export default function Sara() {
         onClick={() => setOpen((v) => !v)}
         className="fixed bottom-5 right-5 z-40 w-14 h-14 rounded-full bg-[#0a0b0d] text-white shadow-xl flex items-center justify-center hover:scale-105 transition-transform"
         aria-label="Open SARA assistant"
+        title="Ask SARA"
       >
         {count > 0 && !open && (
           <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-semibold flex items-center justify-center">{count > 9 ? '9+' : count}</span>
@@ -165,75 +294,154 @@ export default function Sara() {
       </button>
 
       {open && (
-        <div className="fixed bottom-24 right-5 z-40 w-[calc(100vw-2.5rem)] max-w-sm h-[520px] max-h-[70vh] bg-white rounded-2xl border border-slate-200 shadow-2xl flex flex-col overflow-hidden">
+        <div className="fixed bottom-24 right-5 z-40 w-[calc(100vw-2.5rem)] max-w-sm h-[560px] max-h-[75vh] bg-white rounded-2xl border border-slate-200 shadow-2xl flex flex-col overflow-hidden">
           <div className="px-4 py-3 bg-[#0a0b0d] text-white flex items-center justify-between shrink-0">
             <div>
               <div className="font-semibold text-sm flex items-center gap-1.5"><Sparkles className="w-4 h-4 text-[#FF8C00]" /> SARA</div>
-              <div className="text-[11px] text-white/50">Smart Automated Reporting &amp; Approval Assistant</div>
+              <div className="text-[11px] text-white/50">Smart Automated Reporting &amp; Analysis</div>
             </div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setVoiceOn((v) => !v)} title={voiceOn ? 'Voice replies on' : 'Voice replies off'} className="text-white/60 hover:text-white">
-                {voiceOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            <div className="flex items-center gap-1">
+              <button onClick={() => updateSettings({ voiceOn: !settings.voiceOn })} title={settings.voiceOn ? 'Voice mode on' : 'Voice mode off'} className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10">
+                {settings.voiceOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
               </button>
-              <button onClick={() => setOpen(false)} className="text-white/60 hover:text-white"><X className="w-4 h-4" /></button>
+              <button onClick={() => updateSettings({ micMuted: !settings.micMuted })} title={settings.micMuted ? 'Microphone muted' : 'Mute microphone'} className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10">
+                {settings.micMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+              </button>
+              <button onClick={() => setSettingsOpen((v) => !v)} title="SARA settings" className={`p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 ${settingsOpen ? 'bg-white/10 text-white' : ''}`}>
+                <Settings className="w-4 h-4" />
+              </button>
+              <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10"><X className="w-4 h-4" /></button>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 bg-slate-50">
-            {messages.length === 0 && (
-              <div className="text-center text-xs text-slate-400 mt-8">
-                Ask me things like<br />"show my pending leave approvals"<br />or "approve John's leave"
+          {/* Honest status — never shows a listening state unless the mic is running */}
+          <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 flex items-center gap-2 shrink-0">
+            <span className={`w-2.5 h-2.5 rounded-full ${status.dot} ${status.pulse ? 'animate-pulse' : ''}`} />
+            <span className="text-xs font-medium text-slate-600">{status.label}</span>
+            <span className={`ml-auto text-[10px] px-1.5 py-0.5 rounded-full ${micActive ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
+              {micActive ? 'Microphone ON' : 'Microphone OFF'}
+            </span>
+          </div>
+
+          {settingsOpen ? (
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-slate-50">
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">SARA Settings</p>
+              <Switch label="SARA Voice" hint="Wake word + spoken replies" checked={settings.voiceOn} onChange={(v) => updateSettings({ voiceOn: v })} />
+              <Switch label="Mute Microphone" hint="Blocks listening but keeps replies" checked={settings.micMuted} onChange={(v) => updateSettings({ micMuted: v })} disabled={!settings.voiceOn} />
+              <div className="pt-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-slate-700">Voice volume</span>
+                  <span className="text-xs text-slate-400">{Math.round(settings.volume * 10)} / 10</span>
+                </div>
+                <input type="range" min={0} max={1} step={0.1} value={settings.volume} onChange={(e) => updateSettings({ volume: Number(e.target.value) })} className="w-full accent-[#009944]" />
+                <button onClick={() => speakText(buildLeaveAlert({ count: count || (queue.length > 0 ? 0 : 0), oldest }) || "Hello boss. This is a SARA voice test.", { volume: settings.volume, enabled: true })} className="mt-1 text-xs text-[#009944] font-medium hover:underline">Test voice</button>
               </div>
-            )}
-            {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.from === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-line ${m.from === 'user' ? 'bg-[#009944] text-white' : 'bg-white border border-slate-200 text-slate-700'}`}>
-                  {m.text}
-                  {m.requests?.length > 0 && (
-                    <div className="mt-2 space-y-1.5">
-                      {m.requests.map((r) => <RequestCard key={r.id} r={r} />)}
+              <div className="border-t border-slate-200 pt-2">
+                <Switch label="Voice alerts" hint="Proactively tell you about pending approvals" checked={settings.voiceAlerts} onChange={(v) => updateSettings({ voiceAlerts: v })} />
+                <Switch label="Browser notifications" hint="Also pop a browser notification" checked={settings.browserNotifs} onChange={requestBrowser} />
+              </div>
+              <div className="border-t border-slate-200">
+                <Switch label="AI understanding" hint="Use the server NLU when plain parsing fails" checked={settings.aiNlu} onChange={(v) => updateSettings({ aiNlu: v })} />
+              </div>
+              <div className="border-t border-slate-200 pt-2">
+                <Switch label="Quiet hours" checked={settings.quietHours} onChange={(v) => updateSettings({ quietHours: v })} />
+                {settings.quietHours && (
+                  <div className="flex items-center gap-2 pt-2 text-sm">
+                    <input type="time" value={settings.quietStart} onChange={(e) => updateSettings({ quietStart: e.target.value })} className="flex-1 h-9 rounded-lg border border-slate-300 px-2 text-sm" />
+                    <span className="text-slate-400">to</span>
+                    <input type="time" value={settings.quietEnd} onChange={(e) => updateSettings({ quietEnd: e.target.value })} className="flex-1 h-9 rounded-lg border border-slate-300 px-2 text-sm" />
+                  </div>
+                )}
+              </div>
+              {micNotice && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">{micNotice}</p>}
+            </div>
+          ) : (
+            <>
+              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 bg-slate-50">
+                {messages.length === 0 && (
+                  <div className="text-center text-xs text-slate-400 mt-8">
+                    Say "SARA" to activate, then ask, e.g.<br />"what requires my attention?"<br />or "approve John's leave"
+                  </div>
+                )}
+                {messages.map((m, i) => (
+                  <div key={i} className={`flex ${m.from === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-line ${m.from === 'user' ? 'bg-[#009944] text-white' : 'bg-white border border-slate-200 text-slate-700'}`}>
+                      {m.text}
+                      {m.requests?.length > 0 && (
+                        <div className="mt-2 space-y-1.5">
+                          {m.requests.map((r) => <RequestCard key={r.id} r={r} />)}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  </div>
+                ))}
+                {phase === PHASES.LISTEN && (
+                  <div className="flex justify-center">
+                    <div className="flex items-center gap-2 text-xs text-slate-400 py-1">
+                      <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse" /> Listening… speak now
+                    </div>
+                  </div>
+                )}
+                {phase === PHASES.THINK && (
+                  <div className="flex justify-center">
+                    <div className="flex items-center gap-1.5 text-xs text-slate-400 py-1"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Working…</div>
+                  </div>
+                )}
+                {pendingConfirm && (
+                  <div className="flex justify-start">
+                    <div className="flex gap-2">
+                      <button onClick={() => handleCommand('confirm', 'text')} disabled={busy} className="px-3 py-1.5 rounded-lg bg-[#009944] text-white text-xs font-medium disabled:opacity-50">Confirm</button>
+                      <button onClick={() => handleCommand('cancel', 'text')} disabled={busy} className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium disabled:opacity-50">Cancel</button>
+                    </div>
+                  </div>
+                )}
               </div>
-            ))}
-            {pendingConfirm && (
-              <div className="flex justify-start">
-                <div className="flex gap-2">
-                  <button onClick={() => handleCommand('confirm', 'text')} disabled={busy} className="px-3 py-1.5 rounded-lg bg-[#009944] text-white text-xs font-medium disabled:opacity-50">Confirm</button>
-                  <button onClick={() => handleCommand('cancel', 'text')} disabled={busy} className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium disabled:opacity-50">Cancel</button>
-                </div>
-              </div>
-            )}
-          </div>
 
-          <div className="border-t border-slate-200 p-2.5 shrink-0 bg-white">
-            <div className="flex items-center gap-2">
-              {speechSupported && (
-                <button
-                  onClick={listening ? stopListening : startListening}
-                  disabled={busy}
-                  className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${listening ? 'bg-rose-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                  aria-label="Speak to SARA"
-                >
-                  {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                </button>
-              )}
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && submitText()}
-                placeholder="Ask SARA..."
-                disabled={busy}
-                className="flex-1 h-9 rounded-full border border-slate-300 px-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]/30"
-              />
-              <button onClick={submitText} disabled={busy || !input.trim()} className="w-9 h-9 rounded-full bg-[#009944] text-white flex items-center justify-center shrink-0 disabled:opacity-40">
-                <Send className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+              <div className="border-t border-slate-200 p-2.5 shrink-0 bg-white">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={pushToTalk}
+                    disabled={busy || !settings.voiceOn}
+                    title={settings.voiceOn ? 'Push to talk (or say "SARA")' : 'Voice mode is off'}
+                    className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${micActive ? 'bg-rose-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'} disabled:opacity-40`}
+                    aria-label="Push to talk to SARA"
+                  >
+                    {settings.micMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  </button>
+                  <input
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && submitText()}
+                    placeholder="Ask SARA..."
+                    disabled={busy}
+                    className="flex-1 h-9 rounded-full border border-slate-300 px-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]/30"
+                  />
+                  <button onClick={submitText} disabled={busy || !input.trim()} className="w-9 h-9 rounded-full bg-[#009944] text-white flex items-center justify-center shrink-0 disabled:opacity-40">
+                    <Send className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
     </>
   )
+}
+
+// Small indirection so the settings callback can request permission once,
+// then flip the toggle only if notification access is possible.
+function pushBrowserNotificationPerm() {
+  try {
+    if (!('Notification' in window)) return false
+    if (Notification.permission === 'granted') return true
+    if (Notification.permission === 'denied') return false
+    Notification.requestPermission().then((p) => {
+      if (p !== 'granted') return false
+      return true
+    })
+    return true
+  } catch {
+    return false
+  }
 }
