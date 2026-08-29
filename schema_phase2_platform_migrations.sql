@@ -31,8 +31,12 @@ set role = 'super_admin'
 where lower(email) = 'tamunosikiiwolomaclinton@gmail.com';
 
 -- Current role helper should preserve all expanded role values.
+-- MUST keep SECURITY DEFINER: without it, this function's own lookup against
+-- public.profiles gets re-checked by profiles' RLS policy, which calls this
+-- function again -> infinite recursion ("stack depth limit exceeded").
+-- (Same definition as schema.sql — do not drop the definer here.)
 create or replace function public.current_role()
-returns text language sql stable as $$
+returns text language sql stable security definer set search_path = public as $$
   select coalesce((select role from public.profiles where id = auth.uid()), 'staff');
 $$;
 

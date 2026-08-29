@@ -342,21 +342,36 @@ export default function Sara() {
   if (!user) return null
 
   const status = STATUS_META[phase]
-  const micActive = voice.wakeListening || phase === PHASES.LISTEN
+  const micActive = voice.wakeListening || phase === PHASES.LISTEN || phase === PHASES.CONFIRM
+  const voiceOn = !!(settings.voiceOn && !settings.micMuted)
 
   return (
     <>
-      {/* Floating launcher — never blocks core navigation */}
+      {/* Floating launcher — never blocks core navigation; its mic badge
+          is always visible so users can tell SARA is listening for her
+          wake word even with the panel closed. */}
       <button
         onClick={() => setOpen((v) => !v)}
         className="fixed bottom-5 right-5 z-40 w-14 h-14 rounded-full bg-[#0a0b0d] text-white shadow-xl flex items-center justify-center hover:scale-105 transition-transform"
         aria-label="Open SARA assistant"
-        title="Ask SARA"
+        title={voiceOn ? `SARA listening for ${WAKE_LABEL.replace('Listening for ', '')} — click to open` : 'SARA (voice mode off) — click to open'}
       >
         {count > 0 && !open && (
           <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-semibold flex items-center justify-center">{count > 9 ? '9+' : count}</span>
         )}
         <Sparkles className="w-6 h-6 text-[#FF8C00]" />
+        {voiceOn ? (
+          <span
+            title={micActive ? 'Microphone ON — listening for wake word' : 'Microphone ready'}
+            className={`absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full ${micActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600'} flex items-center justify-center`}
+          >
+            <Mic className="w-3 h-3 text-white" />
+          </span>
+        ) : (
+          <span title="Mic muted or voice mode off" className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-slate-700 flex items-center justify-center">
+            <MicOff className="w-3 h-3 text-slate-400" />
+          </span>
+        )}
       </button>
 
       {open && (
