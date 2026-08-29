@@ -77,12 +77,37 @@ export function buildOnboardingUrl(token) {
   return `${window.location.origin}${window.location.pathname}#/onboarding/${token}`
 }
 
+export const DEFAULT_EXPIRY_DAYS = 7
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const MAX_EXPIRY_DAYS = 3650
+
+// Single source of truth for link expiration. Validates the days value the
+// user entered (required, numeric, positive, whole days) and returns the
+// explicit ISO timestamp that is stored in both `expiry` and `expires_at`.
+export function resolveExpiresAt(expiresInDays) {
+  if (expiresInDays === undefined || expiresInDays === null || expiresInDays === '') {
+    throw new Error(`Valid days is required (between 1 and ${MAX_EXPIRY_DAYS}).`)
+  }
+  const days = Number(expiresInDays)
+  if (!Number.isFinite(days) || Number.isNaN(days) || days <= 0) {
+    throw new Error('Valid days must be greater than 0.')
+  }
+  if (!Number.isInteger(days)) {
+    throw new Error('Valid days must be a whole number.')
+  }
+  if (days > MAX_EXPIRY_DAYS) {
+    throw new Error(`Valid days cannot exceed ${MAX_EXPIRY_DAYS}.`)
+  }
+  return new Date(Date.now() + days * MS_PER_DAY).toISOString()
+}
+
 export const onboardingService = {
-  async createLink({ candidateName, candidateEmail, candidatePhone, position, department, branch, employmentType, expiresInDays = 7 }) {
+  async createLink({ candidateName, candidateEmail, candidatePhone, position, department, branch, employmentType, expiresInDays = DEFAULT_EXPIRY_DAYS }) {
     if (!candidateName) throw new Error('Candidate name is required.')
     const token = generateToken()
     const tokenHash = md5Hex(token)
-    const expiry = new Date(Date.now() + Number(expiresInDays || 7) * 24 * 60 * 60 * 1000).toISOString()
+    const expiresAt = resolveExpiresAt(expiresInDays)
     const { data, error } = await supabase
       .from('employee_onboarding_links')
       .insert({
@@ -94,7 +119,8 @@ export const onboardingService = {
         department,
         branch,
         employment_type: employmentType || null,
-        expiry,
+        expiry: expiresAt,
+        expires_at: expiresAt,
         status: 'pending',
       })
       .select()

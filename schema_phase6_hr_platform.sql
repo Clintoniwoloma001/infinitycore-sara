@@ -398,6 +398,7 @@ create table if not exists public.employee_onboarding_links (
   branch text,
   employment_type text check (employment_type in ('full_time', 'part_time', 'contract', 'intern')),
   expiry timestamptz not null,
+  expires_at timestamptz,
   status text default 'pending' check (status in ('pending', 'opened', 'in_progress', 'submitted', 'expired', 'revoked')),
   created_by uuid references auth.users(id) on delete set null,
   created_at timestamptz default now(),
@@ -419,6 +420,16 @@ alter table public.employee_onboarding_links add column if not exists department
 alter table public.employee_onboarding_links add column if not exists branch text;
 alter table public.employee_onboarding_links add column if not exists employment_type text;
 alter table public.employee_onboarding_links add column if not exists expiry timestamptz;
+-- Some deployments predate phase 6 with a NOT NULL `expires_at` column that
+-- this repo never knew about. Keep `expiry` as the canonical column and
+-- mirror the value into `expires_at` so every INSERT satisfies either
+-- schema. The app always sends both; this default is a defensive safeguard
+-- for any other caller, and the backfill heals rows created before phase 6.
+alter table public.employee_onboarding_links add column if not exists expires_at timestamptz;
+alter table public.employee_onboarding_links alter column expires_at set default (now() + interval '7 days');
+update public.employee_onboarding_links
+   set expires_at = expiry
+ where expires_at is null and expiry is not null;
 alter table public.employee_onboarding_links add column if not exists status text default 'pending';
 alter table public.employee_onboarding_links add column if not exists created_by uuid;
 alter table public.employee_onboarding_links add column if not exists created_at timestamptz default now();
@@ -730,7 +741,7 @@ create or replace function public.get_onboarding_link_details(
 language sql security definer volatile set search_path = public as $$
   with l as (
     select id, token_hash, candidate_name, candidate_email, candidate_phone,
-           "position", department, branch, employment_type, expiry, status
+           "position", department, branch, employment_type, coalesce(expires_at, expiry) as expiry, status
     from public.employee_onboarding_links
     where token_hash = md5(p_token)
   ),
@@ -816,7 +827,7 @@ begin
     v_dob := null;
   end;
 
-  select id, candidate_name, candidate_email, candidate_phone, expiry, status,
+  select id, candidate_name, candidate_email, candidate_phone, coalesce(expires_at, expiry) as expiry, status,
          "position", department, branch, employment_type
   into v_link
   from public.employee_onboarding_links

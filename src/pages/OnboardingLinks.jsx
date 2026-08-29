@@ -3,7 +3,7 @@ import { Copy, Link2, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
 import { status, date } from './hrShared'
-import { onboardingService } from '../services/onboardingService'
+import { onboardingService, DEFAULT_EXPIRY_DAYS } from '../services/onboardingService'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -79,7 +79,7 @@ export default function OnboardingLinks() {
         department: form.department,
         branch: form.branch,
         employmentType: form.employment_type,
-        expiresInDays: Number(form.expires_in_days || 7),
+        expiresInDays: form.expires_in_days == null ? DEFAULT_EXPIRY_DAYS : form.expires_in_days,
       })
       setCreatedLink(link)
       setForm({})
@@ -98,7 +98,7 @@ export default function OnboardingLinks() {
 
   // A raw token only exists in the candidate's browser after creation, so
   // "Resend" regenerates a brand-new link for the same person and revokes
-  // the old one. We never store raw tokens — only their SHA-256 hash.
+  // the old one. We never store raw tokens — only their hash.
   const resend = async (link) => {
     setError('')
     setCreatedLink(null)
@@ -110,7 +110,7 @@ export default function OnboardingLinks() {
       department: link.department,
       branch: link.branch,
       employment_type: link.employment_type,
-      expires_in_days: 7,
+      expires_in_days: DEFAULT_EXPIRY_DAYS,
     })
     setShowCreate(true)
     try {
@@ -122,7 +122,7 @@ export default function OnboardingLinks() {
         department: link.department,
         branch: link.branch,
         employmentType: link.employment_type,
-        expiresInDays: 7,
+        expiresInDays: DEFAULT_EXPIRY_DAYS,
       })
       setCreatedLink(fresh)
       setForm({})
@@ -154,7 +154,7 @@ export default function OnboardingLinks() {
           <p className="text-sm text-slate-500 mt-1">Generate secure one-time links for new employees to complete their profile.</p>
         </div>
         {canManage && (
-          <button onClick={() => { setShowCreate(true); setCreatedLink(null); setError('') }} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+          <button onClick={() => { setShowCreate(true); setCreatedLink(null); setError(''); setForm((f) => ({ ...f, expires_in_days: DEFAULT_EXPIRY_DAYS })) }} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
             <Plus className="w-4 h-4" /> New Link
           </button>
         )}
@@ -301,7 +301,7 @@ export default function OnboardingLinks() {
                       <option value="intern">Intern</option>
                     </select>
                   </div>
-                  <div><label className={labelCls}>Expires in (days)</label><input className={inputCls} value={form.expires_in_days || 7} onChange={set('expires_in_days')} type="number" min="1" /></div>
+                  <div><label className={labelCls}>Expires in (days)</label><input className={inputCls} value={form.expires_in_days ?? ''} onChange={set('expires_in_days')} type="number" min="1" step="1" placeholder={`Default ${DEFAULT_EXPIRY_DAYS}`} /></div>
                 </div>
                 <div className="flex justify-end gap-2 pt-2">
                   <button onClick={() => setShowCreate(false)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
