@@ -51,6 +51,13 @@ function extractDays(text) {
   return {}
 }
 
+// Maps navigation phrases to route keywords. "open customers" → 'customers'.
+function extractNavigateTarget(text) {
+  let m = text.match(/(?:open|show me|show|take me to|navigate to|switch to|go to)\s+(?:the\s+)?([a-z0-9][a-z0-9\s'&-]*?)\s*(?:page|section|screen)?\s*$/i)
+  if (m) return m[1].trim()
+  return null
+}
+
 export function parseSaraCommand(raw) {
   const text = (raw || '').trim()
   if (!text) return { intent: 'UNKNOWN', filters: {} }
@@ -65,6 +72,11 @@ export function parseSaraCommand(raw) {
 
   if (/\b(show|list|display|see)\b.*(pending|leave|approval)/i.test(text) || /^my pending/i.test(text)) {
     return { intent: 'SHOW_PENDING', filters: {} }
+  }
+
+  if (/\b(open|show me|go to|take me to|navigate to|switch to)\b/i.test(text) && text.split(/\s+/).length < 10) {
+    const target = extractNavigateTarget(text)
+    if (target) return { intent: 'NAVIGATE', filters: { target } }
   }
 
   if (/\bhelp\b/i.test(text) && text.split(/\s+/).length < 4) {

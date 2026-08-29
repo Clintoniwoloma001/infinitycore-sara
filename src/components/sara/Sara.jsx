@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Mic, MicOff, Send, Settings, Volume2, VolumeX, X, Sparkles, Loader2 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { useMyLeaveApprovals } from '../../hooks/useMyLeaveApprovals'
 import { runSaraCommand, executeConfirmedDecision } from '../../services/agentService'
 import { analyzeIntent } from '../../services/saraNlu'
 import { useSaraSettings, isQuietHours } from '../../services/saraSettings'
-import { useSaraVoice, speakText, cancelSpeech, MIC_STATES } from '../../services/saraVoice'
+import { useSaraVoice, speakText, cancelSpeech, MIC_STATES, SARA_WAKE_WORDS, playActivationTone } from '../../services/saraVoice'
 import { useSaraAlerts, pushBrowserNotification, buildLeaveAlert } from '../../services/saraAlerts'
 import { formatDate } from '../../lib/utils'
 import { LEAVE_TYPE_LABELS } from '../../services/leaveBalanceService'
@@ -16,19 +17,45 @@ export const PHASES = {
   ACK: 'ack',             // 🟢 SARA activated
   LISTEN: 'listen',       // 🟡 Listening for instruction
   THINK: 'think',         // 🟠 Processing
+  EXECUTING: 'executing', // 🔵 Executing a confirmed action
   CONFIRM: 'confirm',     // 🔴 Action requires confirmation
   SPEAK: 'speak',         // 🟢 Speaking
+  PERMISSION_DENIED: 'permission_denied', // mic denied
+  ERROR: 'error',         // transient voice engine error
   FALLBACK: 'fallback',   // mic unavailable → push-to-talk
 }
 
+// Stable, channel-agnostic state names (the spec's IDLE / LISTENING_FOR_
+// WAKE_WORD / WAKE_WORD_DETECTED / LISTENING_FOR_COMMAND / PROCESSING /
+// EXECUTING / AWAITING_CONFIRMATION / SPEAKING / ERROR / PERMISSION_DENIED)
+// mapped onto the runtime phases — other channels (email/WhatsApp/Flutter)
+// can switch on these without knowing the UI internals.
+export const SARA_STATES = {
+  IDLE: PHASES.IDLE,
+  LISTENING_FOR_WAKE_WORD: PHASES.WAKE,
+  WAKE_WORD_DETECTED: PHASES.ACK,
+  LISTENING_FOR_COMMAND: PHASES.LISTEN,
+  PROCESSING: PHASES.THINK,
+  EXECUTING: PHASES.EXECUTING,
+  AWAITING_CONFIRMATION: PHASES.CONFIRM,
+  SPEAKING: PHASES.SPEAK,
+  ERROR: PHASES.ERROR,
+  PERMISSION_DENIED: PHASES.PERMISSION_DENIED,
+}
+
+const WAKE_LABEL = `Listening for ${SARA_WAKE_WORDS.map((w) => `"${w.charAt(0).toUpperCase()}${w.slice(1)}"`).join(' or ')}`
+
 const STATUS_META = {
   [PHASES.IDLE]: { dot: 'bg-slate-400', label: 'Idle', pulse: false },
-  [PHASES.WAKE]: { dot: 'bg-sky-500', label: 'Listening for "SARA"', pulse: true },
+  [PHASES.WAKE]: { dot: 'bg-sky-500', label: WAKE_LABEL, pulse: true },
   [PHASES.ACK]: { dot: 'bg-emerald-500', label: 'SARA activated', pulse: false },
   [PHASES.LISTEN]: { dot: 'bg-amber-500', label: 'Listening for instruction', pulse: true },
   [PHASES.THINK]: { dot: 'bg-orange-500', label: 'Processing', pulse: false },
+  [PHASES.EXECUTING]: { dot: 'bg-sky-600', label: 'Executing action', pulse: true },
   [PHASES.CONFIRM]: { dot: 'bg-rose-500', label: 'Action requires confirmation', pulse: true },
   [PHASES.SPEAK]: { dot: 'bg-emerald-500', label: 'Speaking', pulse: false },
+  [PHASES.PERMISSION_DENIED]: { dot: 'bg-rose-600', label: 'Microphone permission denied — use push-to-talk or type', pulse: false },
+  [PHASES.ERROR]: { dot: 'bg-orange-600', label: 'Voice engine hiccup — you can still type', pulse: false },
   [PHASES.FALLBACK]: { dot: 'bg-slate-400', label: 'Microphone unavailable — use push-to-talk', pulse: false },
 }
 
@@ -66,6 +93,7 @@ function RequestCard({ r }) {
 export default function Sara() {
   const { user, name: userName, role, isAdmin, userPermissions } = useAuth()
   const { queue, count, oldest, refresh } = useMyLeaveApprovals()
+  const navigate = useNavigate()
 
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState([]) // { from: 'sara'|'user', text, requests? }
@@ -82,14 +110,32 @@ export default function Sara() {
 
   const settingsRef = useRef(settings)
   settingsRef.current = settings
+  const voiceRef = useRef(voice)
+  voiceRef.current = voice
   const committingRef = useRef(false)
+  const pendingConfirmRef = useRef(null) // mirror of pendingConfirm for async callbacks
+  const setConfirmed = (v) => { pendingConfirmRef.current = v; setPendingConfirm(v) }
+
+  // Re-arm wake-word listening after a command completes or times out.
+  const rearmWake = () => {
+    committingRef.current = false
+    const v = voiceRef.current
+    const s = settingsRef.current
+    if (user && s.voiceOn && !s.micMuted && !micBlockedNow(v)) {
+      setPhase(PHASES.WAKE)
+      v.startWake()
+    } else {
+      setPhase(PHASES.IDLE)
+    }
+  }
+  const micBlockedNow = (v) => v.micState === MIC_STATES.DENIED || v.micState === MIC_STATES.UNAVAILABLE
 
   const say = (text, extra = {}) => {
     setMessages((m) => [...m, { from: 'sara', text, ...extra }])
     const s = settingsRef.current
     if (s.voiceOn && !isQuietHours(s)) {
       setPhase(PHASES.SPEAK)
-      speakText(text, { volume: s.volume, onEnd: () => setPhase((p) => (p === PHASES.SPEAK ? (pendingConfirm ? PHASES.CONFIRM : PHASES.IDLE) : p)) })
+      speakText(text, { volume: s.volume, onEnd: () => setPhase((p) => (p === PHASES.SPEAK ? (pendingConfirmRef.current ? PHASES.CONFIRM : PHASES.IDLE) : p)) })
     }
   }
 
@@ -116,7 +162,8 @@ export default function Sara() {
         const parsed = await analyzeIntent(raw, { role, isAdmin, permissions: userPermissions })
         if (parsed.intent === 'CONFIRM') {
           const { matches, decision } = pendingConfirm
-          setPendingConfirm(null)
+          setConfirmed(null)
+          setPhase(PHASES.EXECUTING)
           const results = await executeConfirmedDecision({ matches, decision, ctx: { approverId: user.id, approverName: userName, method }, command: raw, intent: parsed.intent })
           const okCount = results.filter((r) => r.ok).length
           await refresh()
@@ -126,7 +173,7 @@ export default function Sara() {
           return
         }
         if (parsed.intent === 'CANCEL') {
-          setPendingConfirm(null)
+          setConfirmed(null)
           say('Understood. I haven\u2019t changed anything.')
           return
         }
@@ -140,10 +187,13 @@ export default function Sara() {
         ctx: { userId: user.id, role, isAdmin, permissions: userPermissions, intent: null },
       })
       if (result.type === 'confirm') {
-        setPendingConfirm({ matches: result.matches, decision: result.decision })
+        setConfirmed({ matches: result.matches, decision: result.decision })
         say(result.message, { requests: result.matches })
       } else if (result.type === 'list') {
         say(result.message, { requests: result.requests })
+      } else if (result.type === 'navigate') {
+        say(result.message)
+        navigate(result.route)
       } else {
         say(result.message)
       }
@@ -151,7 +201,7 @@ export default function Sara() {
       say(`I couldn't complete that — ${e?.message || 'something went wrong'}.`)
     } finally {
       setBusy(false)
-      setPhase(pendingConfirm ? PHASES.CONFIRM : PHASES.IDLE)
+      setPhase(pendingConfirmRef.current ? PHASES.CONFIRM : PHASES.IDLE)
     }
   }
 
@@ -201,23 +251,36 @@ export default function Sara() {
   }, [shouldArm, micBlocked, voice.wakeListening, voice.micState])
 
   useEffect(() => {
-    voice.setHandlers({
-      onWake(command) {
+    voiceRef.current.setHandlers({
+      onWake(command, word) {
         committingRef.current = true
         setPhase(PHASES.ACK)
+        playActivationTone()
         const s = settingsRef.current
-        if (s.voiceOn) speakText("Yes, boss. I'm listening.", { volume: s.volume })
+        const v = voiceRef.current
+        if (s.voiceOn && !s.micMuted) {
+          const reply = String(word || '').toLowerCase() === 'core' ? "I'm listening." : 'Yes, boss. I\u2019m listening.'
+          speakText(reply, { volume: s.volume })
+        }
         setPhase(PHASES.LISTEN)
-        voice.captureCommand({
+        v.captureCommand({
           onResult: (text) => {
             committingRef.current = false
-            if (text) handleCommand(text, 'voice')
-            else {
+            if (text) {
+              handleCommand(text, 'voice')
+            } else {
               say("I didn't catch that. You can also type your request.")
-              setPhase(PHASES.IDLE)
+              rearmWake()
             }
           },
-          onNoMicrophone: () => { setMicNotice("I couldn't get microphone access for the command.") },
+          onNoMicrophone: () => { setMicNotice("I couldn't get microphone access for the command."); rearmWake() },
+          // Spec: after ~5–8s of silence following the wake word, disengage
+          // gracefully and go back to wake-word listening.
+          onTimeout: () => {
+            if (settingsRef.current.voiceOn) speakText("I'm here whenever you need me.", { volume: settingsRef.current.volume })
+            setMessages((m) => [...m, { from: 'sara', text: "I'm here whenever you need me." }])
+            rearmWake()
+          },
         })
       },
       onWakeError(type) {
@@ -225,10 +288,13 @@ export default function Sara() {
         // and text input remain available.
         if (type === MIC_STATES.DENIED) {
           setMicNotice('Microphone permission denied — you can use push-to-talk or type instead.')
-          setPhase(PHASES.FALLBACK)
+          setPhase(PHASES.PERMISSION_DENIED)
         } else {
           setMicNotice('Voice recognition hiccup — you can still type.')
-          setPhase(PHASES.IDLE)
+          setPhase(PHASES.ERROR)
+          window.setTimeout(() => {
+            setPhase((p) => (p === PHASES.ERROR ? PHASES.IDLE : p))
+          }, 2500)
         }
       },
     })
@@ -360,7 +426,7 @@ export default function Sara() {
               <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 bg-slate-50">
                 {messages.length === 0 && (
                   <div className="text-center text-xs text-slate-400 mt-8">
-                    Say "SARA" to activate, then ask, e.g.<br />"what requires my attention?"<br />or "approve John's leave"
+                    Say "Sara" or "Core" to activate, then ask, e.g.<br />"what requires my attention?"<br />or "approve John's leave"
                   </div>
                 )}
                 {messages.map((m, i) => (
@@ -402,7 +468,7 @@ export default function Sara() {
                   <button
                     onClick={pushToTalk}
                     disabled={busy || !settings.voiceOn}
-                    title={settings.voiceOn ? 'Push to talk (or say "SARA")' : 'Voice mode is off'}
+                    title={settings.voiceOn ? 'Push to talk (or say "Sara" / "Core")' : 'Voice mode is off'}
                     className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${micActive ? 'bg-rose-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'} disabled:opacity-40`}
                     aria-label="Push to talk to SARA"
                   >

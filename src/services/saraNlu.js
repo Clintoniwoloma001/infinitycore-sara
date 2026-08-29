@@ -17,7 +17,7 @@ import { APPROVER_ROLES } from './leaveApprovalsService'
 // ------------------------------------------------------------------
 
 // Intents the deterministic parser emits.
-export const LOCAL_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'APPROVE_LEAVE', 'REJECT_LEAVE', 'CONFIRM', 'CANCEL', 'HELP', 'ROLE_CHANGE_DENIED', 'UNKNOWN']
+export const LOCAL_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'APPROVE_LEAVE', 'REJECT_LEAVE', 'CONFIRM', 'CANCEL', 'HELP', 'NAVIGATE', 'ROLE_CHANGE_DENIED', 'UNKNOWN']
 
 // Intents the Edge Function may return on top of the local set.
 export const AI_INTENTS = ['DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS']
@@ -29,7 +29,7 @@ export const CONSEQUENTIAL_INTENTS = ['APPROVE_LEAVE', 'REJECT_LEAVE']
 
 // Reads that are safe to run once the authenticated user can reach them —
 // record access still comes from RLS-scoped queries.
-export const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS']
+export const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS', 'NAVIGATE']
 
 // Read intents never need extra gates — record access still comes from
 // RLS-scoped queries. Write intents require either the leave-management

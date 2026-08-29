@@ -28,8 +28,54 @@ export const MIC_STATES = {
   SUSPENDED: 'suspended',
 }
 
-const WAKE_PATTERN = /(^|[^a-z0-9])sara([.!?,']|$)\s*|^sara$/i
-const COMMAND_TIMEOUT_MS = 15000
+// Central, configurable wake words. The engine derives every pattern
+// from this list — adding a word here is all that is needed later.
+export const SARA_WAKE_WORDS = ['sara', 'core']
+
+// Words that appear in ordinary speech must STAND ALONE at the end of an
+// utterance (or after "hey/okay") before they wake SARA — this stops
+// phrases like "core values" or "core banking" from false-triggering.
+const STRICT_WAKE_WORDS = ['core']
+const LOOSE_WAKE_WORDS = SARA_WAKE_WORDS.filter((w) => !STRICT_WAKE_WORDS.includes(w))
+
+const COMMAND_TIMEOUT_MS = 6000 // spec: ~5–8s command window after the wake word
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+const LOOSE_WAKE_RE = new RegExp(`(^|[^a-z0-9])(${LOOSE_WAKE_WORDS.map(escapeRegExp).join('|')})(?![a-z0-9])`, 'i')
+const STRICT_WAKE_RE = new RegExp(`(^|[^a-z0-9])(${STRICT_WAKE_WORDS.map(escapeRegExp).join('|')})\\s*\\p{P}*$`, 'iu')
+
+// Local, on-device detection: finds which (if any) wake word is present
+// and returns { word, command } where command is whatever followed it in
+// the same utterance ("sara show pending" works in one sentence).
+function findWakeMatch(transcript) {
+  const text = (transcript || '').trim()
+  if (!text) return null
+  for (const re of [LOOSE_WAKE_RE, STRICT_WAKE_RE]) {
+    const m = re.exec(text)
+    if (m) return { word: m[2].toLowerCase(), command: extractCommandAfterWake(text, m.index + m[1].length + m[2].length) }
+  }
+  return null
+}
+
+function extractCommandAfterWake(text, wakeEnd) {
+  const rest = text.slice(wakeEnd).replace(/^[\s.,!?'-]+/, '').trim()
+  return stripWakePrefix(rest)
+}
+
+// "hey sara show pending" / "okay core ..." → drop the staple prefix and
+// the wake word itself so the remainder is a clean command.
+export function stripWakePrefix(text) {
+  const clean = (text || '').trim()
+  let out = clean.replace(/^(hey|hi|ok|okay|listen)\s+/i, '')
+  for (const word of SARA_WAKE_WORDS) {
+    const re = new RegExp(`^${escapeRegExp(word)}(?=[\\s.,!?'-]|$)`, 'i')
+    out = out.replace(re, '')
+  }
+  return out.replace(/^[\s,.:;!?'-]+/, '').trim()
+}
 
 function speechSupported() {
   return !!(typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition))
@@ -45,18 +91,10 @@ function getRecognition() {
   return rec
 }
 
-function splitAfterWake(phrase) {
-  // Returns { command } — the text that follows "sara" in the same
-  // utterance, so "sara show pending" works without a second sentence.
-  const m = phrase.match(/sara([.!?,']\s*|$)(.*)/i)
-  if (!m) return { command: '' }
-  const rest = (m[2] || '').trim().replace(/^[.!?,']+\s*/, '')
-  return { command: rest }
-}
-
 export function useSaraVoice() {
   const [micState, setMicState] = useState(() => (speechSupported() ? MIC_STATES.IDLE : MIC_STATES.UNAVAILABLE))
   const [wakeListening, setWakeListening] = useState(false) // wake-word recognizer currently running
+  const [wakeWordFired, setWakeWordFired] = useState(false) // a wake word was detected in this cycle
   const [interim, setInterim] = useState('')                 // live interim transcript while wakeListening
   const [commandTranscript, setCommandTranscript] = useState('') // live interim while capturing a command
   const [isSpeaking, setIsSpeaking] = useState(false)
@@ -108,6 +146,7 @@ export function useSaraVoice() {
   const startWake = useCallback(async () => {
     if (!micSupported || armedRef.current) return
     armedRef.current = true
+    setWakeWordFired(false)
     const ok = await requestMic()
     if (!ok) {
       armedRef.current = false
@@ -132,14 +171,15 @@ export function useSaraVoice() {
         else interimText += t
       }
       if (interimText) setInterim(interimText.trim())
-      const running = `${finalText}${interimText}`
-      if (WAKE_PATTERN.test(running.trim())) {
-        // "sara" detected locally — hand off to the host, which decides
-        // whether to acknowledge and capture a command.
-        const { command } = splitAfterWake(running.trim())
+      const running = `${finalText}${interimText}`.trim()
+      const wake = findWakeMatch(running)
+      if (wake) {
+        // Wake word detected on-device — hand off to the host, which
+        // decides whether to acknowledge and capture a command.
+        setWakeWordFired(true)
         hardStop()
         stopWakeRec()
-        handlersRef.current.onWake?.(command)
+        handlersRef.current.onWake?.(wake.command, wake.word)
       }
     }
 
@@ -175,11 +215,12 @@ export function useSaraVoice() {
     restoredRef.current = false
     stopWakeRec()
     setCommandTranscript('')
+    setWakeWordFired(false)
   }, [stopWakeRec])
 
   // Single-shot command capture (used after the wake word, and by the
   // push-to-talk fallback). Stops the wake recognizer first.
-  const captureCommand = useCallback(({ onResult, ack = null, timeoutMs = COMMAND_TIMEOUT_MS, liveInterim = null, onNoMicrophone = null }) => {
+  const captureCommand = useCallback(({ onResult, ack = null, timeoutMs = COMMAND_TIMEOUT_MS, liveInterim = null, onNoMicrophone = null, onTimeout = null }) => {
     stopWake()
     const fire = async () => {
       const ok = await requestMic()
@@ -199,15 +240,15 @@ export function useSaraVoice() {
         try { rec.stop() } catch { /* no-op */ }
       }
 
-      const finish = () => {
+      const finish = (opts = {}) => {
         if (done) return
         finishClear()
         if (timeoutTimer) clearTimeout(timeoutTimer)
         setCommandTranscript('')
-        onResult?.()
+        if (!opts.silent) onResult?.()
       }
 
-      const timeoutTimer = setTimeout(finish, timeoutMs)
+      const timeoutTimer = setTimeout(() => { finish({ silent: true }); onTimeout?.() }, timeoutMs)
       ack?.()
       rec.onresult = (e) => {
         let interimText = ''
@@ -223,7 +264,7 @@ export function useSaraVoice() {
           finishClear()
           if (timeoutTimer) clearTimeout(timeoutTimer)
           setCommandTranscript('')
-          const transcript = finalText.trim()
+          const transcript = stripWakePrefix(finalText.trim())
           liveInterim?.(transcript)
           onResult?.(transcript)
         }
@@ -257,11 +298,22 @@ export function useSaraVoice() {
     interim,
     commandTranscript,
     isSpeaking,
+    isWakeWordDetected: wakeWordFired,
     setHandlers,
     requestMic,
     startWake,
     stopWake,
     captureCommand,
+    // Spec-friendly interface aliases, so swapping in a dedicated
+    // wake-word engine later does not touch the SARA component or any
+    // channel.
+    startListening: startWake,
+    stopListening: stopWake,
+    listenForCommand: captureCommand,
+    isListening: () => wakeListening,
+    pauseListening: stopWake,
+    resumeListening: () => { armedRef.current = false; return startWake() },
+    detectWakeWord: () => wakeWordFired,
   }
 }
 
@@ -292,3 +344,50 @@ export function cancelSpeech() {
 export function availableVoices() {
   try { return window.speechSynthesis?.getVoices?.() || [] } catch { return [] }
 }
+
+// ------------------------------------------------------------------
+// Activation sound — a subtle, dependency-free two-note chime played
+// through WebAudio when the wake word is detected. Best-effort: if the
+// browser blocks audio until a gesture (or WebAudio is unavailable) we
+// stay silent rather than crash.
+// ------------------------------------------------------------------
+
+let toneCtx = null
+export function playActivationTone() {
+  try {
+    if (typeof window === 'undefined') return false
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    if (!Ctx) return false
+    if (!toneCtx) toneCtx = new Ctx()
+    if (toneCtx.state === 'suspended') { try { toneCtx.resume() } catch { /* no-op */ } }
+    if (toneCtx.state !== 'running') return false
+    const now = toneCtx.currentTime
+    const a = toneCtx.createOscillator()
+    const g = toneCtx.createGain()
+    a.type = 'sine'
+    a.frequency.value = 880
+    g.gain.setValueAtTime(0.0001, now)
+    g.gain.exponentialRampToValueAtTime(0.12, now + 0.02)
+    g.gain.setValueAtTime(0.12, now + 0.09)
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.15)
+    const b = toneCtx.createOscillator()
+    const g2 = toneCtx.createGain()
+    b.type = 'sine'
+    b.frequency.value = 1174.66
+    g2.gain.setValueAtTime(0.0001, now + 0.13)
+    g2.gain.exponentialRampToValueAtTime(0.1, now + 0.16)
+    g2.gain.exponentialRampToValueAtTime(0.0001, now + 0.26)
+    a.connect(g).connect(toneCtx.destination)
+    b.connect(g2).connect(toneCtx.destination)
+    a.start(now); a.stop(now + 0.3)
+    b.start(now + 0.13); b.stop(now + 0.3)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Channel-agnostic speech aliases (used by voice, and reused later by
+// WhatsApp/email/Flutter channels through the same interface).
+export const speak = speakText
+export const stopSpeaking = cancelSpeech

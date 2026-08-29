@@ -5,6 +5,7 @@ import { analyzeIntent, canExecuteIntent } from './saraNlu'
 import { myQueue as computeMyQueue, currentStage, executeLeaveDecision } from './leaveApprovalsService'
 import { LEAVE_TYPE_LABELS } from './leaveBalanceService'
 import { countRows } from './saraStats'
+import { protectedRoutes, canAccessRoute } from '../config/navigation'
 
 // ------------------------------------------------------------------
 // AGENTIC ARCHITECTURE (conceptual):
@@ -69,6 +70,31 @@ function describeRequest(r) {
   return `${r.employee_name} — ${LEAVE_TYPE_LABELS[r.leave_type] || r.leave_type} — ${r.days} day(s)`
 }
 
+// Level-2 NAVIGATION. SARA only ever opens pages the authenticated user
+// is already allowed to reach — it reuses routeConfig + canAccessRoute,
+// the exact same gates as the sidebar, so it can never bypass access.
+export function resolveNavigationTarget(target, ctx) {
+  const needle = String(target || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .trim()
+  if (!needle) return null
+  const matches = protectedRoutes
+    .filter((r) => r.path !== '/')
+    .filter((r) => r.label.toLowerCase().includes(needle) || r.path.includes(needle) || needle.includes(r.label.toLowerCase()))
+  if (matches.length === 0) return null
+  // Respect the user's real access — same function the sidebar uses.
+  const authView = {
+    user: ctx.userId ? { id: ctx.userId } : null,
+    profile: { id: ctx.userId || '' },
+    role: ctx.role,
+    isAdmin: ctx.isAdmin,
+    hasAnyPermission: (perms) => (ctx.isAdmin ? true : (ctx.permissions || []).some((p) => perms.includes(p))),
+  }
+  const accessible = matches.find((r) => canAccessRoute(r, authView))
+  return accessible ? { route: accessible.path, label: accessible.label } : { denied: true }
+}
+
 async function dashboardSummary(ctx) {
   const [customers, pendingLoans, pendingRepayments] = await Promise.all([
     countRows('customers', null, ctx),
@@ -99,7 +125,14 @@ export async function runSaraCommand({ command, pool, ctx }) {
       return { type: 'text', message: "I can't change your role. Role elevation requires an authorized administrator using User Management." }
 
     case 'HELP':
-      return { type: 'text', message: 'Try: "show my pending leave approvals", "how many leave approvals do I have", "approve John\'s leave", "what requires my attention?", or "approve annual leave from Lagos that are 5 days or less".' }
+      return { type: 'text', message: 'Try: "show my pending leave approvals", "how many leave approvals do I have", "approve John\'s leave", "open employees", "what requires my attention?", or "approve annual leave from Lagos that are 5 days or less".' }
+
+    case 'NAVIGATE': {
+      const nav = resolveNavigationTarget(parsed.filters.target, ctx)
+      if (!nav) return { type: 'text', message: "I couldn't find a page matching that. Try \"open employees\" or \"go to reports\"." }
+      if (nav.denied) return { type: 'text', message: "I can't open that page — your current permissions don't include it." }
+      return { type: 'navigate', route: nav.route, message: `Opening ${nav.label}.` }
+    }
 
     case 'COUNT_PENDING':
       return { type: 'text', message: pool.length === 0 ? "You have no pending leave approvals." : `You have ${pool.length} pending leave approval${pool.length === 1 ? '' : 's'}.` }
