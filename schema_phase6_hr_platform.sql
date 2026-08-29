@@ -449,6 +449,28 @@ create table if not exists public.employee_onboarding_submissions (
   created_at timestamptz default now()
 );
 alter table public.employee_onboarding_submissions enable row level security;
+
+-- Self-heal: if the submissions table predates phase 6 without the newer
+-- columns, add them BEFORE the indexes below (which reference link_id and
+-- employee_id) so the migration never aborts on a missing column.
+alter table public.employee_onboarding_submissions add column if not exists link_id uuid;
+alter table public.employee_onboarding_submissions add column if not exists employee_id uuid;
+alter table public.employee_onboarding_submissions add column if not exists candidate_name text;
+alter table public.employee_onboarding_submissions add column if not exists email text;
+alter table public.employee_onboarding_submissions add column if not exists phone text;
+alter table public.employee_onboarding_submissions add column if not exists "position" text;
+alter table public.employee_onboarding_submissions add column if not exists department text;
+alter table public.employee_onboarding_submissions add column if not exists employment_type text;
+alter table public.employee_onboarding_submissions add column if not exists payload jsonb;
+alter table public.employee_onboarding_submissions add column if not exists declaration_accepted boolean default false;
+alter table public.employee_onboarding_submissions add column if not exists signature_data text;
+alter table public.employee_onboarding_submissions add column if not exists status text default 'submitted';
+alter table public.employee_onboarding_submissions add column if not exists reviewed_by uuid;
+alter table public.employee_onboarding_submissions add column if not exists reviewed_at timestamptz;
+alter table public.employee_onboarding_submissions add column if not exists review_comments text;
+alter table public.employee_onboarding_submissions add column if not exists submitted_at timestamptz default now();
+alter table public.employee_onboarding_submissions add column if not exists created_at timestamptz default now();
+
 create index if not exists idx_onb_subs_link on public.employee_onboarding_submissions(link_id);
 create index if not exists idx_onb_subs_emp on public.employee_onboarding_submissions(employee_id);
 
