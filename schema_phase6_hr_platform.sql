@@ -12,8 +12,9 @@
 -- DROP IF EXISTS where destructive behaviour is required.
 -- ============================================================
 
--- Needed for sha256 token hashing on the server.
-create extension if not exists pgcrypto;
+-- Onboarding tokens are hashed with md5() (core Postgres, no extension
+-- needed) so this file runs anywhere, pgcrypto or not. See the token_hash
+-- columns below.
 
 -- ============================================================
 -- 1. EMPLOYEES — complete the existing table (additive only)
@@ -731,7 +732,7 @@ language sql security definer volatile set search_path = public as $$
     select id, token_hash, candidate_name, candidate_email, candidate_phone,
            "position", department, branch, employment_type, expiry, status
     from public.employee_onboarding_links
-    where token_hash = encode(digest(p_token, 'sha256'), 'hex')
+    where token_hash = md5(p_token)
   ),
   u as (
     update public.employee_onboarding_links
@@ -760,7 +761,7 @@ create or replace function public.mark_onboarding_progress(p_token text)
 returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
-  v_hash text := encode(digest(p_token, 'sha256'), 'hex');
+  v_hash text := md5(p_token);
   v_status text;
 begin
   update public.employee_onboarding_links
@@ -785,7 +786,7 @@ create or replace function public.submit_onboarding(p_token text, p_payload json
 returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
-  v_hash text := encode(digest(p_token, 'sha256'), 'hex');
+  v_hash text := md5(p_token);
   v_link record;
   v_employee uuid;
   v_created boolean := false;
