@@ -1,18 +1,22 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Menu, X, LogOut } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
+import { supabase } from '../supabaseClient'
 import Logo from './Logo'
 import { canAccessRoute, routeConfig } from '../config/navigation'
 import NotificationBell from './NotificationBell'
 import Sara from './sara/Sara'
+import EmployeeCompletionModal from './EmployeeCompletionModal'
 
 export default function Layout({ children }) {
   const [open, setOpen] = useState(false)
+  const [showCompletion, setShowCompletion] = useState(false)
+  const [completionEmpId, setCompletionEmpId] = useState(null)
   const location = useLocation()
   const navigate = useNavigate()
   const auth = useAuth()
-  const { role, roleMetadata, name, email, signOut } = auth
+  const { user, profile, role, roleMetadata, name, email, signOut } = auth
   const groups = routeConfig
     .map((group) => ({ ...group, items: group.items.filter((item) => canAccessRoute(item, auth)) }))
     .filter((group) => group.items.length > 0)
@@ -26,6 +30,42 @@ export default function Layout({ children }) {
     if (path === '/') return location.pathname === '/'
     return location.pathname === path || location.pathname.startsWith(`${path}/`)
   }
+
+  // Check employee profile completion for staff users on login
+  useEffect(() => {
+    if (!user || !profile) return
+    // Only check for approved staff (not customers, not pending)
+    if (profile.status !== 'active' || profile.approved !== true) return
+    if (role === 'customer') return
+    // Don't show on onboarding/guarantor pages
+    if (location.pathname.startsWith('/onboarding/') || location.pathname.startsWith('/guarantor-')) return
+
+    let cancelled = false
+    const checkCompletion = async () => {
+      try {
+        const { data } = await supabase.rpc('get_employee_completion')
+        if (cancelled || !data?.ok) return
+        if (!data.is_complete && data.completion_pct < 100) {
+          // Check if we already dismissed it this session
+          const dismissed = sessionStorage.getItem('emp_completion_dismissed')
+          if (dismissed === 'true') return
+          // Find the employee ID
+          const { data: emp } = await supabase
+            .from('employees')
+            .select('id')
+            .eq('user_id', user.id)
+            .limit(1)
+            .maybeSingle()
+          if (emp?.id) {
+            setCompletionEmpId(emp.id)
+            setShowCompletion(true)
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+    checkCompletion()
+    return () => { cancelled = true }
+  }, [user, profile, role, location.pathname]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden">
@@ -82,6 +122,13 @@ export default function Layout({ children }) {
         </main>
       </div>
       <Sara />
+      {showCompletion && completionEmpId && (
+        <EmployeeCompletionModal
+          employeeId={completionEmpId}
+          onClose={() => { setShowCompletion(false); sessionStorage.setItem('emp_completion_dismissed', 'true') }}
+          onSaved={() => {}}
+        />
+      )}
     </div>
   )
 }

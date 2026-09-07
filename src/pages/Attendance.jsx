@@ -1,8 +1,47 @@
-import React, { useEffect, useState } from 'react'
-import { CalendarClock, Clock, LogIn, LogOut, MapPin, User } from 'lucide-react'
+import React, { useEffect, useState, useMemo } from 'react'
+import { Calendar, TrendingUp, Clock, CheckCircle2, AlertTriangle, XCircle, Activity } from 'lucide-react'
 import { attendanceService } from '../services/attendanceService'
 import { LoadingState, EmptyState } from '../components/PageStates'
-import { date, status } from './hrShared'
+import ClockCard from '../components/attendance/ClockCard'
+import TrendChart from '../components/attendance/TrendChart'
+import SaraBriefing from '../components/attendance/SaraBriefing'
+
+const FILTERS = [
+  { key: 'today', label: 'Today' },
+  { key: 'week', label: 'This Week' },
+  { key: 'month', label: 'This Month' },
+  { key: 'prev_month', label: 'Previous Month' },
+  { key: 'quarter', label: 'Quarter' },
+]
+
+function dateRange(filter) {
+  const now = new Date()
+  const today = now.toISOString().slice(0, 10)
+  switch (filter) {
+    case 'today':
+      return { start: today, end: today }
+    case 'week': {
+      const day = now.getDay() || 7
+      const monday = new Date(now)
+      monday.setDate(now.getDate() - day + 1)
+      const sunday = new Date(monday)
+      sunday.setDate(monday.getDate() + 6)
+      return { start: monday.toISOString().slice(0, 10), end: sunday.toISOString().slice(0, 10) }
+    }
+    case 'month':
+      return { start: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10), end: new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10) }
+    case 'prev_month': {
+      const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      return { start: prev.toISOString().slice(0, 10), end: new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10) }
+    }
+    case 'quarter': {
+      const q = Math.floor(now.getMonth() / 3)
+      return { start: new Date(now.getFullYear(), q * 3, 1).toISOString().slice(0, 10), end: new Date(now.getFullYear(), q * 3 + 3, 0).toISOString().slice(0, 10) }
+    }
+    default:
+      return { start: today, end: today }
+  }
+}
 
 export default function Attendance() {
   const [employee, setEmployee] = useState(null)
@@ -11,7 +50,7 @@ export default function Attendance() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState({ kind: '', text: '' })
-  const [geo, setGeo] = useState(null)
+  const [filter, setFilter] = useState('month')
 
   const load = async () => {
     setLoading(true)
@@ -21,7 +60,8 @@ export default function Attendance() {
       if (emp) {
         const today = await attendanceService.getToday(emp.id)
         setRecord(today)
-        const hist = await attendanceService.getHistory(emp.id, 30)
+        const range = dateRange(filter)
+        const hist = await attendanceService.getHistory(emp.id, range)
         setHistory(hist)
       }
     } catch (e) {
@@ -31,24 +71,14 @@ export default function Attendance() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [filter])
 
-  const captureLocation = () => {
-    if (!navigator.geolocation) return
-    navigator.geolocation.getCurrentPosition(
-      (pos) => setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => {},
-      { enableHighAccuracy: false, timeout: 5000 },
-    )
-  }
-
-  const doClockIn = async () => {
+  const doClockIn = async (geo) => {
     setBusy(true)
     setMessage({})
     try {
-      const r = await attendanceService.clockIn({ lat: geo?.lat, lng: geo?.lng })
-      setRecord(r)
-      setMessage({ kind: 'ok', text: `Clocked in at ${new Date(r.clock_in).toLocaleTimeString()}.` })
+      const r = await attendanceService.clockIn(geo)
+      setMessage({ kind: 'ok', text: `Clocked in at ${new Date(r.clock_in_at).toLocaleTimeString()}.${r.late_minutes > 0 ? ` You are ${r.late_minutes} minutes late.` : ''}` })
       await load()
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Clock in failed' })
@@ -57,13 +87,12 @@ export default function Attendance() {
     }
   }
 
-  const doClockOut = async () => {
+  const doClockOut = async (geo) => {
     setBusy(true)
     setMessage({})
     try {
-      const r = await attendanceService.clockOut(record?.id)
-      setRecord(r)
-      setMessage({ kind: 'ok', text: `Clocked out at ${new Date(r.clock_out).toLocaleTimeString()}. Hours worked: ${r.work_hours}.` })
+      const r = await attendanceService.clockOut(record?.id, geo)
+      setMessage({ kind: 'ok', text: `Clocked out at ${new Date(r.clock_out_at).toLocaleTimeString()}. Worked ${r.work_hours} hours.` })
       await load()
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Clock out failed' })
@@ -71,6 +100,36 @@ export default function Attendance() {
       setBusy(false)
     }
   }
+
+  // Compute stats
+  const stats = useMemo(() => {
+    if (!history.length) return { present: 0, absent: 0, late: 0, onTime: 0, earlyDep: 0, avgHours: 0, pct: 0, streak: 0 }
+    const present = history.filter((r) => r.clock_in).length
+    const late = history.filter((r) => r.status === 'late').length
+    const onTime = history.filter((r) => r.status === 'present' && r.clock_in).length
+    const earlyDep = history.filter((r) => r.status === 'early_exit').length
+    const withHours = history.filter((r) => r.work_hours != null)
+    const avgHours = withHours.length > 0 ? (withHours.reduce((s, r) => s + parseFloat(r.work_hours), 0) / withHours.length).toFixed(1) : 0
+    const workingDays = history.length
+    const pct = workingDays > 0 ? Math.round((present / workingDays) * 100) : 0
+    // Streak: consecutive days with clock_in, most recent first
+    let streak = 0
+    for (const r of history) {
+      if (r.clock_in) streak++
+      else break
+    }
+    return { present, absent: workingDays - present, late, onTime, earlyDep, avgHours, pct, streak }
+  }, [history])
+
+  // Trend data for chart
+  const trendData = useMemo(() => {
+    const days = [...history].reverse().slice(-14)
+    return days.map((r) => ({
+      label: new Date(r.attendance_date).toLocaleDateString('en-US', { weekday: 'short' }).charAt(0),
+      value: r.work_hours ? parseFloat(r.work_hours) : 0,
+      color: r.status === 'late' ? '#f59e0b' : r.status === 'early_exit' ? '#f97316' : r.clock_in ? '#009944' : '#e2e8f0',
+    }))
+  }, [history])
 
   if (loading) return <LoadingState label="Loading attendance..." />
 
@@ -86,102 +145,87 @@ export default function Attendance() {
     )
   }
 
-  const open = record && !record.clock_out
-
   return (
-    <div>
-      <h2 className="text-2xl font-semibold text-slate-900 mb-6">My Attendance</h2>
-
-      {message.text && (
-        <div className={`mb-5 rounded-lg border p-4 text-sm ${message.kind === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`}>
-          {message.text}
-        </div>
-      )}
+    <div className="max-w-5xl">
+      <h2 className="text-2xl font-semibold text-slate-900 mb-1">My Attendance</h2>
+      <p className="text-sm text-slate-500 mb-6">Clock in, clock out, and track your attendance.</p>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        <div className="lg:col-span-2 bg-white rounded-lg border border-slate-200 p-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h3 className="font-semibold text-slate-900">{employee.full_name}</h3>
-              <p className="text-sm text-slate-500">{employee.position || 'Staff'} {employee.department ? `· ${employee.department}` : ''}</p>
-              <p className="text-xs text-slate-400 mt-2 flex items-center gap-1"><User className="w-3.5 h-3.5" /> {employee.employee_code || employee.email || employee.phone}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-slate-400">Today</p>
-              <p className="text-2xl font-bold text-slate-900">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
-            </div>
-          </div>
-
-          <div className="mt-8 flex flex-col sm:flex-row items-center gap-4">
-            {!record && (
-              <button onClick={doClockIn} disabled={busy} className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3 rounded-xl bg-[#009944] text-white font-semibold hover:bg-[#007a36] disabled:opacity-60">
-                <LogIn className="w-5 h-5" /> Clock In
-              </button>
-            )}
-            {record && !record.clock_out && (
-              <button onClick={doClockOut} disabled={busy} className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3 rounded-xl bg-rose-600 text-white font-semibold hover:bg-rose-700 disabled:opacity-60">
-                <LogOut className="w-5 h-5" /> Clock Out
-              </button>
-            )}
-            {record && record.clock_out && (
-              <div className="w-full sm:w-auto inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-slate-100 text-slate-600 font-medium">
-                <CheckIcon /> Shift complete · {record.work_hours || 0} hours
-              </div>
-            )}
-            <button onClick={captureLocation} className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-[#009944]">
-              <MapPin className="w-4 h-4" /> {geo ? 'With location' : 'Attach location'}
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 mt-8">
-            <div className="rounded-lg bg-slate-50 p-4">
-              <p className="text-xs text-slate-400 flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> Clock In</p>
-              <p className="text-lg font-semibold text-slate-900 mt-1">{record?.clock_in ? new Date(record.clock_in).toLocaleTimeString() : '—'}</p>
-            </div>
-            <div className="rounded-lg bg-slate-50 p-4">
-              <p className="text-xs text-slate-400 flex items-center gap-1"><CalendarClock className="w-3.5 h-3.5" /> Clock Out</p>
-              <p className="text-lg font-semibold text-slate-900 mt-1">{record?.clock_out ? new Date(record.clock_out).toLocaleTimeString() : open ? 'In progress' : '—'}</p>
-            </div>
-          </div>
-          <p className="text-xs text-slate-400 mt-4">Official clock-in/out times are stamped by the server — the browser clock is never trusted.</p>
+        {/* Clock card — takes 2 columns */}
+        <div className="lg:col-span-2">
+          <ClockCard
+            record={record}
+            employee={employee}
+            onClockIn={doClockIn}
+            onClockOut={doClockOut}
+            busy={busy}
+            message={message}
+          />
         </div>
 
-        <div className="bg-white rounded-lg border border-slate-200 p-5">
-          <h3 className="font-semibold text-slate-900 mb-3">This week</h3>
-          {history.length === 0 && <EmptyState title="No records yet" />}
-          <ul className="space-y-2">
-            {history.slice(0, 7).map((r) => (
-              <li key={r.id} className="flex items-center justify-between text-sm">
-                <span className="text-slate-600">{date(r.attendance_date)}</span>
-                <span className="text-xs">{status(r.status)}</span>
-              </li>
-            ))}
-          </ul>
+        {/* SARA briefing */}
+        <div>
+          <SaraBriefing records={history} isManager={false} />
         </div>
       </div>
 
-      <h3 className="text-lg font-semibold text-slate-900 mb-3">Recent history</h3>
-      {history.length === 0 && <EmptyState title="No attendance history" />}
-      {history.length > 0 && (
-        <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
+      {/* Stats grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
+        <StatCard icon={CheckCircle2} label="Days Present" value={stats.present} color="text-emerald-600" />
+        <StatCard icon={XCircle} label="Days Absent" value={stats.absent} color="text-rose-600" />
+        <StatCard icon={AlertTriangle} label="Late Days" value={stats.late} color="text-amber-600" />
+        <StatCard icon={Clock} label="On-Time" value={stats.onTime} color="text-blue-600" />
+        <StatCard icon={Activity} label="Early Dep." value={stats.earlyDep} color="text-orange-600" />
+        <StatCard icon={TrendingUp} label="Avg Hours" value={stats.avgHours} color="text-violet-600" />
+        <StatCard icon={Calendar} label="Attendance %" value={`${stats.pct}%`} color="text-[#009944]" />
+      </div>
+
+      {/* Trend chart */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <h3 className="text-sm font-semibold text-slate-700 mb-4">Attendance Trend — Hours Worked</h3>
+        <TrendChart data={trendData} />
+      </div>
+
+      {/* Filter + History table */}
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-slate-900">Attendance History</h3>
+        <div className="flex gap-1.5">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setFilter(f.key)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${filter === f.key ? 'bg-[#009944] text-white' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {history.length === 0 ? (
+        <EmptyState title="No attendance records" description="Your attendance history will appear here once you start clocking in." />
+      ) : (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-left">
               <tr>
-                <th className="px-6 py-3 font-medium">Date</th>
-                <th className="px-6 py-3 font-medium">Clock In</th>
-                <th className="px-6 py-3 font-medium">Clock Out</th>
-                <th className="px-6 py-3 font-medium">Hours</th>
-                <th className="px-6 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium">Date</th>
+                <th className="px-5 py-3 font-medium">Clock In</th>
+                <th className="px-5 py-3 font-medium">Clock Out</th>
+                <th className="px-5 py-3 font-medium">Hours</th>
+                <th className="px-5 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium">Late</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {history.map((r) => (
-                <tr key={r.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-3 text-slate-700">{date(r.attendance_date)}</td>
-                  <td className="px-6 py-3 text-slate-700">{r.clock_in ? new Date(r.clock_in).toLocaleTimeString() : '—'}</td>
-                  <td className="px-6 py-3 text-slate-700">{r.clock_out ? new Date(r.clock_out).toLocaleTimeString() : '—'}</td>
-                  <td className="px-6 py-3 text-slate-700">{r.work_hours || '—'}</td>
-                  <td className="px-6 py-3">{status(r.status)}</td>
+                <tr key={r.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-5 py-3 text-slate-700">{new Date(r.attendance_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                  <td className="px-5 py-3 text-slate-700 tabular-nums">{r.clock_in ? new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                  <td className="px-5 py-3 text-slate-700 tabular-nums">{r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                  <td className="px-5 py-3 text-slate-700 tabular-nums">{r.work_hours || '—'}</td>
+                  <td className="px-5 py-3"><StatusPill status={r.status} /></td>
+                  <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -192,10 +236,29 @@ export default function Attendance() {
   )
 }
 
-function CheckIcon() {
+function StatCard({ icon: Icon, label, value, color }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20 6 9 17l-5-5" />
-    </svg>
+    <div className="bg-white rounded-xl border border-slate-200 p-3.5">
+      <Icon className={`w-4 h-4 ${color}`} />
+      <div className={`text-xl font-bold ${color} mt-1.5`}>{value}</div>
+      <div className="text-xs text-slate-400 mt-0.5">{label}</div>
+    </div>
+  )
+}
+
+function StatusPill({ status }) {
+  const styles = {
+    present: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    late: 'bg-amber-50 text-amber-700 border-amber-200',
+    absent: 'bg-rose-50 text-rose-700 border-rose-200',
+    early_exit: 'bg-orange-50 text-orange-700 border-orange-200',
+    on_leave: 'bg-blue-50 text-blue-700 border-blue-200',
+    corrected: 'bg-violet-50 text-violet-700 border-violet-200',
+    incomplete: 'bg-slate-100 text-slate-600 border-slate-200',
+  }
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border capitalize ${styles[status] || styles.incomplete}`}>
+      {status.replace(/_/g, ' ')}
+    </span>
   )
 }
