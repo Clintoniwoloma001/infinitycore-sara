@@ -62,6 +62,9 @@ export const PERMISSIONS = {
 
   // Reports
   REPORTS_READ: 'reports.read',
+
+  // HR platform settings
+  HR_SETTINGS_MANAGE: 'hr.settings.manage',
 }
 
 // Permission categories for organization

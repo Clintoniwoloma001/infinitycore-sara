@@ -34,6 +34,7 @@ import DataImport from './pages/DataImport'
 import HRQueries from './pages/HRQueries'
 import Appraisals from './pages/Appraisals'
 import WorkManagement from './pages/WorkManagement'
+import PlatformSettings from './pages/PlatformSettings'
 
 const pageComponents = {
   Dashboard,
@@ -61,6 +62,7 @@ const pageComponents = {
   HRQueries,
   Appraisals,
   WorkManagement,
+  PlatformSettings,
 }
 
 function Protected({ children }) {
