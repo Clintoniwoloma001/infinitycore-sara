@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Copy, Link2, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
+import OnboardingReviewModal from '../components/OnboardingReviewModal'
 import { status, date } from './hrShared'
 import { onboardingService, DEFAULT_EXPIRY_DAYS } from '../services/onboardingService'
 
@@ -27,6 +28,7 @@ export default function OnboardingLinks() {
 
   const [links, setLinks] = useState([])
   const [submissions, setSubmissions] = useState([])
+  const [reviewSubmission, setReviewSubmission] = useState(null)
   const [loading, setLoading] = useState(true)
   const [loadingSubs, setLoadingSubs] = useState(true)
   const [error, setError] = useState('')
@@ -241,7 +243,8 @@ export default function OnboardingLinks() {
                 <th className="px-6 py-3 font-medium whitespace-nowrap">Candidate</th>
                 <th className="px-6 py-3 font-medium whitespace-nowrap">Position</th>
                 <th className="px-6 py-3 font-medium whitespace-nowrap">Submitted</th>
-                <th className="px-6 py-3 font-medium whitespace-nowrap">Declaration</th>
+                <th className="px-6 py-3 font-medium whitespace-nowrap">Onboarding</th>
+                <th className="px-6 py-3 font-medium whitespace-nowrap text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -253,7 +256,12 @@ export default function OnboardingLinks() {
                   </td>
                   <td className="px-6 py-3 text-slate-600">{s.position || '-'} {s.department ? `· ${s.department}` : ''}</td>
                   <td className="px-6 py-3 text-slate-600">{date(s.submitted_at)}</td>
-                  <td className="px-6 py-3">{String(s.declaration_accepted) === 'true' || s.declaration_accepted === true ? status('accepted', ['accepted']) : status('declined')}</td>
+                  <td className="px-6 py-3">{status(s.onboarding_status || 'submitted', ['approved', 'completed'])}</td>
+                  <td className="px-6 py-3 text-right">
+                    <button onClick={() => setReviewSubmission(s)} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-[#009944] text-white text-xs font-medium hover:bg-[#007a36]">
+                      Review
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -315,6 +323,13 @@ export default function OnboardingLinks() {
             )}
           </div>
         </div>
+      )}
+      {reviewSubmission && (
+        <OnboardingReviewModal
+          submission={reviewSubmission}
+          onClose={() => setReviewSubmission(null)}
+          onRefresh={loadSubs}
+        />
       )}
     </div>
   )

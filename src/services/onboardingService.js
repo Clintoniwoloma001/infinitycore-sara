@@ -26,7 +26,7 @@ function bytesToBase64url(bytes) {
 
 // Compact, dependency-free MD5 (public-domain style). Output matches
 // Postgres' md5(): lowercase hex, little-endian byte order per word.
-function md5Hex(input) {
+export function md5Hex(input) {
   const bytes = new TextEncoder().encode(input)
   const bitLen = bytes.length * 8
   const padded = new Uint8Array((((bytes.length + 8) >> 6) + 1) << 6)
