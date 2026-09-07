@@ -1,14 +1,14 @@
 import React, { useEffect, useState } from 'react'
 import {
   AlertTriangle, Check, CheckCircle2, Copy, FileText, Loader2, Send, X,
-  PenTool, Camera, IdCard, Home, User, Briefcase, Clock, History,
+  PenTool, Camera, IdCard, Home, User, Briefcase, Clock, History, Sparkles, AlertCircle,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { guarantorVerificationService } from '../services/guarantorVerificationService'
 import { payrollService } from '../services/payrollService'
 import { date, status } from '../pages/hrShared'
 import { LoadingState, ErrorState } from '../components/PageStates'
-import { analyzeOnboarding } from '../services/saraPreReview'
+import { analyzeOnboarding, saraGreeting, saraAssessmentMessage } from '../services/saraPreReview'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -95,6 +95,7 @@ export default function OnboardingReviewModal({ submission, onClose, onRefresh }
   const [rejectReason, setRejectReason] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
   const [saraReview, setSaraReview] = useState(null)
+  const [saraSelections, setSaraSelections] = useState({})
 
   const payload = submission?.payload || {}
   const guarantorName = payload.guarantor_full_name || ''
@@ -112,20 +113,25 @@ export default function OnboardingReviewModal({ submission, onClose, onRefresh }
       ])
       const submissionVerifs = verifs.filter((v) => v.submission_id === submission?.id)
       setVerifications(submissionVerifs)
+      let corrs = []
       if (submissionVerifs.length > 0) {
         const vId = submissionVerifs[0].id
         const [c, e] = await Promise.all([
           guarantorVerificationService.listCorrections(vId).catch(() => []),
           guarantorVerificationService.listEvents(vId).catch(() => []),
         ])
-        setCorrections(c)
+        corrs = c || []
+        setCorrections(corrs)
         setEvents(e)
-        // Compute SARA pre-review
-        try {
-          const review = analyzeOnboarding(submission, verifications[0] || null, c || [], [])
-          setSaraReview(review)
-        } catch { /* best-effort */ }
       }
+      // Compute SARA pre-review (always, even without verification)
+      try {
+        const review = analyzeOnboarding(submission, submissionVerifs[0] || null, corrs, [])
+        setSaraReview(review)
+        const init = {}
+        review.recommendations?.forEach((r) => { init[r.fieldKey] = r.selected !== false })
+        setSaraSelections(init)
+      } catch { /* best-effort */ }
     } catch (e) {
       setError(e?.message || 'Failed to load review data')
     } finally {
@@ -210,6 +216,53 @@ export default function OnboardingReviewModal({ submission, onClose, onRefresh }
       setError(e?.message || 'Failed to approve onboarding')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const sendSaraRecommendations = async () => {
+    if (!saraReview?.recommendations?.length) return
+    const selectedRecs = saraReview.recommendations.filter((r) => saraSelections[r.fieldKey])
+    if (selectedRecs.length === 0) { setError('Select at least one recommendation to send.'); return }
+
+    // Map recommendations to correctable fields
+    const correctableKeys = CORRECTABLE_FIELDS.map((f) => f.key)
+    const fieldSelections = {}
+    const nonCorrectable = []
+    selectedRecs.forEach((r) => {
+      if (correctableKeys.includes(r.fieldKey)) {
+        fieldSelections[r.fieldKey] = true
+      } else {
+        nonCorrectable.push(r)
+      }
+    })
+
+    const comment = selectedRecs.map((r) => `${r.fieldLabel}: ${r.reason}`).join('; ')
+
+    // If there are correctable fields and a verification exists, auto-request corrections
+    if (Object.keys(fieldSelections).length > 0 && verification) {
+      setBusy(true); setError(''); setSuccessMsg('')
+      try {
+        const correctionsArr = Object.keys(fieldSelections).map((field) => ({
+          field_name: field,
+          field_label: FIELD_LABELS[field] || field,
+          hr_comment: comment,
+        }))
+        await guarantorVerificationService.requestCorrection(verification.id, correctionsArr)
+        const msg = `${Object.keys(fieldSelections).length} correction(s) sent from SARA recommendations.`
+        setSuccessMsg(msg)
+        setSaraSelections({})
+        await load()
+        onRefresh?.()
+      } catch (e) {
+        setError(e?.message || 'Failed to send SARA recommendations')
+      } finally {
+        setBusy(false)
+      }
+    } else if (Object.keys(fieldSelections).length > 0 && !verification) {
+      setError('Guarantor verification must be initiated before requesting corrections.')
+    } else {
+      // All non-correctable items — just log as a note
+      setSuccessMsg(`${nonCorrectable.length} SARA recommendation(s) noted. These fields require manual review.`)
     }
   }
 
@@ -393,6 +446,107 @@ export default function OnboardingReviewModal({ submission, onClose, onRefresh }
                       </div>
                       <p className="text-xs text-emerald-700 mt-2">Send this link to the guarantor. They will complete the verification form securely.</p>
                     </div>
+                  )}
+                </div>
+              )}
+
+              {/* SARA Review tab */}
+              {activeTab === 'sara-review' && (
+                <div>
+                  {!saraReview ? (
+                    <p className="text-sm text-slate-400 text-center py-8">SARA pre-review is not available for this submission.</p>
+                  ) : (
+                    <>
+                      {/* Assessment header */}
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${saraReview.assessment === 'READY FOR HR REVIEW' ? 'bg-emerald-100' : saraReview.assessment === 'CORRECTION RECOMMENDED' ? 'bg-amber-100' : 'bg-rose-100'}`}>
+                          <Sparkles className={`w-5 h-5 ${saraReview.assessment === 'READY FOR HR REVIEW' ? 'text-emerald-600' : saraReview.assessment === 'CORRECTION RECOMMENDED' ? 'text-amber-600' : 'text-rose-600'}`} />
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{saraReview.assessment}</p>
+                          <p className="text-xs text-slate-500">{saraReview.totalIssues} issue(s) · {saraReview.pendingCorrectionCount} pending correction(s)</p>
+                        </div>
+                      </div>
+
+                      {/* SARA summary message */}
+                      <div className="rounded-lg bg-slate-50 border border-slate-200 p-4 mb-4">
+                        <p className="text-sm text-slate-700">{saraGreeting(user?.email)}</p>
+                        <p className="text-sm text-slate-600 mt-1">{saraAssessmentMessage(saraReview)}</p>
+                      </div>
+
+                      {/* Issues */}
+                      {saraReview.issues.length > 0 && (
+                        <Section title="Issues Found" icon={AlertCircle}>
+                          <div className="space-y-2">
+                            {saraReview.issues.map((issue, i) => (
+                              <div key={i} className={`flex items-start gap-2 rounded-lg border p-3 ${issue.severity === 'high' ? 'border-rose-200 bg-rose-50' : issue.severity === 'medium' ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
+                                <span className={`mt-0.5 px-1.5 py-0.5 rounded text-xs font-medium uppercase ${issue.severity === 'high' ? 'bg-rose-200 text-rose-800' : issue.severity === 'medium' ? 'bg-amber-200 text-amber-800' : 'bg-slate-200 text-slate-600'}`}>{issue.severity}</span>
+                                <div>
+                                  <p className="text-sm text-slate-800">{issue.message}</p>
+                                  <p className="text-xs text-slate-400 mt-0.5">{issue.section}{issue.fieldLabel ? ` · ${issue.fieldLabel}` : ''}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </Section>
+                      )}
+
+                      {/* Attention items */}
+                      {saraReview.attentionItems.length > 0 && (
+                        <Section title="Needs Attention" icon={AlertTriangle}>
+                          <ul className="space-y-1">
+                            {saraReview.attentionItems.map((item, i) => (
+                              <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 flex-shrink-0" />
+                                {item}
+                              </li>
+                            ))}
+                          </ul>
+                        </Section>
+                      )}
+
+                      {/* Recommendations with selection */}
+                      {saraReview.hasRecommendations && (
+                        <Section title="SARA Recommendations" icon={Sparkles}>
+                          <p className="text-xs text-slate-500 mb-3">Select the recommendations to send as correction requests to the guarantor.</p>
+                          <div className="space-y-2 mb-4">
+                            {saraReview.recommendations.map((rec, i) => (
+                              <label key={i} className="flex items-start gap-2 rounded-lg border border-slate-200 p-3 cursor-pointer hover:bg-slate-50">
+                                <input
+                                  type="checkbox"
+                                  checked={!!saraSelections[rec.fieldKey]}
+                                  onChange={(e) => setSaraSelections((prev) => ({ ...prev, [rec.fieldKey]: e.target.checked }))}
+                                  className="w-4 h-4 mt-0.5 accent-[#009944] flex-shrink-0"
+                                />
+                                <div>
+                                  <p className="text-sm font-medium text-slate-800">{rec.fieldLabel}</p>
+                                  <p className="text-xs text-slate-500">{rec.reason}</p>
+                                  <p className="text-xs text-slate-400 mt-0.5">{rec.section}</p>
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                          {canManage && (
+                            <button
+                              onClick={sendSaraRecommendations}
+                              disabled={busy || !Object.values(saraSelections).some((v) => v)}
+                              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60"
+                            >
+                              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                              Send SARA Recommendations
+                            </button>
+                          )}
+                        </Section>
+                      )}
+
+                      {/* No issues state */}
+                      {saraReview.issues.length === 0 && (
+                        <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-4 flex items-center gap-2">
+                          <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                          <p className="text-sm text-emerald-800">No issues found. This submission looks complete.</p>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}

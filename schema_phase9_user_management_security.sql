@@ -87,25 +87,25 @@ create policy "profiles_read_all" on public.profiles
   );
 
 -- Update: own profile (non-role fields) OR HR/admin for non-super_admin
--- NOTE: In PostgreSQL RLS, the USING clause sees OLD row values (which
--- rows can be targeted), but the WITH CHECK clause only sees NEW row
--- values (which resulting rows are allowed). Referencing OLD in WITH
--- CHECK causes error 42P01 "missing FROM-clause entry for table old".
--- We use NEW.role in WITH CHECK to prevent elevation to super_admin.
+-- NOTE: In PostgreSQL RLS policy expressions, columns are referenced by
+-- their plain name (e.g. "role"), NOT with old./new. prefixes. The USING
+-- clause automatically sees old row values; WITH CHECK sees new row values.
+-- Using old.role or new.role in a policy causes error 42P01
+-- "missing FROM-clause entry for table old/new".
 drop policy if exists "profiles_update_hr" on public.profiles;
 create policy "profiles_update_hr" on public.profiles
   for update using (
     auth.uid() = id
     or (
       public.current_role() in ('super_admin', 'admin', 'hr_manager')
-      and (old.role <> 'super_admin' or public.current_role() = 'super_admin')
+      and (role <> 'super_admin' or public.current_role() = 'super_admin')
     )
   )
   with check (
     auth.uid() = id
     or (
       public.current_role() in ('super_admin', 'admin', 'hr_manager')
-      and (new.role <> 'super_admin' or public.current_role() = 'super_admin')
+      and (role <> 'super_admin' or public.current_role() = 'super_admin')
     )
   );
 
