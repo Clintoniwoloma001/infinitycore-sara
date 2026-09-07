@@ -28,18 +28,30 @@ export default function Interviews() {
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
 
+  // Auto-populate candidate name, email, and position when a candidate is selected
+  const onCandidateChange = (e) => {
+    const candidateId = e.target.value
+    const candidate = candidates.find((c) => c.id === candidateId)
+    setForm((f) => ({
+      ...f,
+      candidate_id: candidateId,
+      candidate_name: candidate?.full_name || '',
+      candidate_email: candidate?.email || '',
+      position: candidate?.applied_role || f.position || '',
+    }))
+  }
+
   const create = async () => {
     if (!form.candidate_id) { setFormError('Please select a candidate.'); return }
     if (!form.scheduled_date) { setFormError('Please select a date and time.'); return }
     setFormError('')
     setCreating(true)
     try {
-      const candidate = candidates.find((c) => c.id === form.candidate_id)
       await hrService.scheduleInterview({
         candidate_id: form.candidate_id,
-        candidate_name: candidate?.full_name || '',
-        candidate_email: candidate?.email || '',
-        position: form.position || candidate?.applied_role || '',
+        candidate_name: form.candidate_name || '',
+        candidate_email: form.candidate_email || '',
+        position: form.position || '',
         interview_type: form.interview_type || 'PHYSICAL',
         location: form.interview_type === 'PHYSICAL' ? form.location : null,
         platform: form.interview_type === 'VIRTUAL' ? form.platform : null,
@@ -113,11 +125,12 @@ export default function Interviews() {
             <div className="space-y-4">
               <div>
                 <label className={labelCls}>Candidate *</label>
-                <select className={inputCls} value={form.candidate_id || ''} onChange={set('candidate_id')}>
+                <select className={inputCls} value={form.candidate_id || ''} onChange={onCandidateChange}>
                   <option value="">Select candidate…</option>
                   {candidates.map((c) => <option key={c.id} value={c.id}>{c.full_name} — {c.email || 'No email'}</option>)}
                 </select>
               </div>
+              <div><label className={labelCls}>Candidate Email</label><input className={inputCls} value={form.candidate_email || ''} onChange={set('candidate_email')} placeholder="Auto-filled from candidate — editable" /></div>
               <div><label className={labelCls}>Position</label><input className={inputCls} value={form.position || ''} onChange={set('position')} placeholder="Auto-filled from candidate" /></div>
               <div>
                 <label className={labelCls}>Interview Type</label>
@@ -149,8 +162,13 @@ export default function Interviews() {
                   </div>
                   <div>
                     <label className={labelCls}>Meeting URL</label>
-                    <input className={inputCls} value={form.meeting_url || ''} onChange={set('meeting_url')} placeholder="Paste meeting link (manual — no auto-integration configured)" />
-                    <p className="text-xs text-slate-400 mt-1">No video provider integration is configured. Enter the meeting URL manually, or connect Google Meet/Zoom OAuth to auto-generate links.</p>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                        <span className="w-1.5 h-1.5 rounded-full bg-slate-400" /> Manual meeting link
+                      </span>
+                    </div>
+                    <input className={inputCls} value={form.meeting_url || ''} onChange={set('meeting_url')} placeholder="Paste meeting link manually" />
+                    <p className="text-xs text-slate-400 mt-1">No video provider integration is connected. To auto-generate links, connect Google Meet or Zoom OAuth in your integration settings.</p>
                   </div>
                 </>
               )}

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BriefcaseBusiness, CalendarDays, ClipboardCheck, Sparkles, Users, Wallet } from 'lucide-react'
+import { BriefcaseBusiness, CalendarDays, ClipboardCheck, CheckCircle2, Sparkles, Users, Wallet } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
 import { formatDate } from '../lib/utils'
@@ -28,6 +28,9 @@ export default function HRDashboard() {
         ['payroll', safeList('payroll')],
         ['submissions', safeList('employee_onboarding_submissions')],
         ['verifications', safeList('guarantor_verifications')],
+        ['workTasks', safeList('work_tasks')],
+        ['targets', safeList('targets')],
+        ['kpis', safeList('employee_kpis')],
       ].map(async ([key, promise]) => [key, await promise]))
 
       if (!active) return
@@ -45,7 +48,7 @@ export default function HRDashboard() {
 
   if (state.loading) return <LoadingState label="Loading HR dashboard..." />
 
-  const { employees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [], submissions = [], verifications = [] } = state.data
+  const { employees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [], submissions = [], verifications = [], workTasks = [], targets = [], kpis = [] } = state.data
   const navigate = useNavigate()
 
   // SARA intelligence metrics — derived from real data
@@ -55,6 +58,13 @@ export default function HRDashboard() {
   const pendingAssessments = assessments.filter((a) => a.status === 'pending' || a.status === 'in_progress').length
   const todayStr = new Date().toISOString().slice(0, 10)
   const interviewsToday = interviews.filter((i) => (i.scheduled_date || '').slice(0, 10) === todayStr).length
+
+  // SARA work intelligence metrics
+  const taskSubmissionsPending = workTasks.filter((t) => t.status === 'submitted').length
+  const overdueTasks = workTasks.filter((t) => t.due_date && new Date(t.due_date) < new Date() && !['completed', 'cancelled', 'submitted'].includes(t.status)).length
+  const belowTargetKpis = kpis.filter((k) => k.target_value > 0 && Number(k.actual_value || 0) < Number(k.target_value)).length
+  const activeTargets = targets.filter((t) => t.status === 'active').length
+  const achievedTargets = targets.filter((t) => t.status === 'achieved').length
   const activity = [
     ...candidates.slice(0, 4).map((item) => ({ id: `candidate-${item.id}`, label: `${item.full_name} entered ${String(item.application_status || 'received').replace(/_/g, ' ')}`, date: item.created_at })),
     ...interviews.slice(0, 4).map((item) => ({ id: `interview-${item.id}`, label: `${item.interview_type || 'Interview'} interview ${item.status || 'scheduled'}`, date: item.scheduled_date || item.created_at })),
@@ -121,6 +131,31 @@ export default function HRDashboard() {
           ))}
         </div>
       </div>
+
+      {/* SARA Work Intelligence */}
+      {(taskSubmissionsPending > 0 || overdueTasks > 0 || belowTargetKpis > 0) && (
+        <div className="rounded-xl border border-slate-200 overflow-hidden mb-6 bg-white">
+          <div className="bg-gradient-to-r from-violet-500 to-purple-500 px-5 py-3 flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-white" />
+            <span className="text-white font-semibold text-sm tracking-wide">SARA Work Intelligence</span>
+          </div>
+          <div className="p-5 space-y-2">
+            {taskSubmissionsPending > 0 && (
+              <p className="text-sm text-slate-700">You have <span className="font-semibold">{taskSubmissionsPending} task submission{taskSubmissionsPending > 1 ? 's' : ''}</span> awaiting your review.</p>
+            )}
+            {overdueTasks > 0 && (
+              <p className="text-sm text-slate-700"><span className="font-semibold text-rose-600">{overdueTasks} task{overdueTasks > 1 ? 's' : ''}</span> are overdue across your team.</p>
+            )}
+            {belowTargetKpis > 0 && (
+              <p className="text-sm text-slate-700"><span className="font-semibold text-amber-600">{belowTargetKpis} KPI{belowTargetKpis > 1 ? 's' : ''}</span> are currently below target.</p>
+            )}
+            {achievedTargets > 0 && (
+              <p className="text-sm text-slate-700"><span className="font-semibold text-emerald-600">{achievedTargets} target{achievedTargets > 1 ? 's' : ''}</span> have been achieved. Great work!</p>
+            )}
+            <button onClick={() => navigate('/work-management')} className="text-sm font-medium text-violet-600 hover:underline mt-2">View Work Management →</button>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100">

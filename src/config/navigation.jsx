@@ -16,6 +16,7 @@ import {
   ListChecks,
   ScrollText,
   Star,
+  Target,
   UserCheck,
   UserCog,
   Users,
@@ -66,6 +67,7 @@ export const routeConfig = [
     section: 'Work',
     items: [
       { label: 'My Work', path: '/my-work', icon: ListChecks, element: 'MyWork', permissions: [] },
+      { label: 'Work Management', path: '/work-management', icon: Target, element: 'WorkManagement', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
     ],
   },
 ]
