@@ -31,8 +31,12 @@ create table if not exists public.hr_queries (
 
 alter table public.hr_queries enable row level security;
 
-create policy if not exists "hr_queries_hr_all" on public.hr_queries
-  for all using (auth.role() = 'authenticated')
+drop policy if exists "hr_queries_hr_all" on public.hr_queries;
+
+create policy "hr_queries_hr_all"
+  on public.hr_queries
+  for all
+  using (auth.role() = 'authenticated')
   with check (auth.role() = 'authenticated');
 
 create index if not exists idx_hr_queries_employee on public.hr_queries(employee_id);
@@ -64,8 +68,12 @@ create table if not exists public.employee_appraisals (
 
 alter table public.employee_appraisals enable row level security;
 
-create policy if not exists "appraisals_hr_all" on public.employee_appraisals
-  for all using (auth.role() = 'authenticated')
+drop policy if exists "appraisals_hr_all" on public.employee_appraisals;
+
+create policy "appraisals_hr_all"
+  on public.employee_appraisals
+  for all
+  using (auth.role() = 'authenticated')
   with check (auth.role() = 'authenticated');
 
 create index if not exists idx_appraisals_employee on public.employee_appraisals(employee_id);
