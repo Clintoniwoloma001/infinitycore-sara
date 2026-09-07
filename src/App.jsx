@@ -26,6 +26,7 @@ import Branches from './pages/Branches'
 import Reports from './pages/Reports'
 import OnboardingLinks from './pages/OnboardingLinks'
 import OnboardingForm from './pages/OnboardingForm'
+import GuarantorVerificationForm from './pages/GuarantorVerificationForm'
 import Attendance from './pages/Attendance'
 import AttendanceManagement from './pages/AttendanceManagement'
 import EmployeeProfile from './pages/EmployeeProfile'
@@ -99,6 +100,7 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/" element={<Protected><Home /></Protected>} />
           <Route path="/onboarding/:token" element={<OnboardingForm />} />
+          <Route path="/guarantor-verification/:token" element={<GuarantorVerificationForm />} />
           {protectedRoutes.filter((route) => route.path !== '/').map((route) => (
             <Route key={route.path} path={route.path} element={<Protected><ProtectedModule route={route} /></Protected>} />
           ))}

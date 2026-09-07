@@ -307,20 +307,15 @@ export default function OnboardingForm() {
       />
     )
     if (step === 8) return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="Guarantor Full Name"><input className={inputCls} value={form.guarantor_full_name || ''} onChange={set('guarantor_full_name')} /></Field>
-        <Field label="Relationship to Employee"><input className={inputCls} value={form.guarantor_relationship || ''} onChange={set('guarantor_relationship')} /></Field>
-        <Field label="Profession"><input className={inputCls} value={form.guarantor_profession || ''} onChange={set('guarantor_profession')} /></Field>
-        <Field label="Designation"><input className={inputCls} value={form.guarantor_designation || ''} onChange={set('guarantor_designation')} /></Field>
-        <Field label="Phone"><input className={inputCls} value={form.guarantor_phone || ''} onChange={set('guarantor_phone')} /></Field>
-        <Field label="Email"><input className={inputCls} value={form.guarantor_email || ''} onChange={set('guarantor_email')} type="email" /></Field>
-        <Field label="BVN"><input className={inputCls} value={form.guarantor_bvn || ''} onChange={set('guarantor_bvn')} /></Field>
-        <Field label="NIN"><input className={inputCls} value={form.guarantor_nin || ''} onChange={set('guarantor_nin')} /></Field>
-        <div className="sm:col-span-2"><Field label="Business Address"><input className={inputCls} value={form.guarantor_business_address || ''} onChange={set('guarantor_business_address')} /></Field></div>
-        <div className="sm:col-span-2"><Field label="Residential Address"><input className={inputCls} value={form.guarantor_residential_address || ''} onChange={set('guarantor_residential_address')} /></Field></div>
-        <div className="sm:col-span-2 sm:grid sm:grid-cols-2 gap-4">
-          <Field label="Guarantor Signature Date"><input className={inputCls} value={form.guarantor_date || ''} onChange={set('guarantor_date')} type="date" /></Field>
-          <Field label="Guarantor Signature (data URL)"><input className={inputCls} value={form.guarantor_signature || ''} onChange={set('guarantor_signature')} placeholder="Paste signature data URL if obtained separately" /></Field>
+      <div className="space-y-4">
+        <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 text-sm text-blue-900">
+          <p className="font-medium">Guarantor Verification Pending</p>
+          <p className="mt-1 text-blue-700">Enter your guarantor's name and email below. HR will send them a secure link to complete the full guarantor verification form (identity, documents, selfie, and signature).</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Guarantor Full Name *"><input className={inputCls} value={form.guarantor_full_name || ''} onChange={set('guarantor_full_name')} /></Field>
+          <Field label="Guarantor Email *"><input className={inputCls} value={form.guarantor_email || ''} onChange={set('guarantor_email')} type="email" /></Field>
+          <Field label="Relationship to Employee"><input className={inputCls} value={form.guarantor_relationship || ''} onChange={set('guarantor_relationship')} /></Field>
         </div>
       </div>
     )
