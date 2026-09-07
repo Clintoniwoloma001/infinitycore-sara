@@ -16,6 +16,7 @@ import CorrectionsTab from './CorrectionsTab'
 import GuarantorTab from './GuarantorTab'
 import DocumentsTab from './DocumentsTab'
 import TimelineTab from './TimelineTab'
+import SaraPreReview from './SaraPreReview'
 
 const STATUS_BADGE_CLASSES = {
   submitted: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -44,7 +45,7 @@ function StatCard({ label, value, color = 'text-slate-900' }) {
 }
 
 export default function OnboardingReviewCenter({ submission, onClose, onRefresh }) {
-  const { hasPermission } = useAuth()
+  const { hasPermission, user } = useAuth()
   const canManage = hasPermission('hr.onboarding.manage')
 
   const [activeTab, setActiveTab] = useState('overview')
@@ -407,6 +408,31 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
 
           {!loading && (
             <>
+              {/* SARA Pre-Review */}
+              {activeTab === 'overview' && (
+                <div className="px-4 sm:px-6 pt-4">
+                  <SaraPreReview
+                    submission={submission}
+                    verification={verification}
+                    onboardingCorrections={onboardingCorrections}
+                    guarantorCorrections={guarantorCorrections}
+                    userName={user?.email?.split('@')[0] || 'HR'}
+                    onContinueReview={() => setActiveTab('personal')}
+                    onRequestCorrections={async (selectedRecs) => {
+                      const corrections = selectedRecs.map((rec) => ({
+                        field_name: rec.fieldKey,
+                        field_label: rec.fieldLabel,
+                        reason: rec.reason,
+                        original_value: String(payload[rec.fieldKey] ?? ''),
+                      }))
+                      await onboardingService.requestOnboardingCorrection(submission.id, corrections)
+                      await load()
+                      onRefresh?.()
+                    }}
+                  />
+                </div>
+              )}
+
               {/* Tab bar */}
               <div className="sticky top-0 bg-white border-b border-slate-200 z-10">
                 <div className="flex gap-1 overflow-x-auto px-4 sm:px-6 py-2">

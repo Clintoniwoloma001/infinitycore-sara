@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { BriefcaseBusiness, CalendarDays, ClipboardCheck, Users, Wallet } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { BriefcaseBusiness, CalendarDays, ClipboardCheck, Sparkles, Users, Wallet } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
 import { formatDate } from '../lib/utils'
@@ -25,6 +26,8 @@ export default function HRDashboard() {
         ['interviews', safeList('hr_interviews', 'scheduled_date')],
         ['leave', safeList('leave_requests')],
         ['payroll', safeList('payroll')],
+        ['submissions', safeList('employee_onboarding_submissions')],
+        ['verifications', safeList('guarantor_verifications')],
       ].map(async ([key, promise]) => [key, await promise]))
 
       if (!active) return
@@ -42,7 +45,16 @@ export default function HRDashboard() {
 
   if (state.loading) return <LoadingState label="Loading HR dashboard..." />
 
-  const { employees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [] } = state.data
+  const { employees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [], submissions = [], verifications = [] } = state.data
+  const navigate = useNavigate()
+
+  // SARA intelligence metrics — derived from real data
+  const pendingReviews = submissions.filter((s) => ['submitted', 'under_review', 'pending_guarantor', 'guarantor_submitted', 'correction_requested'].includes(s.onboarding_status)).length
+  const pendingGuarantors = verifications.filter((v) => ['link_sent', 'submitted', 'under_review'].includes(v.status)).length
+  const completedAssessments = assessments.filter((a) => a.status === 'completed' || a.status === 'graded').length
+  const pendingAssessments = assessments.filter((a) => a.status === 'pending' || a.status === 'in_progress').length
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const interviewsToday = interviews.filter((i) => (i.scheduled_date || '').slice(0, 10) === todayStr).length
   const activity = [
     ...candidates.slice(0, 4).map((item) => ({ id: `candidate-${item.id}`, label: `${item.full_name} entered ${String(item.application_status || 'received').replace(/_/g, ' ')}`, date: item.created_at })),
     ...interviews.slice(0, 4).map((item) => ({ id: `interview-${item.id}`, label: `${item.interview_type || 'Interview'} interview ${item.status || 'scheduled'}`, date: item.scheduled_date || item.created_at })),
@@ -81,6 +93,33 @@ export default function HRDashboard() {
         <Stat icon={Wallet} label="Payroll Records" value={payroll.length} accent="#14b8a6" />
         <Stat icon={BriefcaseBusiness} label="Open Jobs" value={jobs.filter((j) => j.status === 'published').length} accent="#84cc16" />
         <Stat icon={ClipboardCheck} label="Assessments" value={assessments.length} accent="#a855f7" />
+      </div>
+
+      {/* SARA HR Intelligence */}
+      <div className="rounded-xl border border-slate-200 overflow-hidden mb-6 bg-white">
+        <div className="bg-gradient-to-r from-[#009944] to-[#00b050] px-5 py-3 flex items-center gap-2">
+          <Sparkles className="w-5 h-5 text-white" />
+          <span className="text-white font-semibold text-sm tracking-wide">SARA HR Intelligence</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-0 divide-x divide-slate-100">
+          {[
+            { label: 'Pending HR Reviews', value: pendingReviews, path: '/onboarding-links', color: 'text-amber-600' },
+            { label: 'Guarantor Pending', value: pendingGuarantors, path: '/onboarding-links', color: 'text-blue-600' },
+            { label: 'Interviews Today', value: interviewsToday, path: '/interviews', color: 'text-violet-600' },
+            { label: 'Assessments Pending', value: pendingAssessments, path: '/assessments', color: 'text-rose-600' },
+            { label: 'Assessments Done', value: completedAssessments, path: '/assessments', color: 'text-emerald-600' },
+            { label: 'Pending Leave', value: leave.filter((l) => l.status === 'pending').length, path: '/leave-requests', color: 'text-slate-700' },
+          ].map((metric) => (
+            <button
+              key={metric.label}
+              onClick={() => navigate(metric.path)}
+              className="px-4 py-4 text-left hover:bg-slate-50 transition-colors"
+            >
+              <div className={`text-2xl font-bold ${metric.color}`}>{metric.value}</div>
+              <div className="text-xs text-slate-500 mt-0.5">{metric.label}</div>
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">

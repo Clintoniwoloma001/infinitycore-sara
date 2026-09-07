@@ -31,6 +31,8 @@ import Attendance from './pages/Attendance'
 import AttendanceManagement from './pages/AttendanceManagement'
 import EmployeeProfile from './pages/EmployeeProfile'
 import DataImport from './pages/DataImport'
+import HRQueries from './pages/HRQueries'
+import Appraisals from './pages/Appraisals'
 
 const pageComponents = {
   Dashboard,
@@ -55,6 +57,8 @@ const pageComponents = {
   Attendance,
   AttendanceManagement,
   DataImport,
+  HRQueries,
+  Appraisals,
 }
 
 function Protected({ children }) {
