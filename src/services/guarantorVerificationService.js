@@ -153,6 +153,28 @@ export const guarantorVerificationService = {
     return data || []
   },
 
+  // HR lists verifications for a specific employee
+  async listVerificationsForEmployee(employeeId) {
+    const { data, error } = await supabase
+      .from('guarantor_verifications')
+      .select('*')
+      .eq('employee_id', employeeId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return data || []
+  },
+
+  // HR lists guarantor documents for a verification
+  async listGuarantorDocuments(verificationId) {
+    const { data, error } = await supabase
+      .from('guarantor_documents')
+      .select('*')
+      .eq('guarantor_verification_id', verificationId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return data || []
+  },
+
   // Get a signed URL for viewing a document securely
   async getSignedUrl(filePath, expiresIn = 3600) {
     const { data, error } = await supabase.storage

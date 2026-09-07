@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Loader2, Pencil, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Briefcase, Loader2, Pencil, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import { date, money, status } from './hrShared'
 import { employeeService } from '../services/employeeService'
 import { attendanceService } from '../services/attendanceService'
 import { documentService } from '../services/documentService'
+import { guarantorVerificationService } from '../services/guarantorVerificationService'
+import { payrollService } from '../services/payrollService'
+import { supabase } from '../supabaseClient'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -71,7 +74,9 @@ const TABS = [
   { id: 'guarantors', label: 'Guarantors' },
   { id: 'bonds', label: 'Fidelity Bond' },
   { id: 'documents', label: 'Documents' },
+  { id: 'payroll', label: 'Payroll' },
   { id: 'attendance', label: 'Attendance' },
+  { id: 'audit', label: 'Audit Trail' },
 ]
 
 export default function EmployeeProfile() {
@@ -89,6 +94,19 @@ export default function EmployeeProfile() {
   const [docs, setDocs] = useState([])
   const [attendance, setAttendance] = useState([])
   const [message, setMessage] = useState('')
+  const [verifications, setVerifications] = useState([])
+  const [guarantorDocs, setGuarantorDocs] = useState([])
+  const [payrollItems, setPayrollItems] = useState([])
+  const [payrollPeriods, setPayrollPeriods] = useState([])
+  const [events, setEvents] = useState([])
+  const [showAddPayroll, setShowAddPayroll] = useState(false)
+  const [selectedPeriod, setSelectedPeriod] = useState('')
+  const [payrollBusy, setPayrollBusy] = useState(false)
+  const [payrollError, setPayrollError] = useState('')
+  const [payrollSuccess, setPayrollSuccess] = useState('')
+
+  const canReadPayroll = hasPermission('hr.payroll.read')
+  const canManagePayroll = hasPermission('payroll.manage')
 
   const load = async () => {
     setLoading(true)
@@ -103,6 +121,42 @@ export default function EmployeeProfile() {
       setDocs(docList)
       const att = await attendanceService.getHistory(id, 60).catch(() => [])
       setAttendance(att)
+
+      // Load guarantor verifications for this employee
+      const verifs = await guarantorVerificationService.listVerificationsForEmployee(id).catch(() => [])
+      setVerifications(verifs)
+
+      // Load guarantor documents from all verifications
+      if (verifs.length > 0) {
+        const allDocs = await Promise.all(
+          verifs.map((v) => guarantorVerificationService.listGuarantorDocuments(v.id).catch(() => []))
+        )
+        setGuarantorDocs(allDocs.flat())
+      } else {
+        setGuarantorDocs([])
+      }
+
+      // Load onboarding events for this employee's verifications
+      if (verifs.length > 0) {
+        const verifIds = verifs.map((v) => v.id)
+        const { data: evtData } = await supabase
+          .from('onboarding_events')
+          .select('*')
+          .in('guarantor_verification_id', verifIds)
+          .order('created_at', { ascending: false })
+          .catch(() => ({ data: [] }))
+        setEvents(evtData || [])
+      } else {
+        setEvents([])
+      }
+
+      // Load payroll items for this employee (only if permitted)
+      if (canReadPayroll) {
+        const items = await payrollService.itemsForEmployee(id).catch(() => [])
+        setPayrollItems(items)
+        const periods = await payrollService.listPeriods().catch(() => [])
+        setPayrollPeriods(periods)
+      }
     } catch (e) {
       setError(e?.message || 'Unable to load employee profile')
     } finally {
@@ -137,6 +191,22 @@ export default function EmployeeProfile() {
     await employeeService.removeChild(table, rowId)
     const childs = await employeeService.listChildrenForEmployee(id)
     setChildrenData(childs)
+  }
+
+  const addToPayroll = async () => {
+    if (!selectedPeriod) { setPayrollError('Select a payroll period.'); return }
+    setPayrollBusy(true); setPayrollError(''); setPayrollSuccess('')
+    try {
+      await payrollService.addToPayroll(id, selectedPeriod, draft.salary || null)
+      setPayrollSuccess('Employee added to payroll.')
+      setShowAddPayroll(false); setSelectedPeriod('')
+      const items = await payrollService.itemsForEmployee(id).catch(() => [])
+      setPayrollItems(items)
+    } catch (e) {
+      setPayrollError(e?.message || 'Failed to add to payroll')
+    } finally {
+      setPayrollBusy(false)
+    }
   }
 
   if (loading) return <LoadingState label="Loading employee profile..." />
@@ -356,27 +426,52 @@ export default function EmployeeProfile() {
       )}
 
       {tab === 'guarantors' && (
-        <Section title="Guarantors">
-          {childrenData.employee_guarantors?.length === 0 && <EmptyState title="No guarantors recorded" />}
-          <ChildList rows={childrenData.employee_guarantors || []} onRemove={(rid) => removeChild('employee_guarantors', rid)} columns={[['full_name', 'Name'], ['phone', 'Phone'], ['relationship', 'Relationship'], ['verification_status', 'Verification']]} />
-          {canEdit && (
-            <AddRow
-              onAdd={(p) => addChild('employee_guarantors', p)}
-              columns={[
-                { key: 'full_name', label: 'Full Name *' },
-                { key: 'phone', label: 'Phone' },
-                { key: 'email', label: 'Email' },
-                { key: 'relationship', label: 'Relationship' },
-                { key: 'profession', label: 'Profession' },
-                { key: 'designation', label: 'Designation' },
-                { key: 'business_address', label: 'Business Address' },
-                { key: 'residential_address', label: 'Residential Address' },
-                { key: 'bvn', label: 'BVN' },
-                { key: 'nin', label: 'NIN' },
-              ]}
-            />
+        <>
+          {verifications.length > 0 && (
+            <Section title="Guarantor Verifications">
+              <div className="space-y-3">
+                {verifications.map((v) => (
+                  <div key={v.id} className="rounded-lg border border-slate-200 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <span className="text-sm font-medium text-slate-800">{v.guarantor_name}</span>
+                        <span className="text-xs text-slate-400 ml-2">{v.guarantor_email}</span>
+                      </div>
+                      {status(v.status, ['approved'])}
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-sm">
+                      <div><span className="text-xs text-slate-400">Relationship: </span><span className="text-slate-700">{v.guarantor_relationship || '—'}</span></div>
+                      <div><span className="text-xs text-slate-400">Submitted: </span><span className="text-slate-700">{date(v.submitted_at)}</span></div>
+                      <div><span className="text-xs text-slate-400">Reviewed: </span><span className="text-slate-700">{date(v.reviewed_at)}</span></div>
+                      <div><span className="text-xs text-slate-400">HR Comments: </span><span className="text-slate-700">{v.hr_comments || '—'}</span></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Section>
           )}
-        </Section>
+          <Section title="Guarantors">
+            {childrenData.employee_guarantors?.length === 0 && <EmptyState title="No guarantors recorded" />}
+            <ChildList rows={childrenData.employee_guarantors || []} onRemove={(rid) => removeChild('employee_guarantors', rid)} columns={[['full_name', 'Name'], ['phone', 'Phone'], ['relationship', 'Relationship'], ['verification_status', 'Verification']]} />
+            {canEdit && (
+              <AddRow
+                onAdd={(p) => addChild('employee_guarantors', p)}
+                columns={[
+                  { key: 'full_name', label: 'Full Name *' },
+                  { key: 'phone', label: 'Phone' },
+                  { key: 'email', label: 'Email' },
+                  { key: 'relationship', label: 'Relationship' },
+                  { key: 'profession', label: 'Profession' },
+                  { key: 'designation', label: 'Designation' },
+                  { key: 'business_address', label: 'Business Address' },
+                  { key: 'residential_address', label: 'Residential Address' },
+                  { key: 'bvn', label: 'BVN' },
+                  { key: 'nin', label: 'NIN' },
+                ]}
+              />
+            )}
+          </Section>
+        </>
       )}
 
       {tab === 'bonds' && (
@@ -402,22 +497,50 @@ export default function EmployeeProfile() {
       )}
 
       {tab === 'documents' && (
-        <Section title="Documents">
-          {docs.length === 0 && <EmptyState title="No documents" description="Uploaded onboarding documents will appear here." />}
-          {docs.length > 0 && (
-            <ul className="divide-y divide-slate-100">
-              {docs.map((doc) => (
-                <li key={doc.id} className="py-3 flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-medium text-slate-800">{doc.file_name}</div>
-                    <div className="text-xs text-slate-400">{doc.document_type} · {date(doc.uploaded_at)}</div>
-                  </div>
-                  {status(doc.verification_status, ['verified'])}
-                </li>
-              ))}
-            </ul>
+        <>
+          <Section title="Employee Documents">
+            {docs.length === 0 && <EmptyState title="No employee documents" description="Uploaded onboarding documents will appear here." />}
+            {docs.length > 0 && (
+              <ul className="divide-y divide-slate-100">
+                {docs.map((doc) => (
+                  <li key={doc.id} className="py-3 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">{doc.file_name}</div>
+                      <div className="text-xs text-slate-400">{doc.document_type} · {date(doc.uploaded_at)}</div>
+                    </div>
+                    {status(doc.verification_status, ['verified'])}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+          {guarantorDocs.length > 0 && (
+            <Section title="Guarantor Verification Documents">
+              <ul className="divide-y divide-slate-100">
+                {guarantorDocs.map((doc) => (
+                  <li key={doc.id} className="py-3 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">{doc.file_name}</div>
+                      <div className="text-xs text-slate-400">{doc.document_type.replace(/_/g, ' ')} · {date(doc.created_at)}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {status(doc.status, ['verified'])}
+                      <button
+                        onClick={async () => {
+                          try {
+                            const url = await guarantorVerificationService.getSignedUrl(doc.file_path)
+                            window.open(url, '_blank')
+                          } catch { /* ignore */ }
+                        }}
+                        className="text-xs text-[#009944] hover:underline"
+                      >View</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Section>
           )}
-        </Section>
+        </>
       )}
 
       {tab === 'attendance' && (
@@ -450,6 +573,123 @@ export default function EmployeeProfile() {
             </div>
           )}
         </Section>
+      )}
+
+      {tab === 'payroll' && (
+        <Section
+          title="Payroll"
+          actions={canManagePayroll && employee?.employment_status === 'active' && (
+            <button onClick={() => setShowAddPayroll(true)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+              <Plus className="w-4 h-4" /> Add to Payroll
+            </button>
+          )}
+        >
+          {!canReadPayroll ? (
+            <EmptyState title="No access" description="You do not have permission to view payroll records." />
+          ) : (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Payroll Eligibility</div>
+                  <div className="text-sm font-medium mt-0.5">
+                    {['active', 'probation', 'on_leave'].includes(employee?.employment_status)
+                      ? <span className="text-emerald-600">Eligible</span>
+                      : <span className="text-rose-600">Not eligible</span>}
+                  </div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Employment Status</div>
+                  <div className="text-sm font-medium mt-0.5">{status(employee?.employment_status)}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Payroll Sessions</div>
+                  <div className="text-sm font-medium mt-0.5">{payrollItems.length}</div>
+                </div>
+              </div>
+              {payrollError && <ErrorState message={payrollError} />}
+              {payrollSuccess && (
+                <div className="mb-4 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800">{payrollSuccess}</div>
+              )}
+              {payrollItems.length === 0 ? (
+                <EmptyState title="No payroll records" description="This employee has not been added to any payroll period." />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-slate-500 text-left">
+                      <tr>
+                        <th className="px-4 py-2 font-medium">Period</th>
+                        <th className="px-4 py-2 font-medium">Salary</th>
+                        <th className="px-4 py-2 font-medium">Allowances</th>
+                        <th className="px-4 py-2 font-medium">Deductions</th>
+                        <th className="px-4 py-2 font-medium">Net Pay</th>
+                        <th className="px-4 py-2 font-medium">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {payrollItems.map((r) => (
+                        <tr key={r.id}>
+                          <td className="px-4 py-2 font-medium">{r.payroll_period}</td>
+                          <td className="px-4 py-2">{money(r.salary)}</td>
+                          <td className="px-4 py-2">{money(r.allowances)}</td>
+                          <td className="px-4 py-2">{money(r.deductions)}</td>
+                          <td className="px-4 py-2 font-medium">{money(r.net_pay)}</td>
+                          <td className="px-4 py-2">{status(r.status, ['paid'])}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </Section>
+      )}
+
+      {tab === 'audit' && (
+        <Section title="Audit Trail">
+          {events.length === 0 ? (
+            <EmptyState title="No events recorded" description="Onboarding, verification, and approval events will appear here." />
+          ) : (
+            <div className="space-y-2">
+              {events.map((e) => (
+                <div key={e.id} className="flex items-start gap-3 py-2 border-b border-slate-100">
+                  <div className="w-2 h-2 rounded-full bg-[#009944] mt-1.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-slate-700">{e.event_type.replace(/_/g, ' ')}</p>
+                    <p className="text-xs text-slate-400">{e.details} — {date(e.created_at)}{e.actor ? ` · ${e.actor}` : ''}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {showAddPayroll && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-lg font-semibold text-slate-900">Add to Payroll</h3>
+              <button onClick={() => { setShowAddPayroll(false); setPayrollError('') }} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            {payrollError && <div className="mb-4"><ErrorState message={payrollError} /></div>}
+            <div className="space-y-4">
+              <div>
+                <label className={labelCls}>Payroll Period</label>
+                <select className={inputCls} value={selectedPeriod} onChange={(e) => setSelectedPeriod(e.target.value)}>
+                  <option value="">Select a period…</option>
+                  {payrollPeriods.map((p) => <option key={p.id} value={p.period_label}>{p.period_label} ({p.status})</option>)}
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={() => { setShowAddPayroll(false); setSelectedPeriod(''); setPayrollError('') }} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+                <button onClick={addToPayroll} disabled={payrollBusy || !selectedPeriod} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+                  {payrollBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Briefcase className="w-4 h-4" />} Add to Payroll
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

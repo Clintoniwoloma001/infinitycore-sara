@@ -103,6 +103,26 @@ export const payrollService = {
     return data
   },
 
+  async itemsForEmployee(employeeId) {
+    const { data, error } = await supabase
+      .from('payroll')
+      .select('*')
+      .eq('employee_id', employeeId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return data || []
+  },
+
+  async addToPayroll(employeeId, periodLabel, salary) {
+    const { data, error } = await supabase.rpc('add_employee_to_payroll', {
+      p_employee_id: employeeId,
+      p_period_label: periodLabel,
+      p_salary: salary ?? null,
+    })
+    if (error) throw error
+    return data
+  },
+
   async itemsForPeriod(periodLabel) {
     const { data, error } = await supabase
       .from('payroll')
