@@ -13,6 +13,7 @@ const safeList = async (table, orderBy = 'created_at') => {
 }
 
 export default function HRDashboard() {
+  const navigate = useNavigate()
   const [state, setState] = useState({ loading: true, data: {}, errors: [] })
 
   useEffect(() => {
@@ -49,7 +50,6 @@ export default function HRDashboard() {
   if (state.loading) return <LoadingState label="Loading HR dashboard..." />
 
   const { employees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [], submissions = [], verifications = [], workTasks = [], targets = [], kpis = [] } = state.data
-  const navigate = useNavigate()
 
   // SARA intelligence metrics — derived from real data
   const pendingReviews = submissions.filter((s) => ['submitted', 'under_review', 'pending_guarantor', 'guarantor_submitted', 'correction_requested'].includes(s.onboarding_status)).length
@@ -65,6 +65,14 @@ export default function HRDashboard() {
   const belowTargetKpis = kpis.filter((k) => k.target_value > 0 && Number(k.actual_value || 0) < Number(k.target_value)).length
   const activeTargets = targets.filter((t) => t.status === 'active').length
   const achievedTargets = targets.filter((t) => t.status === 'achieved').length
+
+  // SARA interview intelligence metrics
+  const tomorrowStr = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
+  const interviewsTomorrow = interviews.filter((i) => (i.scheduled_date || '').slice(0, 10) === tomorrowStr).length
+  const virtualInterviewsToday = interviews.filter((i) => (i.scheduled_date || '').slice(0, 10) === todayStr && i.interview_type === 'VIRTUAL').length
+  const failedEmailInterviews = interviews.filter((i) => i.notification_status === 'failed').length
+  const pendingEmailInterviews = interviews.filter((i) => i.notification_status === 'pending' && i.candidate_email).length
+  const upcomingInterviews = interviews.filter((i) => ['scheduled', 'confirmed'].includes(i.status) && new Date(i.scheduled_date) >= new Date())
   const activity = [
     ...candidates.slice(0, 4).map((item) => ({ id: `candidate-${item.id}`, label: `${item.full_name} entered ${String(item.application_status || 'received').replace(/_/g, ' ')}`, date: item.created_at })),
     ...interviews.slice(0, 4).map((item) => ({ id: `interview-${item.id}`, label: `${item.interview_type || 'Interview'} interview ${item.status || 'scheduled'}`, date: item.scheduled_date || item.created_at })),
@@ -153,6 +161,34 @@ export default function HRDashboard() {
               <p className="text-sm text-slate-700"><span className="font-semibold text-emerald-600">{achievedTargets} target{achievedTargets > 1 ? 's' : ''}</span> have been achieved. Great work!</p>
             )}
             <button onClick={() => navigate('/work-management')} className="text-sm font-medium text-violet-600 hover:underline mt-2">View Work Management →</button>
+          </div>
+        </div>
+      )}
+
+      {/* SARA Interview Intelligence */}
+      {(interviewsToday > 0 || interviewsTomorrow > 0 || failedEmailInterviews > 0 || pendingEmailInterviews > 0) && (
+        <div className="rounded-xl border border-slate-200 overflow-hidden mb-6 bg-white">
+          <div className="bg-gradient-to-r from-indigo-500 to-blue-500 px-5 py-3 flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-white" />
+            <span className="text-white font-semibold text-sm tracking-wide">SARA Interview Intelligence</span>
+          </div>
+          <div className="p-5 space-y-2">
+            {interviewsToday > 0 && (
+              <p className="text-sm text-slate-700">You have <span className="font-semibold text-indigo-600">{interviewsToday} interview{interviewsToday > 1 ? 's' : ''}</span> scheduled today{virtualInterviewsToday > 0 ? ` (${virtualInterviewsToday} virtual)` : ''}.</p>
+            )}
+            {interviewsTomorrow > 0 && (
+              <p className="text-sm text-slate-700">You have <span className="font-semibold">{interviewsTomorrow} interview{interviewsTomorrow > 1 ? 's' : ''}</span> scheduled tomorrow.</p>
+            )}
+            {pendingEmailInterviews > 0 && (
+              <p className="text-sm text-slate-700"><span className="font-semibold text-amber-600">{pendingEmailInterviews} candidate{pendingEmailInterviews > 1 ? 's have' : ' has'}</span> not yet been sent an interview invitation.</p>
+            )}
+            {failedEmailInterviews > 0 && (
+              <p className="text-sm text-slate-700"><span className="font-semibold text-rose-600">{failedEmailInterviews} interview invitation{failedEmailInterviews > 1 ? 's' : ''}</span> failed to send.</p>
+            )}
+            {upcomingInterviews.length > 0 && upcomingInterviews[0] && (
+              <p className="text-sm text-slate-700">Next interview: <span className="font-medium">{upcomingInterviews[0].candidate_name}</span> for {upcomingInterviews[0].position || 'a position'} on {formatDate(upcomingInterviews[0].scheduled_date)}.</p>
+            )}
+            <button onClick={() => navigate('/interviews')} className="text-sm font-medium text-indigo-600 hover:underline mt-2">View Interviews →</button>
           </div>
         </div>
       )}
