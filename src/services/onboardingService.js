@@ -152,6 +152,30 @@ export const onboardingService = {
     return data
   },
 
+  async archiveLink(id, userId) {
+    const { data, error } = await supabase
+      .from('employee_onboarding_links')
+      .update({ is_archived: true, archived_at: new Date().toISOString(), archived_by: userId || null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    logAction({ action: 'ONBOARDING_LINK_ARCHIVED', entityType: 'OnboardingLink', entityId: id, details: 'Onboarding link archived' })
+    return data
+  },
+
+  async restoreLink(id) {
+    const { data, error } = await supabase
+      .from('employee_onboarding_links')
+      .update({ is_archived: false, archived_at: null, archived_by: null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    logAction({ action: 'ONBOARDING_LINK_RESTORED', entityType: 'OnboardingLink', entityId: id, details: 'Onboarding link restored from archive' })
+    return data
+  },
+
   async getDetails(token) {
     const { data, error } = await supabase.rpc('get_onboarding_link_details', { p_token: token, p_mark_opened: true })
     if (error) throw error
