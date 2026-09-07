@@ -8,6 +8,7 @@ import { guarantorVerificationService } from '../services/guarantorVerificationS
 import { payrollService } from '../services/payrollService'
 import { date, status } from '../pages/hrShared'
 import { LoadingState, ErrorState } from '../components/PageStates'
+import { analyzeOnboarding } from '../services/saraPreReview'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -93,6 +94,7 @@ export default function OnboardingReviewModal({ submission, onClose, onRefresh }
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [rejectReason, setRejectReason] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
+  const [saraReview, setSaraReview] = useState(null)
 
   const payload = submission?.payload || {}
   const guarantorName = payload.guarantor_full_name || ''
@@ -118,6 +120,11 @@ export default function OnboardingReviewModal({ submission, onClose, onRefresh }
         ])
         setCorrections(c)
         setEvents(e)
+        // Compute SARA pre-review
+        try {
+          const review = analyzeOnboarding(submission, verifications[0] || null, c || [], [])
+          setSaraReview(review)
+        } catch { /* best-effort */ }
       }
     } catch (e) {
       setError(e?.message || 'Failed to load review data')
@@ -315,9 +322,9 @@ export default function OnboardingReviewModal({ submission, onClose, onRefresh }
 
               {/* Tabs */}
               <div className="flex gap-2 overflow-x-auto pb-3 mb-4 border-b border-slate-200">
-                {['overview', 'guarantor', 'corrections', 'timeline'].map((t) => (
+                {['overview', 'sara-review', 'guarantor', 'corrections', 'timeline'].map((t) => (
                   <button key={t} onClick={() => setActiveTab(t)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border capitalize ${activeTab === t ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-500 border-slate-200'}`}>
-                    {t}
+                    {t === 'sara-review' ? 'SARA Review' : t}
                   </button>
                 ))}
               </div>

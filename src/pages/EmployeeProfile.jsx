@@ -10,6 +10,7 @@ import { documentService } from '../services/documentService'
 import { guarantorVerificationService } from '../services/guarantorVerificationService'
 import { payrollService } from '../services/payrollService'
 import { supabase } from '../supabaseClient'
+import EmployeeHRActions from '../components/EmployeeHRActions'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -67,16 +68,24 @@ function AddRow({ columns, onAdd }) {
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'personal', label: 'Personal' },
+  { id: 'contact', label: 'Contact' },
   { id: 'employment', label: 'Employment' },
-  { id: 'kin', label: 'Next of Kin & Beneficiary' },
+  { id: 'bank', label: 'Bank & Payroll' },
+  { id: 'statutory', label: 'Statutory' },
+  { id: 'kin', label: 'Emergency / Next of Kin' },
   { id: 'education', label: 'Education' },
-  { id: 'work', label: 'Work History' },
+  { id: 'work', label: 'Experience' },
   { id: 'guarantors', label: 'Guarantors' },
   { id: 'bonds', label: 'Fidelity Bond' },
+  { id: 'certificates', label: 'Certificates' },
   { id: 'documents', label: 'Documents' },
+  { id: 'onboarding', label: 'Onboarding' },
   { id: 'payroll', label: 'Payroll' },
   { id: 'attendance', label: 'Attendance' },
-  { id: 'audit', label: 'Audit Trail' },
+  { id: 'hr-actions', label: 'HR Actions' },
+  { id: 'appraisals', label: 'Appraisals' },
+  { id: 'queries', label: 'Queries' },
+  { id: 'audit', label: 'Audit Timeline' },
 ]
 
 export default function EmployeeProfile() {
@@ -104,6 +113,9 @@ export default function EmployeeProfile() {
   const [payrollBusy, setPayrollBusy] = useState(false)
   const [payrollError, setPayrollError] = useState('')
   const [payrollSuccess, setPayrollSuccess] = useState('')
+  const [onboardingSub, setOnboardingSub] = useState(null)
+  const [appraisals, setAppraisals] = useState([])
+  const [queries, setQueries] = useState([])
 
   const canReadPayroll = hasPermission('hr.payroll.read')
   const canManagePayroll = hasPermission('payroll.manage')
@@ -157,6 +169,16 @@ export default function EmployeeProfile() {
         const periods = await payrollService.listPeriods().catch(() => [])
         setPayrollPeriods(periods)
       }
+
+      // Load onboarding submission, appraisals, and queries
+      const [subRes, apprRes, queryRes] = await Promise.all([
+        supabase.from('employee_onboarding_submissions').select('*').eq('employee_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        supabase.from('employee_appraisals').select('*').eq('employee_id', id).order('created_at', { ascending: false }),
+        supabase.from('hr_queries').select('*').eq('employee_id', id).order('created_at', { ascending: false }),
+      ])
+      setOnboardingSub(subRes?.data || null)
+      setAppraisals(apprRes?.data || [])
+      setQueries(queryRes?.data || [])
     } catch (e) {
       setError(e?.message || 'Unable to load employee profile')
     } finally {
@@ -641,6 +663,186 @@ export default function EmployeeProfile() {
                 </div>
               )}
             </>
+          )}
+        </Section>
+      )}
+
+      {tab === 'contact' && (
+        <Section
+          title="Contact Information"
+          actions={canEdit && (
+            <button onClick={saveProfile} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
+            </button>
+          )}
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <InputField label="Email" value={d.email} onChange={(v) => setDraft({ ...draft, email: v })} />
+            <InputField label="Phone" value={d.phone} onChange={(v) => setDraft({ ...draft, phone: v })} />
+            <InputField label="Residential Address" value={d.residential_address} onChange={(v) => setDraft({ ...draft, residential_address: v })} />
+            <InputField label="Town / City" value={d.town} onChange={(v) => setDraft({ ...draft, town: v })} />
+            <InputField label="State of Origin" value={d.state_of_origin} onChange={(v) => setDraft({ ...draft, state_of_origin: v })} />
+            <InputField label="LGA" value={d.lga} onChange={(v) => setDraft({ ...draft, lga: v })} />
+            <InputField label="Emergency Contact Name" value={d.emergency_contact_name} onChange={(v) => setDraft({ ...draft, emergency_contact_name: v })} />
+            <InputField label="Emergency Contact Phone" value={d.emergency_contact_phone} onChange={(v) => setDraft({ ...draft, emergency_contact_phone: v })} />
+          </div>
+        </Section>
+      )}
+
+      {tab === 'bank' && (
+        <Section
+          title="Bank & Payroll Details"
+          actions={canEdit && (
+            <button onClick={saveProfile} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
+            </button>
+          )}
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <InputField label="Bank Name" value={d.bank_name} onChange={(v) => setDraft({ ...draft, bank_name: v })} />
+            <InputField label="Account Name" value={d.account_name} onChange={(v) => setDraft({ ...draft, account_name: v })} />
+            <InputField label="Account Number" value={d.account_number} onChange={(v) => setDraft({ ...draft, account_number: v })} />
+            <InputField label="Bank Sort Code" value={d.bank_sort_code} onChange={(v) => setDraft({ ...draft, bank_sort_code: v })} />
+            <InputField label="Basic Salary" value={d.basic_salary || d.salary} onChange={(v) => setDraft({ ...draft, basic_salary: v })} type="number" />
+            <InputField label="NHF ID" value={d.nhf_id} onChange={(v) => setDraft({ ...draft, nhf_id: v })} />
+          </div>
+        </Section>
+      )}
+
+      {tab === 'statutory' && (
+        <Section
+          title="Statutory Information"
+          actions={canEdit && (
+            <button onClick={saveProfile} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
+            </button>
+          )}
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <InputField label="BVN" value={d.bvn} onChange={(v) => setDraft({ ...draft, bvn: v })} />
+            <InputField label="NIN" value={d.nin} onChange={(v) => setDraft({ ...draft, nin: v })} />
+            <InputField label="Tax ID" value={d.tax_id} onChange={(v) => setDraft({ ...draft, tax_id: v })} />
+            <InputField label="Pension ID" value={d.pension_id} onChange={(v) => setDraft({ ...draft, pension_id: v })} />
+            <InputField label="NHF ID" value={d.nhf_id} onChange={(v) => setDraft({ ...draft, nhf_id: v })} />
+          </div>
+        </Section>
+      )}
+
+      {tab === 'certificates' && (
+        <Section title="Certificates & Qualifications">
+          {docs.filter(d => d.document_type?.toLowerCase().includes('certificate') || d.document_type?.toLowerCase().includes('qualification')).length === 0 && (
+            <EmptyState title="No certificates uploaded" description="Certificate documents will appear here." />
+          )}
+          <ul className="divide-y divide-slate-100">
+            {docs.filter(d => d.document_type?.toLowerCase().includes('certificate') || d.document_type?.toLowerCase().includes('qualification')).map((doc) => (
+              <li key={doc.id} className="py-3 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium text-slate-800">{doc.file_name}</div>
+                  <div className="text-xs text-slate-400">{doc.document_type} · {date(doc.uploaded_at)}</div>
+                </div>
+                {status(doc.verification_status, ['verified'])}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {tab === 'onboarding' && (
+        <Section title="Onboarding Information">
+          {!onboardingSub ? (
+            <EmptyState title="No onboarding record" description="This employee was not created through the onboarding flow." />
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Status</div>
+                  <div className="text-sm font-medium mt-0.5">{status(onboardingSub.status, ['approved'])}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Onboarding Status</div>
+                  <div className="text-sm font-medium mt-0.5">{onboardingSub.onboarding_status || '—'}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Submitted</div>
+                  <div className="text-sm font-medium mt-0.5">{date(onboardingSub.created_at)}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Reviewed</div>
+                  <div className="text-sm font-medium mt-0.5">{date(onboardingSub.reviewed_at)}</div>
+                </div>
+              </div>
+              {onboardingSub.review_comments && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                  <span className="font-medium">Review Comments:</span> {onboardingSub.review_comments}
+                </div>
+              )}
+              {onboardingSub.payload && (
+                <div>
+                  <h4 className="font-medium text-slate-800 mb-2 text-sm">Submitted Data</h4>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 max-h-64 overflow-y-auto">
+                    <pre className="text-xs text-slate-600 whitespace-pre-wrap">
+                      {JSON.stringify(onboardingSub.payload, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {tab === 'hr-actions' && (
+        <Section title="HR Actions">
+          <EmployeeHRActions employee={employee} canEdit={canEdit} />
+        </Section>
+      )}
+
+      {tab === 'appraisals' && (
+        <Section title="Appraisals">
+          {appraisals.length === 0 ? (
+            <EmptyState title="No appraisals recorded" />
+          ) : (
+            <div className="space-y-3">
+              {appraisals.map((a) => (
+                <div key={a.id} className="rounded-lg border border-slate-200 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-medium text-sm text-slate-800">{a.appraisal_type} · {a.quarter} {a.appraisal_year}</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 capitalize">{(a.overall_rating || '').replace('_', ' ')}</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                    {a.reviewer && <div><span className="text-xs text-slate-400">Reviewer: </span><span className="text-slate-700">{a.reviewer}</span></div>}
+                    {a.strengths && <div><span className="text-xs text-slate-400">Strengths: </span><span className="text-slate-700">{a.strengths}</span></div>}
+                    {a.areas_for_improvement && <div><span className="text-xs text-slate-400">Improvement: </span><span className="text-slate-700">{a.areas_for_improvement}</span></div>}
+                    {a.comments && <div><span className="text-xs text-slate-400">Comments: </span><span className="text-slate-700">{a.comments}</span></div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {tab === 'queries' && (
+        <Section title="HR Queries">
+          {queries.length === 0 ? (
+            <EmptyState title="No queries issued" />
+          ) : (
+            <div className="space-y-3">
+              {queries.map((q) => (
+                <div key={q.id} className="rounded-lg border border-slate-200 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-medium text-sm text-slate-800">{q.query_title}</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">{q.status}</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                    <div><span className="text-xs text-slate-400">Type: </span><span className="text-slate-700">{q.query_type}</span></div>
+                    <div><span className="text-xs text-slate-400">Period: </span><span className="text-slate-700">{q.work_period || '—'}</span></div>
+                    {q.description && <div className="col-span-2"><span className="text-xs text-slate-400">Description: </span><span className="text-slate-700">{q.description}</span></div>}
+                    {q.response && <div className="col-span-2"><span className="text-xs text-slate-400">Response: </span><span className="text-slate-700">{q.response}</span></div>}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </Section>
       )}

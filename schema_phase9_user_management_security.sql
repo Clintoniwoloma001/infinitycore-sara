@@ -87,6 +87,11 @@ create policy "profiles_read_all" on public.profiles
   );
 
 -- Update: own profile (non-role fields) OR HR/admin for non-super_admin
+-- NOTE: In PostgreSQL RLS, the USING clause sees OLD row values (which
+-- rows can be targeted), but the WITH CHECK clause only sees NEW row
+-- values (which resulting rows are allowed). Referencing OLD in WITH
+-- CHECK causes error 42P01 "missing FROM-clause entry for table old".
+-- We use NEW.role in WITH CHECK to prevent elevation to super_admin.
 drop policy if exists "profiles_update_hr" on public.profiles;
 create policy "profiles_update_hr" on public.profiles
   for update using (
@@ -100,7 +105,7 @@ create policy "profiles_update_hr" on public.profiles
     auth.uid() = id
     or (
       public.current_role() in ('super_admin', 'admin', 'hr_manager')
-      and (old.role <> 'super_admin' or public.current_role() = 'super_admin')
+      and (new.role <> 'super_admin' or public.current_role() = 'super_admin')
     )
   );
 
@@ -191,6 +196,54 @@ begin
     'system',
     '/'
   );
+
+  -- Auto-create/link employee record for staff roles
+  if p_role in ('staff', 'hr_manager', 'hr_officer', 'branch_manager', 'area_manager',
+                'head_of_business', 'operations_manager', 'loan_officer',
+                'relationship_manager', 'customer_service', 'admin') then
+    declare
+      v_emp_id uuid;
+      v_emp_code text;
+    begin
+      -- Check if employee already exists (by user_id or email)
+      select id into v_emp_id from public.employees
+        where user_id = p_user_id
+           or (v_target.email is not null and lower(email) = lower(v_target.email))
+        limit 1;
+
+      if v_emp_id is null then
+        -- Generate employee code
+        v_emp_code := public.generate_employee_code();
+
+        insert into public.employees (
+          user_id, full_name, email, department, "position", branch,
+          employment_status, employee_code, source, created_by, hire_date, updated_at
+        ) values (
+          p_user_id, coalesce(v_target.full_name, v_target.email, 'Unknown'),
+          v_target.email, p_department, null, p_branch,
+          'active', v_emp_code, 'manual', auth.uid(), now()::date, now()
+        )
+        returning id into v_emp_id;
+
+        insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
+        values (
+          'EMPLOYEE_AUTO_CREATED',
+          'Employee',
+          v_emp_id::text,
+          coalesce(v_actor_name, auth.uid()::text),
+          format('Employee auto-created for approved user %s (role: %s)', coalesce(v_target.email, p_user_id::text), p_role),
+          'info'
+        );
+      else
+        -- Link existing employee to user_id if not already linked
+        update public.employees set user_id = p_user_id, updated_at = now()
+          where id = v_emp_id and user_id is null;
+      end if;
+
+      -- Link profile to employee
+      update public.profiles set employee_id = v_emp_id where id = p_user_id and employee_id is null;
+    end;
+  end if;
 
   return jsonb_build_object('ok', true);
 end; $$;
@@ -539,6 +592,247 @@ drop trigger if exists trg_auto_create_employee on public.employee_onboarding_su
 create trigger trg_auto_create_employee
   before insert on public.employee_onboarding_submissions
   for each row execute function public.auto_create_employee_from_submission();
+
+-- ============================================================
+-- 13. SARA AUDIT LOG TABLE
+--     Records every SARA-assisted action with user, command,
+--     timestamp, affected records, action, and result.
+-- ============================================================
+create table if not exists public.sara_audit_logs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete set null,
+  user_name text,
+  command text,
+  intent text,
+  action text,
+  affected_records jsonb,
+  result jsonb,
+  confirmed boolean default false,
+  executed_at timestamptz default now(),
+  created_at timestamptz default now()
+);
+
+alter table public.sara_audit_logs enable row level security;
+
+drop policy if exists "sara_audit_select" on public.sara_audit_logs;
+create policy "sara_audit_select" on public.sara_audit_logs
+  for select using (
+    auth.uid() = user_id
+    or public.current_role() in ('super_admin', 'admin', 'hr_manager')
+  );
+
+drop policy if exists "sara_audit_insert" on public.sara_audit_logs;
+create policy "sara_audit_insert" on public.sara_audit_logs
+  for insert with check (auth.uid() = user_id);
+
+create index if not exists idx_sara_audit_user on public.sara_audit_logs(user_id);
+create index if not exists idx_sara_audit_created on public.sara_audit_logs(created_at);
+
+-- ============================================================
+-- 14. RPC: sara_log_action
+--      Called by the frontend after SARA executes an action.
+--      Never used for authorization — only for audit trail.
+-- ============================================================
+create or replace function public.sara_log_action(
+  p_command text,
+  p_intent text,
+  p_action text,
+  p_affected_records jsonb default null,
+  p_result jsonb default null,
+  p_confirmed boolean default false
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_user_name text;
+begin
+  select full_name into v_user_name from public.profiles where id = auth.uid();
+  insert into public.sara_audit_logs (
+    user_id, user_name, command, intent, action,
+    affected_records, result, confirmed
+  ) values (
+    auth.uid(), coalesce(v_user_name, auth.uid()::text),
+    p_command, p_intent, p_action,
+    p_affected_records, p_result, p_confirmed
+  );
+  return jsonb_build_object('ok', true);
+end; $$;
+grant execute on function public.sara_log_action(text, text, text, jsonb, jsonb, boolean) to authenticated;
+
+-- ============================================================
+-- 15. RPC: get_employee_completion
+--      Returns completion percentage and missing required fields
+--      for the authenticated user's employee record.
+-- ============================================================
+create or replace function public.get_employee_completion(p_employee_id uuid default null)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_emp record;
+  v_target_id uuid := p_employee_id;
+  v_total int := 0;
+  v_filled int := 0;
+  v_missing text[] := '{}'::text[];
+begin
+  -- If no employee_id, use the authenticated user's
+  if v_target_id is null then
+    select id into v_target_id from public.employees where user_id = auth.uid() limit 1;
+  end if;
+
+  if v_target_id is null then
+    return jsonb_build_object('ok', false, 'message', 'No employee record found');
+  end if;
+
+  select * into v_emp from public.employees where id = v_target_id;
+
+  -- Required fields for a complete employee profile
+  if v_emp.full_name is not null and trim(v_emp.full_name) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Full Name'); end if; v_total := v_total + 1;
+  if v_emp.email is not null and trim(v_emp.email) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Email'); end if; v_total := v_total + 1;
+  if v_emp.phone is not null and trim(v_emp.phone) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Phone'); end if; v_total := v_total + 1;
+  if v_emp.department is not null and trim(v_emp.department) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Department'); end if; v_total := v_total + 1;
+  if v_emp."position" is not null and trim(v_emp."position") <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Position'); end if; v_total := v_total + 1;
+  if v_emp.branch is not null and trim(v_emp.branch) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Branch'); end if; v_total := v_total + 1;
+  if v_emp.employment_type is not null and trim(v_emp.employment_type) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Employment Type'); end if; v_total := v_total + 1;
+  if v_emp.hire_date is not null then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Date Employed'); end if; v_total := v_total + 1;
+  if v_emp.emergency_contact_name is not null and trim(v_emp.emergency_contact_name) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Emergency Contact Name'); end if; v_total := v_total + 1;
+  if v_emp.emergency_contact_phone is not null and trim(v_emp.emergency_contact_phone) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Emergency Contact Phone'); end if; v_total := v_total + 1;
+  if v_emp.next_of_kin_name is not null and trim(v_emp.next_of_kin_name) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Next of Kin Name'); end if; v_total := v_total + 1;
+  if v_emp.next_of_kin_phone is not null and trim(v_emp.next_of_kin_phone) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Next of Kin Phone'); end if; v_total := v_total + 1;
+  if v_emp.bank_name is not null and trim(v_emp.bank_name) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Bank Name'); end if; v_total := v_total + 1;
+  if v_emp.account_number is not null and trim(v_emp.account_number) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'Account Number'); end if; v_total := v_total + 1;
+  if v_emp.bvn is not null and trim(v_emp.bvn) <> '' then v_filled := v_filled + 1; else v_missing := array_append(v_missing, 'BVN'); end if; v_total := v_total + 1;
+
+  return jsonb_build_object(
+    'ok', true,
+    'employee_id', v_target_id::text,
+    'total_fields', v_total,
+    'filled_fields', v_filled,
+    'missing_fields', v_missing,
+    'completion_pct', case when v_total = 0 then 0 else round((v_filled::numeric / v_total) * 100) end,
+    'is_complete', v_filled = v_total
+  );
+end; $$;
+grant execute on function public.get_employee_completion(uuid) to authenticated;
+
+-- ============================================================
+-- 16. RPC: request_employee_info_update
+--      HR/super_admin requests an employee to update specific fields.
+--      Creates a notification + audit record.
+-- ============================================================
+create or replace function public.request_employee_info_update(
+  p_employee_id uuid,
+  p_fields text[],
+  p_message text default null
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_actor_role text := public.current_role();
+  v_actor_name text;
+  v_emp record;
+begin
+  if v_actor_role not in ('super_admin', 'admin', 'hr_manager', 'hr_officer') then
+    raise exception 'Not authorized to request employee updates';
+  end if;
+
+  select * into v_emp from public.employees where id = p_employee_id;
+  if v_emp.id is null then
+    raise exception 'Employee not found';
+  end if;
+
+  select full_name into v_actor_name from public.profiles where id = auth.uid();
+
+  -- Notify the employee's linked user if they have one
+  if v_emp.user_id is not null then
+    insert into public.notifications (user_id, title, message, type, link)
+    values (
+      v_emp.user_id,
+      'Employee Information Update Requested',
+      coalesce(p_message, format('Please update the following: %s', array_to_string(p_fields, ', '))),
+      'system',
+      '/employees/' || p_employee_id::text
+    );
+  end if;
+
+  insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
+  values (
+    'EMPLOYEE_UPDATE_REQUESTED',
+    'Employee',
+    p_employee_id::text,
+    coalesce(v_actor_name, auth.uid()::text),
+    format('HR requested update for %s. Fields: %s. Message: %s',
+           coalesce(v_emp.full_name, ''), array_to_string(p_fields, ', '), coalesce(p_message, 'N/A')),
+    'warning'
+  );
+
+  return jsonb_build_object('ok', true);
+end; $$;
+grant execute on function public.request_employee_info_update(uuid, text[], text) to authenticated;
+
+-- ============================================================
+-- 17. RPC: sara_batch_approve_leave
+--      SARA voice-approval execution path. Executes through the
+--      same leave_approvals chain, never bypasses authorization.
+--      Requires the authenticated user to have leave management rights.
+-- ============================================================
+create or replace function public.sara_batch_approve_leave(
+  p_request_ids uuid[],
+  p_comments text default 'Approved via SARA voice command'
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_actor_role text := public.current_role();
+  v_actor_name text;
+  v_id uuid;
+  v_count int := 0;
+  v_results jsonb := '[]'::jsonb;
+begin
+  if v_actor_role not in ('super_admin', 'admin', 'hr_manager', 'area_manager', 'head_of_business', 'branch_manager') then
+    raise exception 'Not authorized to approve leave requests';
+  end if;
+
+  select full_name into v_actor_name from public.profiles where id = auth.uid();
+
+  foreach v_id in array p_request_ids loop
+    begin
+      -- Update the leave request status
+      update public.leave_requests
+        set status = 'approved', reviewed_by = auth.uid(), reviewed_date = now(), approval_comments = p_comments
+        where id = v_id and status = 'pending';
+
+      if found then
+        v_count := v_count + 1;
+        v_results := v_results || jsonb_build_object('id', v_id::text, 'status', 'approved');
+
+        -- Create approval trail entry
+        insert into public.leave_approvals (request_id, stage, approver_id, approver_name, decision, comments)
+        select v_id, 'final', auth.uid(), coalesce(v_actor_name, auth.uid()::text), 'approved', p_comments
+        on conflict do nothing;
+
+        -- Notify the employee
+        insert into public.notifications (user_id, title, message, type, link)
+        select created_by, 'Leave Approved',
+               format('Your leave request has been approved via SARA by %s.', coalesce(v_actor_name, 'HR')),
+               'workflow', '/leave-requests'
+        from public.leave_requests where id = v_id;
+      end if;
+    exception when others then
+      v_results := v_results || jsonb_build_object('id', v_id::text, 'status', 'error', 'error', SQLERRM);
+    end;
+  end loop;
+
+  -- Audit
+  insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
+  values (
+    'SARA_BATCH_APPROVE_LEAVE',
+    'LeaveRequest',
+    array_to_string(p_request_ids, ','),
+    coalesce(v_actor_name, auth.uid()::text),
+    format('SARA batch approved %s leave request(s)', v_count),
+    'warning'
+  );
+
+  return jsonb_build_object('ok', true, 'approved_count', v_count, 'results', v_results);
+end; $$;
+grant execute on function public.sara_batch_approve_leave(uuid[], text) to authenticated;
 
 -- ============================================================
 -- DONE. All changes are additive and idempotent.
