@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Copy, Link2, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
-import OnboardingReviewModal from '../components/OnboardingReviewModal'
+import OnboardingReviewCenter from '../components/review/OnboardingReviewCenter'
 import { status, date } from './hrShared'
 import { onboardingService, DEFAULT_EXPIRY_DAYS } from '../services/onboardingService'
 
@@ -325,7 +325,7 @@ export default function OnboardingLinks() {
         </div>
       )}
       {reviewSubmission && (
-        <OnboardingReviewModal
+        <OnboardingReviewCenter
           submission={reviewSubmission}
           onClose={() => setReviewSubmission(null)}
           onRefresh={loadSubs}
