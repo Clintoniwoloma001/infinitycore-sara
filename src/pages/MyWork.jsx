@@ -19,12 +19,12 @@ const TABS = [
 ]
 
 function PriorityBadge({ priority }) {
-  const colors = { critical: 'bg-rose-50 text-rose-700 border-rose-200', high: 'bg-orange-50 text-orange-700 border-orange-200', medium: 'bg-blue-50 text-blue-700 border-blue-200', low: 'bg-slate-50 text-slate-600 border-slate-200' }
+  const colors = { critical: 'bg-rose-50 text-rose-700 border-rose-200', high: 'bg-orange-50 text-orange-700 border-orange-200', medium: 'bg-blue-50 text-blue-700 border-blue-200', low: 'bg-slate-50 text-slate-700 border-slate-200' }
   return <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium border capitalize ${colors[priority] || colors.medium}`}>{priority}</span>
 }
 
 function StatusBadge({ status }) {
-  const colors = { completed: 'bg-emerald-50 text-emerald-700 border-emerald-200', rejected: 'bg-rose-50 text-rose-700 border-rose-200', overdue: 'bg-rose-50 text-rose-700 border-rose-200', submitted: 'bg-amber-50 text-amber-700 border-amber-200', under_review: 'bg-amber-50 text-amber-700 border-amber-200', assigned: 'bg-blue-50 text-blue-700 border-blue-200', accepted: 'bg-blue-50 text-blue-700 border-blue-200', in_progress: 'bg-violet-50 text-violet-700 border-violet-200', active: 'bg-blue-50 text-blue-700 border-blue-200', achieved: 'bg-emerald-50 text-emerald-700 border-emerald-200', in_review: 'bg-amber-50 text-amber-700 border-amber-200' }
+  const colors = { completed: 'bg-emerald-50 text-emerald-700 border-emerald-200', rejected: 'bg-rose-50 text-rose-700 border-rose-200', overdue: 'bg-rose-50 text-rose-700 border-rose-200', submitted: 'bg-amber-50 text-amber-700 border-amber-200', under_review: 'bg-blue-50 text-blue-700 border-blue-200' }
   return <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium border capitalize ${colors[status] || 'bg-slate-100 text-slate-600 border-slate-200'}`}>{(status || 'pending').replace(/_/g, ' ')}</span>
 }
 
@@ -151,12 +151,11 @@ export default function MyWork() {
       {/* Tabs */}
       <div className="flex gap-2 overflow-x-auto pb-3 mb-4">
         {TABS.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border ${tab === t.id ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-500 border-slate-200'}`}>{t.label}</button>
+          <button key={t.id} onClick={() => setTab(t.id)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border ${tab === t.id ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'}`}>
+            {t.label}
+          </button>
         ))}
       </div>
-    </div>
-  )
-}
 
       {/* Tasks */}
       {tab === 'tasks' && (
@@ -311,7 +310,7 @@ export default function MyWork() {
               </div>
               <div>
                 <label className={labelCls}>Completion Comment</label>
-                <textarea className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" rows={3} value={submitForm.comment || ''} onChange={(e) => setSubmitForm((f) => ({ ...f, comment: e.target.value }))} placeholder="Describe what was done..." />
+                <textarea className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" rows={3} value={submitForm.comment || ''} onChange={(e) => setSubmitForm((f) => ({ ...f, comment: e.target.value }))} />
               </div>
               <div>
                 <label className={labelCls}>Evidence / Proof Files</label>
@@ -335,25 +334,19 @@ export default function MyWork() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div><label className={labelCls}>Date Completed</label><input type="date" className={inputCls} value={submitForm.completedDate || ''} onChange={(e) => setSubmitForm((f) => ({ ...f, completedDate: e.target.value }))} /></div>
-                <div><label className={labelCls}>Reference URL (optional)</label><input className={inputCls} value={submitForm.referenceUrl || ''} onChange={(e) => setSubmitForm((f) => ({ ...f, referenceUrl: e.target.value }))} placeholder="https://..." /></div>
+                <div><label className={labelCls}>Reference URL (optional)</label><input className={inputCls} value={submitForm.referenceUrl || ''} onChange={(e) => setSubmitForm((f) => ({ ...f, referenceUrl: e.target.value }))} /></div>
               </div>
               <div><label className={labelCls}>Additional Note (optional)</label><input className={inputCls} value={submitForm.additionalNote || ''} onChange={(e) => setSubmitForm((f) => ({ ...f, additionalNote: e.target.value }))} /></div>
             </div>
             <div className="flex justify-end gap-2 pt-4">
               <button onClick={() => setSubmitTarget(null)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
-              <button onClick={doSubmit} disabled={submitting} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+              <button onClick={doSubmit} disabled={submitting} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} Submit for Review
               </button>
             </div>
           </div>
         </div>
-        <div className="flex justify-end gap-2 mt-5">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
-          <button onClick={() => onSubmit({ actualValue: Number(actualValue) || 0, narrative })} disabled={busy || !actualValue} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Submit
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   )
 }
