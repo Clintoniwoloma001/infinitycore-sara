@@ -21,6 +21,7 @@ import {
   balanceFor,
   currentYear,
 } from '../services/leaveBalanceService'
+import { getEmployeeCategory } from '../services/leaveRulesService'
 import { computeLeaveInsights } from '../services/leaveInsightsService'
 
 const EMPTY = { leave_type: 'annual', start_date: '', end_date: '', reason: '' }
@@ -96,7 +97,7 @@ export default function LeaveRequests() {
     if (!user) return
     setBalancesLoading(true)
     try {
-      setMyBalances(await getEmployeeBalances(user.id, userName))
+      setMyBalances(await getEmployeeBalances(user.id, userName, currentYear(), getEmployeeCategory(profile)))
     } catch {
       setMyBalances([])
     } finally {
