@@ -63,6 +63,7 @@ function RecordsTab({ setNotice }) {
   const [dayFilter, setDayFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [deptFilter, setDeptFilter] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('')
   const [correcting, setCorrecting] = useState(null)
   const [form, setForm] = useState({})
   const [busy, setBusy] = useState(false)
@@ -86,7 +87,8 @@ function RecordsTab({ setNotice }) {
     const dayOk = !dayFilter || String(r.attendance_date) === dayFilter
     const statusOk = !statusFilter || r.status === statusFilter
     const deptOk = !deptFilter || r.employees?.department === deptFilter
-    return dayOk && statusOk && deptOk
+    const sourceOk = !sourceFilter || (r.source_detail || r.source) === sourceFilter
+    return dayOk && statusOk && deptOk && sourceOk
   })
 
   const openCorrection = (row) => {
@@ -159,6 +161,10 @@ function RecordsTab({ setNotice }) {
           <option value="">All departments</option>
           {departments.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
+        <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} className="h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]">
+          <option value="">All sources</option>
+          {['WEB', 'MOBILE', 'FINGERPRINT', 'BIOMETRIC_DEVICE', 'ATTENDANCE_TERMINAL', 'ADMIN', 'API', 'IMPORT'].map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+        </select>
         <button onClick={load} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">
           <RefreshCw className="w-4 h-4" /> Refresh
         </button>
@@ -178,6 +184,7 @@ function RecordsTab({ setNotice }) {
                 <th className="px-6 py-3 font-medium whitespace-nowrap">Clock In</th>
                 <th className="px-6 py-3 font-medium whitespace-nowrap">Clock Out</th>
                 <th className="px-6 py-3 font-medium whitespace-nowrap">Duration</th>
+                <th className="px-6 py-3 font-medium whitespace-nowrap">Source</th>
                 <th className="px-6 py-3 font-medium whitespace-nowrap">Status</th>
                 <th className="px-6 py-3 font-medium whitespace-nowrap text-right">Actions</th>
               </tr>
@@ -191,6 +198,7 @@ function RecordsTab({ setNotice }) {
                   <td className="px-6 py-3 text-slate-600 tabular-nums">{r.clock_in ? new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                   <td className="px-6 py-3 text-slate-600 tabular-nums">{r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                   <td className="px-6 py-3 text-slate-600">{r.work_hours ? `${r.work_hours}h` : '—'}</td>
+                  <td className="px-6 py-3"><SourceBadge source={r.source_detail || r.source} /></td>
                   <td className="px-6 py-3">{status(r.status)}</td>
                   <td className="px-6 py-3 text-right">
                     <button onClick={() => openCorrection(r)} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-slate-300 text-slate-600 text-xs hover:bg-slate-100">
@@ -239,6 +247,27 @@ function RecordsTab({ setNotice }) {
       )}
     </div>
   )
+}
+
+// Source badge for attendance records
+function SourceBadge({ source }) {
+  const config = {
+    WEB: { label: 'Web', color: 'bg-blue-50 text-blue-700' },
+    MOBILE: { label: 'Mobile', color: 'bg-cyan-50 text-cyan-700' },
+    FINGERPRINT: { label: 'Fingerprint', color: 'bg-purple-50 text-purple-700' },
+    BIOMETRIC_DEVICE: { label: 'Biometric', color: 'bg-indigo-50 text-indigo-700' },
+    ATTENDANCE_TERMINAL: { label: 'Terminal', color: 'bg-slate-100 text-slate-700' },
+    ADMIN: { label: 'Admin', color: 'bg-amber-50 text-amber-700' },
+    API: { label: 'API', color: 'bg-emerald-50 text-emerald-700' },
+    IMPORT: { label: 'Import', color: 'bg-orange-50 text-orange-700' },
+    web: { label: 'Web', color: 'bg-blue-50 text-blue-700' },
+    mobile: { label: 'Mobile', color: 'bg-cyan-50 text-cyan-700' },
+    fingerprint: { label: 'Fingerprint', color: 'bg-purple-50 text-purple-700' },
+    admin: { label: 'Admin', color: 'bg-amber-50 text-amber-700' },
+  }
+  const s = (source || 'WEB').toUpperCase()
+  const c = config[s] || config[source] || config.WEB
+  return <span className={`text-xs px-2 py-0.5 rounded-full ${c.color}`}>{c.label}</span>
 }
 
 // ============================================================

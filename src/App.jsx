@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth, AuthProvider } from './hooks/useAuth'
 import Layout from './components/Layout'
@@ -37,6 +37,9 @@ import Performance from './pages/Performance'
 import Settings from './pages/Settings'
 import OnboardingReview from './pages/OnboardingReview'
 import WorkManagement from './pages/WorkManagement'
+import AttendanceTerminal from './pages/AttendanceTerminal'
+import OnboardingFlow from './components/OnboardingFlow'
+import { supabase } from './supabaseClient'
 
 const pageComponents = {
   Dashboard,
@@ -67,6 +70,7 @@ const pageComponents = {
   Settings,
   OnboardingReview,
   WorkManagement,
+  AttendanceTerminal,
 }
 
 function Protected({ children }) {
@@ -137,7 +141,44 @@ function ProtectedModule({ route }) {
 }
 
 function Home() {
-  const { role } = useAuth()
+  const { role, user } = useAuth()
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [checking, setChecking] = useState(true)
+
+  useEffect(() => {
+    const checkOnboarding = async () => {
+      if (role === 'customer' || !user?.id) { setChecking(false); return }
+      try {
+        // Check if employee record exists and onboarding is complete
+        const { data: emp } = await supabase
+          .from('employees')
+          .select('id')
+          .eq('user_id', user.id)
+          .limit(1)
+        if (!emp || emp.length === 0) {
+          // No employee record — show onboarding for non-customer users
+          setShowOnboarding(true)
+        } else {
+          // Check digital file
+          const { data: file } = await supabase
+            .from('employee_digital_files')
+            .select('onboarding_completed')
+            .eq('employee_id', emp[0].id)
+            .single()
+          if (!file || !file.onboarding_completed) {
+            setShowOnboarding(true)
+          }
+        }
+      } catch {
+        // Tables might not exist yet — don't block the user
+      }
+      setChecking(false)
+    }
+    checkOnboarding()
+  }, [user?.id, role])
+
+  if (checking) return <div className="flex justify-center items-center h-screen"><div className="w-8 h-8 border-4 border-slate-200 border-t-[#009944] rounded-full animate-spin" /></div>
+  if (showOnboarding) return <OnboardingFlow onComplete={() => setShowOnboarding(false)} />
   return role === 'customer' ? <CustomerDashboard /> : <Dashboard />
 }
 
@@ -147,6 +188,7 @@ export default function App() {
       <HashRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/attendance-terminal" element={<AttendanceTerminal />} />
           <Route path="/" element={<Protected><Home /></Protected>} />
           <Route path="/onboarding/:token" element={<OnboardingForm />} />
           <Route path="/guarantor-verification/:token" element={<GuarantorVerificationForm />} />

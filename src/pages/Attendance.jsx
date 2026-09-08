@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { CalendarClock, Clock, LogIn, LogOut, MapPin, AlertCircle, X, Loader2, Send, CheckCircle2, Clock3 } from 'lucide-react'
+import { CalendarClock, Clock, LogIn, LogOut, MapPin, AlertCircle, X, Loader2, Send, CheckCircle2, Clock3, Navigation, ShieldCheck, AlertTriangle } from 'lucide-react'
 import { attendanceService } from '../services/attendanceService'
+import { attendanceEngineService } from '../services/attendanceEngineService'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState } from '../components/PageStates'
 import { date, status } from './hrShared'
@@ -8,19 +9,22 @@ import { date, status } from './hrShared'
 const LATE_REASONS = [
   { key: 'traffic', label: 'Traffic' },
   { key: 'transport_delay', label: 'Transport delay' },
-  { key: 'health_emergency', label: 'Health / emergency' },
+  { key: 'medical', label: 'Medical' },
+  { key: 'personal_emergency', label: 'Personal emergency' },
   { key: 'official_assignment', label: 'Official assignment' },
-  { key: 'family_emergency', label: 'Family emergency' },
-  { key: 'weather', label: 'Weather' },
+  { key: 'approved_exception', label: 'Approved exception' },
   { key: 'other', label: 'Other' },
 ]
 
 const ISSUE_TYPES = [
   { key: 'forgot_clock_in', label: 'Forgot to clock in' },
   { key: 'forgot_clock_out', label: 'Forgot to clock out' },
-  { key: 'incorrect_time', label: 'Incorrect time' },
+  { key: 'gps_problem', label: 'GPS problem' },
+  { key: 'fingerprint_not_recognized', label: 'Fingerprint not recognized' },
+  { key: 'device_unavailable', label: 'Device unavailable' },
+  { key: 'network_failure', label: 'Network failure' },
+  { key: 'wrong_time', label: 'Wrong attendance time' },
   { key: 'wrong_location', label: 'Wrong location' },
-  { key: 'device_problem', label: 'Device problem' },
   { key: 'other', label: 'Other' },
 ]
 
@@ -30,12 +34,16 @@ export default function Attendance() {
   const [record, setRecord] = useState(null)
   const [history, setHistory] = useState([])
   const [config, setConfig] = useState(null)
+  const [geofences, setGeofences] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState({ kind: '', text: '' })
   const [geo, setGeo] = useState(null)
+  const [geoStatus, setGeoStatus] = useState(null) // { inside, nearest, distance, noGeofences }
+  const [geoLoading, setGeoLoading] = useState(false)
   const [lateModal, setLateModal] = useState(null)
   const [issueModal, setIssueModal] = useState(false)
+  const [geofenceBlocked, setGeofenceBlocked] = useState(null)
   const [currentTime, setCurrentTime] = useState(new Date())
   const [workingDuration, setWorkingDuration] = useState('')
   const [clockAnim, setClockAnim] = useState(false)
@@ -73,8 +81,12 @@ export default function Attendance() {
         setHistory(hist)
       }
       try {
-        const cfg = await attendanceService.getConfig()
+        const cfg = await attendanceEngineService.getConfig()
         setConfig(cfg)
+        if (cfg?.geofence_enabled) {
+          const gf = await attendanceEngineService.listGeofences()
+          setGeofences(gf.filter((g) => g.active))
+        }
       } catch { /* config may not exist yet */ }
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Unable to load attendance' })
@@ -95,29 +107,98 @@ export default function Attendance() {
     return now > lateThreshold
   }
 
+  const isEarlyDeparture = () => {
+    if (!config) return false
+    const now = new Date()
+    const [expH, expM] = (config.expected_end_time || '17:00').split(':').map(Number)
+    const threshold = new Date()
+    threshold.setHours(expH, expM, 0, 0)
+    const earlyThreshold = new Date(threshold)
+    earlyThreshold.setMinutes(earlyThreshold.getMinutes() - (config.early_departure_threshold_minutes || 30))
+    return now < earlyThreshold
+  }
+
+  const requestLocation = async () => {
+    if (!config?.geofence_enabled) return { lat: null, lng: null, skip: true }
+    setGeoLoading(true)
+    try {
+      const pos = await attendanceEngineService.getCurrentPosition()
+      setGeo({ lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy })
+      const result = attendanceEngineService.verifyLocation(pos.lat, pos.lng, geofences)
+      setGeoStatus(result)
+      return { lat: pos.lat, lng: pos.lng, ...result }
+    } catch (e) {
+      setGeoStatus({ inside: false, error: e.message, noGeofences: false })
+      return { lat: null, lng: null, inside: false, error: e.message }
+    } finally {
+      setGeoLoading(false)
+    }
+  }
+
   const doClockIn = async () => {
     setBusy(true)
     setMessage({})
     setClockAnim(true)
+    setGeofenceBlocked(null)
     try {
-      const r = await attendanceService.clockIn({ lat: geo?.lat, lng: geo?.lng })
-      setRecord(r)
-      setMessage({ kind: 'ok', text: `Clocked in at ${new Date(r.clock_in).toLocaleTimeString()}.` })
-
-      // Check if late and show modal
-      if (isLate() && config) {
-        const [expH, expM] = config.expected_start_time.split(':').map(Number)
-        const expTime = new Date()
-        expTime.setHours(expH, expM, 0, 0)
-        setLateModal({
-          attendanceId: r.id,
-          employeeId: employee.id,
-          expectedTime: expTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          actualTime: new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-        })
+      // Get location if geofencing is enabled
+      let locResult = { lat: null, lng: null, skip: true }
+      if (config?.geofence_enabled) {
+        locResult = await requestLocation()
+        if (locResult.error) {
+          setMessage({ kind: 'error', text: `Unable to verify location: ${locResult.error}. Please enable location permissions and try again.` })
+          setBusy(false)
+          setClockAnim(false)
+          return
+        }
+        if (!locResult.inside && !locResult.noGeofences) {
+          setGeofenceBlocked({
+            nearest: locResult.nearest,
+            distance: locResult.distance,
+            radius: locResult.nearest?.radius_meters,
+          })
+          setMessage({ kind: 'error', text: "You're outside the authorized attendance area." })
+          setBusy(false)
+          setClockAnim(false)
+          return
+        }
+        if (locResult.noGeofences) {
+          setMessage({ kind: 'error', text: 'No active geofences configured. Contact HR to set up attendance locations.' })
+          setBusy(false)
+          setClockAnim(false)
+          return
+        }
       }
 
-      await load()
+      const r = await attendanceEngineService.clockInWithGeofence({
+        employeeId: employee.id,
+        lat: locResult.lat,
+        lng: locResult.lng,
+        geofences,
+        config,
+      })
+
+      if (r.blocked) {
+        setGeofenceBlocked({ nearest: r.nearest, distance: r.distance, radius: r.nearest?.radius_meters })
+        setMessage({ kind: 'error', text: r.message })
+      } else {
+        setRecord(r.data)
+        setMessage({ kind: 'ok', text: `Clock-in successful at ${new Date(r.data.clock_in).toLocaleTimeString()}. ${config?.geofence_enabled ? 'GPS Verified' : ''}` })
+
+        // Check if late
+        if (isLate() && config) {
+          const [expH, expM] = config.expected_start_time.split(':').map(Number)
+          const expTime = new Date()
+          expTime.setHours(expH, expM, 0, 0)
+          setLateModal({
+            attendanceId: r.data.id,
+            employeeId: employee.id,
+            expectedTime: expTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            actualTime: new Date(r.data.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          })
+        }
+        await load()
+      }
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Clock in failed' })
     } finally {
@@ -133,7 +214,13 @@ export default function Attendance() {
     try {
       const r = await attendanceService.clockOut(record?.id)
       setRecord(r)
-      setMessage({ kind: 'ok', text: `Clocked out at ${new Date(r.clock_out).toLocaleTimeString()}. Hours worked: ${r.work_hours}.` })
+
+      // Check early departure
+      if (isEarlyDeparture() && config) {
+        setMessage({ kind: 'ok', text: `Clocked out at ${new Date(r.clock_out).toLocaleTimeString()}. Note: You're leaving before your scheduled time.` })
+      } else {
+        setMessage({ kind: 'ok', text: `Clocked out at ${new Date(r.clock_out).toLocaleTimeString()}. Hours worked: ${r.work_hours}.` })
+      }
       await load()
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Clock out failed' })
@@ -218,6 +305,24 @@ export default function Attendance() {
         </div>
       )}
 
+      {/* Geofence blocked panel */}
+      {geofenceBlocked && (
+        <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 p-5 animate-[fadeIn_0.2s_ease]">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-6 h-6 text-rose-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <h3 className="font-semibold text-rose-900">You're outside the authorized attendance area.</h3>
+              <div className="mt-2 space-y-1 text-sm text-rose-700">
+                <p>Required location: <span className="font-medium">{geofenceBlocked.nearest?.name || 'Unknown'}</span></p>
+                <p>Allowed radius: <span className="font-medium">{geofenceBlocked.radius}m</span></p>
+                <p>Approximate distance: <span className="font-medium">{geofenceBlocked.distance ? `${geofenceBlocked.distance}m away` : 'Unknown'}</span></p>
+              </div>
+              <p className="text-xs text-rose-500 mt-2">Move to an authorized location to clock in, or contact HR for an exception.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         {/* Clock In/Out Card */}
         <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-6">
@@ -232,6 +337,21 @@ export default function Attendance() {
             </div>
           </div>
 
+          {/* Geofence status indicator */}
+          {config?.geofence_enabled && (
+            <div className="mb-4 flex items-center gap-2 text-sm">
+              {geoLoading ? (
+                <span className="flex items-center gap-1.5 text-slate-500"><Loader2 className="w-4 h-4 animate-spin" /> Detecting location...</span>
+              ) : geoStatus?.inside ? (
+                <span className="flex items-center gap-1.5 text-emerald-600"><ShieldCheck className="w-4 h-4" /> GPS Verified · {geoStatus.nearest?.name}</span>
+              ) : geoStatus?.error ? (
+                <span className="flex items-center gap-1.5 text-amber-600"><AlertCircle className="w-4 h-4" /> {geoStatus.error}</span>
+              ) : (
+                <span className="flex items-center gap-1.5 text-slate-400"><MapPin className="w-4 h-4" /> Geofencing enabled — location will be checked on clock-in</span>
+              )}
+            </div>
+          )}
+
           {/* Central Clock Control */}
           <div className="flex flex-col items-center py-6">
             {open && (
@@ -244,6 +364,9 @@ export default function Attendance() {
                   {new Date(record.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                 </p>
                 <p className="text-sm text-slate-500 mt-1">Working for: <span className="font-medium text-slate-700 tabular-nums">{workingDuration}</span></p>
+                {record.verification_method === 'GPS' && (
+                  <p className="text-xs text-emerald-600 mt-1 flex items-center justify-center gap-1"><ShieldCheck className="w-3 h-3" /> GPS Verified</p>
+                )}
               </div>
             )}
 
@@ -297,9 +420,16 @@ export default function Attendance() {
             <div className="flex items-center gap-3">
               {record && <span className="text-sm">{status(record.status)}</span>}
               {!record && <span className="text-sm text-slate-400">Not clocked in today</span>}
-              <button onClick={() => { if (navigator.geolocation) navigator.geolocation.getCurrentPosition((pos) => setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude }), () => {}, { enableHighAccuracy: false, timeout: 5000 }) }} className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-[#009944]">
-                <MapPin className="w-4 h-4" /> {geo ? 'Location attached' : 'Attach location'}
-              </button>
+              {config?.geofence_enabled && !geo && (
+                <button onClick={requestLocation} className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-[#009944]">
+                  <Navigation className="w-4 h-4" /> Check location
+                </button>
+              )}
+              {geo && !config?.geofence_enabled && (
+                <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
+                  <MapPin className="w-4 h-4" /> Location attached
+                </span>
+              )}
             </div>
             <button
               onClick={() => setIssueModal(true)}
@@ -327,6 +457,7 @@ export default function Attendance() {
             <div className="mt-4 pt-3 border-t border-slate-100">
               <p className="text-xs text-slate-400 mb-1">Expected start: <span className="font-medium text-slate-600">{config.expected_start_time}</span></p>
               <p className="text-xs text-slate-400">Grace period: <span className="font-medium text-slate-600">{config.grace_period_minutes} min</span></p>
+              {config.geofence_enabled && <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> Geofencing enabled</p>}
             </div>
           )}
         </div>
@@ -344,6 +475,7 @@ export default function Attendance() {
                 <th className="px-6 py-3 font-medium">Clock In</th>
                 <th className="px-6 py-3 font-medium">Clock Out</th>
                 <th className="px-6 py-3 font-medium">Hours</th>
+                <th className="px-6 py-3 font-medium">Source</th>
                 <th className="px-6 py-3 font-medium">Status</th>
               </tr>
             </thead>
@@ -354,6 +486,9 @@ export default function Attendance() {
                   <td className="px-6 py-3 text-slate-700 tabular-nums">{r.clock_in ? new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                   <td className="px-6 py-3 text-slate-700 tabular-nums">{r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                   <td className="px-6 py-3 text-slate-700">{r.work_hours || '—'}</td>
+                  <td className="px-6 py-3">
+                    <SourceBadge source={r.source_detail || r.source} />
+                  </td>
                   <td className="px-6 py-3">{status(r.status)}</td>
                 </tr>
               ))}
@@ -363,25 +498,29 @@ export default function Attendance() {
       )}
 
       {/* Late Arrival Modal */}
-      {lateModal && (
-        <LateModal
-          data={lateModal}
-          onSubmit={submitLateReason}
-          onClose={() => setLateModal(null)}
-          busy={busy}
-        />
-      )}
+      {lateModal && <LateModal data={lateModal} onSubmit={submitLateReason} onClose={() => setLateModal(null)} busy={busy} />}
 
       {/* Attendance Issue Modal */}
-      {issueModal && (
-        <IssueModal
-          onSubmit={submitIssue}
-          onClose={() => setIssueModal(false)}
-          busy={busy}
-        />
-      )}
+      {issueModal && <IssueModal onSubmit={submitIssue} onClose={() => setIssueModal(false)} busy={busy} />}
     </div>
   )
+}
+
+// Source badge component
+function SourceBadge({ source }) {
+  const config = {
+    WEB: { label: 'Web', color: 'bg-blue-50 text-blue-700' },
+    MOBILE: { label: 'Mobile', color: 'bg-cyan-50 text-cyan-700' },
+    FINGERPRINT: { label: 'Fingerprint', color: 'bg-purple-50 text-purple-700' },
+    BIOMETRIC_DEVICE: { label: 'Biometric', color: 'bg-indigo-50 text-indigo-700' },
+    ATTENDANCE_TERMINAL: { label: 'Terminal', color: 'bg-slate-100 text-slate-700' },
+    ADMIN: { label: 'Admin', color: 'bg-amber-50 text-amber-700' },
+    API: { label: 'API', color: 'bg-emerald-50 text-emerald-700' },
+    IMPORT: { label: 'Import', color: 'bg-orange-50 text-orange-700' },
+  }
+  const s = (source || 'WEB').toUpperCase()
+  const c = config[s] || config.WEB
+  return <span className={`text-xs px-2 py-0.5 rounded-full ${c.color}`}>{c.label}</span>
 }
 
 // ============================================================
@@ -400,7 +539,7 @@ function LateModal({ data, onSubmit, onClose, busy }) {
               <Clock3 className="w-5 h-5 text-amber-600" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-slate-900">You're checking in late</h3>
+              <h3 className="text-lg font-semibold text-slate-900">You're clocking in late</h3>
               <p className="text-sm text-slate-500">Please provide a reason</p>
             </div>
           </div>

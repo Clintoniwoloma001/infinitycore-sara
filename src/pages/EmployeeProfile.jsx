@@ -1,15 +1,17 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Briefcase, Loader2, Pencil, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Briefcase, Loader2, Pencil, Plus, RefreshCw, Save, Trash2, X, Star, MessageSquare } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import { date, money, status } from './hrShared'
 import { employeeService } from '../services/employeeService'
 import { attendanceService } from '../services/attendanceService'
+import { attendanceEngineService } from '../services/attendanceEngineService'
 import { documentService } from '../services/documentService'
 import { guarantorVerificationService } from '../services/guarantorVerificationService'
 import { payrollService } from '../services/payrollService'
 import { supabase } from '../supabaseClient'
+import { AppraisalModal, QueryModal, QueryResolutionModal } from '../components/EmployeeModals'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -76,6 +78,8 @@ const TABS = [
   { id: 'documents', label: 'Documents' },
   { id: 'payroll', label: 'Payroll' },
   { id: 'attendance', label: 'Attendance' },
+  { id: 'appraisals', label: 'Appraisals' },
+  { id: 'queries', label: 'Queries' },
   { id: 'audit', label: 'Audit Trail' },
 ]
 
@@ -104,6 +108,11 @@ export default function EmployeeProfile() {
   const [payrollBusy, setPayrollBusy] = useState(false)
   const [payrollError, setPayrollError] = useState('')
   const [payrollSuccess, setPayrollSuccess] = useState('')
+  const [appraisals, setAppraisals] = useState([])
+  const [queries, setQueries] = useState([])
+  const [showAppraisal, setShowAppraisal] = useState(false)
+  const [showQuery, setShowQuery] = useState(false)
+  const [resolvingQuery, setResolvingQuery] = useState(null)
 
   const canReadPayroll = hasPermission('hr.payroll.read')
   const canManagePayroll = hasPermission('payroll.manage')
@@ -157,6 +166,16 @@ export default function EmployeeProfile() {
         const periods = await payrollService.listPeriods().catch(() => [])
         setPayrollPeriods(periods)
       }
+
+      // Load appraisals and queries
+      try {
+        const aps = await attendanceEngineService.listAppraisals(id)
+        setAppraisals(aps)
+      } catch { setAppraisals([]) }
+      try {
+        const qs = await attendanceEngineService.listQueries(id)
+        setQueries(qs)
+      } catch { setQueries([]) }
     } catch (e) {
       setError(e?.message || 'Unable to load employee profile')
     } finally {
@@ -645,6 +664,82 @@ export default function EmployeeProfile() {
         </Section>
       )}
 
+      {tab === 'appraisals' && (
+        <Section
+          title={`Appraisals (${appraisals.length})`}
+          actions={canEdit && (
+            <button onClick={() => setShowAppraisal(true)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+              <Star className="w-4 h-4" /> Add Appraisal
+            </button>
+          )}
+        >
+          {appraisals.length === 0 ? (
+            <EmptyState title="No appraisals" description="Performance appraisals will appear here as part of the employee digital file." />
+          ) : (
+            <div className="space-y-3">
+              {appraisals.map((a) => (
+                <div key={a.id} className="rounded-lg border border-slate-200 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Star className="w-4 h-4 text-purple-500" />
+                      <span className="font-medium text-slate-900">{a.period_name}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${a.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : a.status === 'submitted' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>{a.status}</span>
+                    </div>
+                    <span className="text-xs text-slate-400">{date(a.period_start)} — {date(a.period_end)}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 text-sm">
+                    {a.overall_score != null && <div><span className="text-xs text-slate-400">Overall: </span><span className="font-medium text-slate-700">{a.overall_score}/100</span></div>}
+                    {a.kpi_score != null && <div><span className="text-xs text-slate-400">KPI: </span><span className="font-medium text-slate-700">{a.kpi_score}/100</span></div>}
+                    {a.behavioral_score != null && <div><span className="text-xs text-slate-400">Behavioral: </span><span className="font-medium text-slate-700">{a.behavioral_score}/100</span></div>}
+                  </div>
+                  {a.strengths && <p className="text-sm text-slate-600 mt-2"><span className="font-medium">Strengths:</span> {a.strengths}</p>}
+                  {a.areas_for_improvement && <p className="text-sm text-slate-600 mt-1"><span className="font-medium">Areas for improvement:</span> {a.areas_for_improvement}</p>}
+                  {a.comments && <p className="text-sm text-slate-500 mt-2 italic">"{a.comments}"</p>}
+                  {a.reviewer_name && <p className="text-xs text-slate-400 mt-2">Reviewer: {a.reviewer_name}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {tab === 'queries' && (
+        <Section
+          title={`Queries (${queries.length})`}
+          actions={canEdit && (
+            <button onClick={() => setShowQuery(true)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+              <MessageSquare className="w-4 h-4" /> Raise Query
+            </button>
+          )}
+        >
+          {queries.length === 0 ? (
+            <EmptyState title="No queries" description="Employee queries and grievances will appear here as part of the digital file." />
+          ) : (
+            <div className="space-y-3">
+              {queries.map((q) => (
+                <div key={q.id} className="rounded-lg border border-slate-200 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <MessageSquare className="w-4 h-4 text-indigo-500" />
+                      <span className="font-medium text-slate-900">{q.subject}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${q.status === 'open' ? 'bg-amber-50 text-amber-700' : q.status === 'resolved' ? 'bg-emerald-50 text-emerald-700' : q.status === 'closed' ? 'bg-slate-100 text-slate-500' : 'bg-rose-50 text-rose-700'}`}>{q.status}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${q.priority === 'urgent' ? 'bg-rose-50 text-rose-700' : q.priority === 'high' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>{q.priority}</span>
+                    </div>
+                    <span className="text-xs text-slate-400">{date(q.created_at)}</span>
+                  </div>
+                  <p className="text-sm text-slate-600"><span className="text-xs text-slate-400">Category: </span>{q.category}</p>
+                  {q.description && <p className="text-sm text-slate-600 mt-1">{q.description}</p>}
+                  {q.resolution && <div className="mt-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800"><span className="font-medium">Resolution:</span> {q.resolution}</div>}
+                  {(q.status === 'open' || q.status === 'under_review') && canEdit && (
+                    <button onClick={() => setResolvingQuery(q)} className="mt-2 text-xs text-[#009944] hover:underline">Resolve Query →</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
+
       {tab === 'audit' && (
         <Section title="Audit Trail">
           {events.length === 0 ? (
@@ -690,6 +785,31 @@ export default function EmployeeProfile() {
             </div>
           </div>
         </div>
+      )}
+
+      {showAppraisal && (
+        <AppraisalModal
+          employee={employee}
+          onClose={() => setShowAppraisal(false)}
+          onSaved={async () => { const aps = await attendanceEngineService.listAppraisals(id); setAppraisals(aps) }}
+        />
+      )}
+
+      {showQuery && (
+        <QueryModal
+          employee={employee}
+          onClose={() => setShowQuery(false)}
+          onSaved={async () => { const qs = await attendanceEngineService.listQueries(id); setQueries(qs) }}
+        />
+      )}
+
+      {resolvingQuery && (
+        <QueryResolutionModal
+          query={resolvingQuery}
+          employee={employee}
+          onClose={() => setResolvingQuery(null)}
+          onResolved={async () => { const qs = await attendanceEngineService.listQueries(id); setQueries(qs) }}
+        />
       )}
     </div>
   )

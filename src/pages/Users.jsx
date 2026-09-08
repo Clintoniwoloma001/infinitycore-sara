@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Loader2, X, Check, Ban, UserCheck, UserX, Clock, Mail, Calendar, Shield, Building2, Key, ChevronRight, ChevronLeft } from 'lucide-react'
+import { Loader2, X, Check, Ban, UserCheck, UserX, Clock, Mail, Calendar, Shield, Building2, Key, ChevronRight, ChevronLeft, Briefcase } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { userApprovalService } from '../services/userApprovalService'
 import { StatusBadge } from '../lib/utils'
@@ -88,12 +88,12 @@ export default function Users() {
   }
 
   const startApproval = (user) => {
-    setWizard({ step: 1, user, role: 'customer', department: '', modules: [...BASIC_USER_MODULES] })
+    setWizard({ step: 1, user, role: 'customer', department: '', modules: [...BASIC_USER_MODULES], position: '', bankName: '', accountNumber: '', bankSortCode: '' })
     setReviewUser(null)
   }
 
   const handleApprove = async () => {
-    const { user, role, department, modules } = wizard
+    const { user, role, department, modules, position, bankName, accountNumber, bankSortCode } = wizard
     setBusy(true)
     setNotice({ kind: '', text: '' })
     try {
@@ -103,6 +103,36 @@ export default function Users() {
         department: department || null,
         modules,
       })
+      // Create or update employee record with bank details
+      if (role !== 'customer' && (position || bankName || accountNumber)) {
+        const { data: existing } = await supabase
+          .from('employees')
+          .select('id')
+          .eq('user_id', user.id)
+          .limit(1)
+        if (existing && existing.length > 0) {
+          await supabase.from('employees').update({
+            department: department || null,
+            position: position || null,
+            bank_name: bankName || null,
+            account_number: accountNumber || null,
+            bank_sort_code: bankSortCode || null,
+          }).eq('id', existing[0].id)
+        } else {
+          await supabase.from('employees').insert({
+            user_id: user.id,
+            full_name: user.full_name || user.email,
+            email: user.email,
+            department: department || null,
+            position: position || null,
+            bank_name: bankName || null,
+            account_number: accountNumber || null,
+            bank_sort_code: bankSortCode || null,
+            employment_status: 'active',
+            hire_date: new Date().toISOString().slice(0, 10),
+          })
+        }
+      }
       setNotice({ kind: 'ok', text: `${user.email || user.full_name || 'User'} has been approved and activated.` })
       setWizard(null)
       await load()
@@ -450,7 +480,7 @@ function InfoRow({ label, value }) {
 // APPROVAL WIZARD — Role → Department → Access Profile
 // ============================================================
 function ApprovalWizard({ wizard, setWizard, onComplete, onCancel, busy, actorRole }) {
-  const { step, user, role, department, modules } = wizard
+  const { step, user, role, department, modules, bankName, accountNumber, bankSortCode, position } = wizard
   const [departments, setDepartments] = useState([])
   const myAssignableRoles = assignableRoles(actorRole)
 
@@ -493,7 +523,8 @@ function ApprovalWizard({ wizard, setWizard, onComplete, onCancel, busy, actorRo
           {[
             { n: 1, label: 'Role', icon: Shield },
             { n: 2, label: 'Department', icon: Building2 },
-            { n: 3, label: 'Access', icon: Key },
+            { n: 3, label: 'Employment', icon: Briefcase },
+            { n: 4, label: 'Access', icon: Key },
           ].map((s) => {
             const Icon = s.icon
             return (
@@ -504,7 +535,7 @@ function ApprovalWizard({ wizard, setWizard, onComplete, onCancel, busy, actorRo
                   </div>
                   {s.label}
                 </div>
-                {s.n < 3 && <div className={`flex-1 h-px ${step > s.n ? 'bg-[#009944]' : 'bg-slate-200'}`} />}
+                {s.n < 4 && <div className={`flex-1 h-px ${step > s.n ? 'bg-[#009944]' : 'bg-slate-200'}`} />}
               </React.Fragment>
             )
           })}
@@ -555,8 +586,34 @@ function ApprovalWizard({ wizard, setWizard, onComplete, onCancel, busy, actorRo
             </div>
           )}
 
-          {/* Step 3 — Access Profile */}
+          {/* Step 3 — Employment & Bank Details */}
           {step === 3 && (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-500 mb-2">Set the employee's position and bank account details for salary payments. These become part of the employee digital file.</p>
+              <div>
+                <label className={labelCls}>Position / Job Title</label>
+                <input className={inputCls} value={position || ''} onChange={(e) => updateWizard({ position: e.target.value })} placeholder="e.g. Loan Officer" />
+              </div>
+              <div>
+                <label className={labelCls}>Bank Name</label>
+                <input className={inputCls} value={bankName || ''} onChange={(e) => updateWizard({ bankName: e.target.value })} placeholder="e.g. Access Bank" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Account Number</label>
+                  <input className={inputCls} value={accountNumber || ''} onChange={(e) => updateWizard({ accountNumber: e.target.value })} placeholder="10-digit account number" />
+                </div>
+                <div>
+                  <label className={labelCls}>Sort Code</label>
+                  <input className={inputCls} value={bankSortCode || ''} onChange={(e) => updateWizard({ bankSortCode: e.target.value })} placeholder="Bank sort code" />
+                </div>
+              </div>
+              <p className="text-xs text-slate-400">Bank details are optional at approval — you can add them later from the employee profile.</p>
+            </div>
+          )}
+
+          {/* Step 4 — Access Profile */}
+          {step === 4 && (
             <div className="space-y-3">
               <p className="text-sm text-slate-500 mb-2">Select which modules this user can access. Basic users get Home, Attendance, and My Work by default.</p>
               <div className="grid grid-cols-2 gap-2">
@@ -584,7 +641,7 @@ function ApprovalWizard({ wizard, setWizard, onComplete, onCancel, busy, actorRo
             >
               <ChevronLeft className="w-4 h-4" /> {step > 1 ? 'Back' : 'Cancel'}
             </button>
-            {step < 3 ? (
+            {step < 4 ? (
               <button
                 onClick={() => updateWizard({ step: step + 1 })}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]"

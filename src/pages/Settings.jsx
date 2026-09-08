@@ -5,17 +5,22 @@ import { EmptyState, ErrorState } from '../components/PageStates'
 import { leaveRulesService, LEAVE_TYPE_LABELS, EMPLOYEE_CATEGORIES } from '../services/leaveRulesService'
 import { performanceService } from '../services/performanceService'
 import { bankoneImportService } from '../services/bankoneImportService'
+import { GeofencingTab, DevicesTab, BiometricTab, AttendancePolicyTab } from '../components/AttendanceSettings'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 
 export default function Settings() {
   const { hasPermission } = useAuth()
-  const canManage = hasPermission('hr_config.manage') || hasPermission('admin.manage_config')
+  const canManage = hasPermission('hr_config.manage') || hasPermission('admin.manage_config') || hasPermission('attendance.config.manage')
   const [tab, setTab] = useState('leave-rules')
 
   const tabs = [
     { id: 'leave-rules', label: 'Leave Rules' },
+    { id: 'attendance-policy', label: 'Attendance Policy' },
+    { id: 'geofencing', label: 'Geofencing' },
+    { id: 'devices', label: 'Devices & Terminals' },
+    { id: 'biometric', label: 'Biometric Mapping' },
     { id: 'bankone-mapping', label: 'BankOne Mapping' },
     { id: 'transport-allowance', label: 'Transport Allowance' },
   ]
@@ -34,6 +39,10 @@ export default function Settings() {
       </div>
 
       {tab === 'leave-rules' && <LeaveRulesTab canManage={canManage} />}
+      {tab === 'attendance-policy' && <AttendancePolicyTab canManage={canManage} />}
+      {tab === 'geofencing' && <GeofencingTab canManage={canManage} />}
+      {tab === 'devices' && <DevicesTab canManage={canManage} />}
+      {tab === 'biometric' && <BiometricTab canManage={canManage} />}
       {tab === 'bankone-mapping' && <BankOneMappingTab canManage={canManage} />}
       {tab === 'transport-allowance' && <TransportAllowanceTab canManage={canManage} />}
     </div>

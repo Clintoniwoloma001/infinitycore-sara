@@ -21,6 +21,7 @@ import {
   UserCog,
   Users,
   Wallet,
+  Monitor,
 } from 'lucide-react'
 import { PERMISSIONS } from '../constants/permissions'
 
@@ -75,6 +76,7 @@ export const routeConfig = [
       { label: 'Audit Logs', path: '/audit-logs', icon: ScrollText, element: 'AuditLogs', permissions: [PERMISSIONS.ADMIN_VIEW_AUDIT] },
       { label: 'Settings', path: '/settings', icon: Settings, element: 'Settings', permissions: [PERMISSIONS.HR_CONFIG_MANAGE] },
       { label: 'User Management', path: '/users', icon: UserCog, element: 'Users', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
+      { label: 'Attendance Terminal', path: '/attendance-terminal', icon: Monitor, element: 'AttendanceTerminal', permissions: [] },
     ],
   },
   {
