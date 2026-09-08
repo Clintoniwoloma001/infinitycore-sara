@@ -114,6 +114,7 @@ export default function App() {
           ))}
           <Route path="/customers/:id" element={<Protected><ProtectedModule route={{ path: '/customers', element: 'Customers', permissions: ['customers.read'] }} /></Protected>} />
           <Route path="/employees/:id" element={<Protected><ProtectedModule route={{ path: '/employees', element: 'EmployeeProfile', permissions: ['hr.employee.read'] }} /></Protected>} />
+          <Route path="/onboarding-review/:id" element={<Protected><ProtectedModule route={{ path: '/onboarding-links', element: 'OnboardingReview', permissions: ['hr.onboarding.read'] }} /></Protected>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </HashRouter>

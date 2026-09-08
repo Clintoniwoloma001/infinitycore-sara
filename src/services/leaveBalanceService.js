@@ -2,15 +2,24 @@ import { supabase } from '../supabaseClient'
 import { createService } from './supabaseService'
 
 // ------------------------------------------------------------------
-// Adjust these numbers whenever company policy changes — nothing
-// else in the codebase needs to change.
+// Leave entitlements are now DATABASE-BACKED via the leave_rules table
+// (see schema_phase8_bankone_intelligence.sql and leaveRulesService.js).
+// These constants are FALLBACKS used only when the DB table is not yet
+// available. HR can update policy values from Settings without code changes.
+//
+// Actual HR policy:
+//   Annual: Normal Staff = 20, Management = 15, MD = 20
+//   Maternity = 90 days (3 months)
+//   Examination = 5 days
+//   Paternity = 2 days
+//   Sick = 10 days
+//   Personal = 5 days
 // ------------------------------------------------------------------
 export const LEAVE_ENTITLEMENTS = {
-  annual: 21,
-  sick: 10,
+  annual: 10,
   maternity: 90,
-  paternity: 10,
-  personal: 5,
+  examination: 5,
+  paternity: 2,
   unpaid: null, // no cap — always allowed, never deducted
 }
 
@@ -18,12 +27,11 @@ export const LEAVE_ENTITLEMENTS = {
 export const ANNUAL_CARRY_OVER_CAP = 5
 
 export const LEAVE_TYPE_LABELS = {
-  annual: 'Annual',
-  sick: 'Sick',
-  maternity: 'Maternity',
-  paternity: 'Paternity',
-  personal: 'Personal',
-  unpaid: 'Unpaid',
+  annual: 'Annual Leave',
+  maternity: 'Maternity Leave',
+  examination: 'Examination Leave',
+  paternity: 'Paternity Leave',
+  unpaid: 'Unpaid Leave',
 }
 
 const leaveBalances = createService('leave_balances')
@@ -34,7 +42,22 @@ export function currentYear() {
 
 // Fetch every balance row for one employee/year. Auto-creates any
 // missing rows at the default entitlement (first-time-use case).
-export async function getEmployeeBalances(employeeId, employeeName, year = currentYear()) {
+// Try to fetch database-backed entitlements; fall back to hardcoded if
+// the leave_rules table doesn't exist yet (pre-Phase-8 migration).
+async function fetchDbEntitlements() {
+  try {
+    const { data, error } = await supabase
+      .from('leave_rules')
+      .select('leave_type, employee_category, entitled_days')
+      .eq('is_active', true)
+    if (error) return null
+    return data || []
+  } catch {
+    return null
+  }
+}
+
+export async function getEmployeeBalances(employeeId, employeeName, year = currentYear(), employeeCategory = 'normal_staff') {
   const { data, error } = await supabase
     .from('leave_balances')
     .select('*')
@@ -43,8 +66,25 @@ export async function getEmployeeBalances(employeeId, employeeName, year = curre
   if (error) throw error
 
   const existing = data || []
-  const missingTypes = Object.keys(LEAVE_ENTITLEMENTS).filter(
-    (t) => LEAVE_ENTITLEMENTS[t] !== null && !existing.some((b) => b.leave_type === t)
+
+  // Try database-backed rules first
+  const dbRules = await fetchDbEntitlements()
+  let entitlements = { ...LEAVE_ENTITLEMENTS }
+
+  if (dbRules) {
+    for (const leaveType of Object.keys(LEAVE_ENTITLEMENTS)) {
+      if (leaveType === 'unpaid') continue
+      // Category-specific rule
+      const specific = dbRules.find((r) => r.leave_type === leaveType && r.employee_category === employeeCategory)
+      if (specific) { entitlements[leaveType] = Number(specific.entitled_days); continue }
+      // General rule
+      const general = dbRules.find((r) => r.leave_type === leaveType && r.employee_category === null)
+      if (general) { entitlements[leaveType] = Number(general.entitled_days); continue }
+    }
+  }
+
+  const missingTypes = Object.keys(entitlements).filter(
+    (t) => entitlements[t] !== null && !existing.some((b) => b.leave_type === t)
   )
 
   if (missingTypes.length > 0) {
@@ -53,7 +93,7 @@ export async function getEmployeeBalances(employeeId, employeeName, year = curre
       employee_name: employeeName,
       year,
       leave_type,
-      entitled_days: LEAVE_ENTITLEMENTS[leave_type],
+      entitled_days: entitlements[leave_type],
       used_days: 0,
     }))
     const { data: created, error: insertError } = await supabase

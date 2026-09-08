@@ -93,6 +93,7 @@ export default function OnboardingLinks() {
   const navigate = useNavigate()
   const { hasPermission, user } = useAuth()
   const canManage = hasPermission('hr.onboarding.manage')
+  const navigate = useNavigate()
 
   const [links, setLinks] = useState([])
   const [submissions, setSubmissions] = useState([])

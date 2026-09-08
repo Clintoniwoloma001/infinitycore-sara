@@ -77,4 +77,9 @@ export const PERMISSION_CATEGORIES = {
   admin: 'Administration',
   branches: 'Branches',
   reports: 'Reports',
+  bankone: 'BankOne Intelligence',
+  reconciliation: 'Reconciliation',
+  performance: 'Performance',
+  appraisal: 'Appraisal',
+  hr_config: 'HR Configuration',
 }
