@@ -16,12 +16,10 @@ import { createService } from './supabaseService'
 //   Personal = 5 days
 // ------------------------------------------------------------------
 export const LEAVE_ENTITLEMENTS = {
-  annual: 20,
-  sick: 10,
+  annual: 10,
   maternity: 90,
   examination: 5,
   paternity: 2,
-  personal: 5,
   unpaid: null, // no cap — always allowed, never deducted
 }
 
@@ -29,13 +27,11 @@ export const LEAVE_ENTITLEMENTS = {
 export const ANNUAL_CARRY_OVER_CAP = 5
 
 export const LEAVE_TYPE_LABELS = {
-  annual: 'Annual',
-  sick: 'Sick',
-  maternity: 'Maternity',
-  examination: 'Examination',
-  paternity: 'Paternity',
-  personal: 'Personal',
-  unpaid: 'Unpaid',
+  annual: 'Annual Leave',
+  maternity: 'Maternity Leave',
+  examination: 'Examination Leave',
+  paternity: 'Paternity Leave',
+  unpaid: 'Unpaid Leave',
 }
 
 const leaveBalances = createService('leave_balances')

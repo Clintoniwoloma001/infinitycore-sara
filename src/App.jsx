@@ -35,6 +35,7 @@ import BankOneImportCenter from './pages/BankOneImportCenter'
 import Reconciliation from './pages/Reconciliation'
 import Performance from './pages/Performance'
 import Settings from './pages/Settings'
+import OnboardingReview from './pages/OnboardingReview'
 
 const pageComponents = {
   Dashboard,
@@ -63,6 +64,7 @@ const pageComponents = {
   Reconciliation,
   Performance,
   Settings,
+  OnboardingReview,
 }
 
 function Protected({ children }) {
@@ -114,6 +116,7 @@ export default function App() {
           ))}
           <Route path="/customers/:id" element={<Protected><ProtectedModule route={{ path: '/customers', element: 'Customers', permissions: ['customers.read'] }} /></Protected>} />
           <Route path="/employees/:id" element={<Protected><ProtectedModule route={{ path: '/employees', element: 'EmployeeProfile', permissions: ['hr.employee.read'] }} /></Protected>} />
+          <Route path="/onboarding-review/:id" element={<Protected><ProtectedModule route={{ path: '/onboarding-links', element: 'OnboardingReview', permissions: ['hr.onboarding.read'] }} /></Protected>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </HashRouter>

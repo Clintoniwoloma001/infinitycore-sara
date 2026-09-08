@@ -14,8 +14,6 @@ export const LEAVE_TYPE_LABELS = {
   maternity: 'Maternity Leave',
   examination: 'Examination Leave',
   paternity: 'Paternity Leave',
-  sick: 'Sick Leave',
-  personal: 'Personal Leave',
   unpaid: 'Unpaid Leave',
 }
 
@@ -27,12 +25,10 @@ export const EMPLOYEE_CATEGORIES = {
 
 // Fallback defaults (used only if DB has no rules yet)
 export const FALLBACK_ENTITLEMENTS = {
-  annual: { normal_staff: 20, management_staff: 15, md: 20 },
+  annual: { normal_staff: 10, management_staff: 15, md: 20 },
   maternity: 90,
   examination: 5,
   paternity: 2,
-  sick: 10,
-  personal: 5,
   unpaid: null,
 }
 

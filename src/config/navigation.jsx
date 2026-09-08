@@ -10,7 +10,6 @@ import {
   Clock3,
   Database,
   FileSignature,
-  Landmark,
   LayoutDashboard,
   Link2,
   ListChecks,
@@ -31,9 +30,6 @@ export const routeConfig = [
     items: [
       { label: 'Dashboard', path: '/', icon: LayoutDashboard, element: 'Dashboard', permissions: [] },
       { label: 'BankOne Imports', path: '/bankone-imports', icon: Database, element: 'BankOneImportCenter', permissions: [PERMISSIONS.BANKONE_READ] },
-      { label: 'Customers', path: '/customers', icon: Users, element: 'Customers', permissions: [PERMISSIONS.CUSTOMERS_READ] },
-      { label: 'Loans', path: '/loans', icon: Landmark, element: 'Loans', permissions: [PERMISSIONS.LOANS_READ] },
-      { label: 'Repayments', path: '/repayments', icon: Wallet, element: 'Repayments', permissions: [PERMISSIONS.LOANS_READ] },
     ],
   },
   {

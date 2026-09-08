@@ -95,9 +95,14 @@ create table if not exists public.bankone_transactions (
   first_imported_batch_id uuid references public.bankone_import_batches(id) on delete set null,
   first_imported_at timestamptz default now(),
   last_updated_at timestamptz default now(),
-  created_at timestamptz default now(),
-  unique (source_system, transaction_reference) on conflict (transaction_reference) where transaction_reference is not null
+  created_at timestamptz default now()
 );
+
+-- Partial unique index: only enforce uniqueness when a reference exists.
+-- (ON CONFLICT belongs in INSERT statements, not table constraints.)
+create unique index if not exists idx_bankone_txn_unique_ref
+  on public.bankone_transactions (source_system, transaction_reference)
+  where transaction_reference is not null;
 
 create index if not exists idx_bankone_txn_ref on public.bankone_transactions(transaction_reference);
 create index if not exists idx_bankone_txn_employee on public.bankone_transactions(employee_id);
@@ -391,7 +396,7 @@ create index if not exists idx_recon_events_created on public.reconciliation_cas
 create table if not exists public.leave_rules (
   id uuid primary key default gen_random_uuid(),
   leave_type text not null check (leave_type in (
-    'annual', 'maternity', 'examination', 'paternity', 'sick', 'personal', 'unpaid'
+    'annual', 'maternity', 'examination', 'paternity', 'unpaid'
   )),
   employee_category text,                      -- normal_staff | management_staff | md | null = all
   entitled_days numeric(5, 1),
@@ -407,14 +412,12 @@ create table if not exists public.leave_rules (
 
 -- Seed the actual HR policy
 insert into public.leave_rules (leave_type, employee_category, entitled_days, description) values
-  ('annual', 'normal_staff', 20, 'Annual leave for normal staff'),
+  ('annual', 'normal_staff', 10, 'Annual leave for basic staff'),
   ('annual', 'management_staff', 15, 'Annual leave for management staff'),
   ('annual', 'md', 20, 'Annual leave for MD'),
   ('maternity', null, 90, 'Maternity leave — 3 months'),
   ('examination', null, 5, 'Examination leave'),
-  ('paternity', null, 2, 'Paternity leave'),
-  ('sick', null, 10, 'Sick leave'),
-  ('personal', null, 5, 'Personal leave')
+  ('paternity', null, 2, 'Paternity leave')
 on conflict do nothing;
 
 -- ============================================================
@@ -689,7 +692,7 @@ create policy "perf_adj update" on public.performance_adjustments
 -- ============================================================
 alter table public.leave_balances drop constraint if exists leave_balances_leave_type_check;
 alter table public.leave_balances add constraint leave_balances_leave_type_check
-  check (leave_type in ('annual','sick','maternity','paternity','examination','personal','unpaid'));
+  check (leave_type in ('annual','maternity','paternity','examination','unpaid'));
 
 -- ============================================================
 -- TRIGGERS — auto-generate case references
