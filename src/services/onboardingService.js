@@ -152,6 +152,30 @@ export const onboardingService = {
     return data
   },
 
+  async archiveLink(id, userId) {
+    const { data, error } = await supabase
+      .from('employee_onboarding_links')
+      .update({ is_archived: true, archived_at: new Date().toISOString(), archived_by: userId || null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    logAction({ action: 'ONBOARDING_LINK_ARCHIVED', entityType: 'OnboardingLink', entityId: id, details: 'Onboarding link archived' })
+    return data
+  },
+
+  async restoreLink(id) {
+    const { data, error } = await supabase
+      .from('employee_onboarding_links')
+      .update({ is_archived: false, archived_at: null, archived_by: null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    logAction({ action: 'ONBOARDING_LINK_RESTORED', entityType: 'OnboardingLink', entityId: id, details: 'Onboarding link restored from archive' })
+    return data
+  },
+
   async getDetails(token) {
     const { data, error } = await supabase.rpc('get_onboarding_link_details', { p_token: token, p_mark_opened: true })
     if (error) throw error
@@ -198,6 +222,42 @@ export const onboardingService = {
       .order('submitted_at', { ascending: false })
     if (error) throw error
     return data || []
+  },
+
+  // ---- Onboarding field-level corrections (Phase 8) ----
+
+  async listOnboardingCorrections(submissionId) {
+    const { data, error } = await supabase
+      .from('onboarding_corrections')
+      .select('*')
+      .eq('submission_id', submissionId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return data || []
+  },
+
+  async requestOnboardingCorrection(submissionId, corrections) {
+    const { data, error } = await supabase.rpc('request_onboarding_correction', { p_submission_id: submissionId, p_corrections: corrections })
+    if (error) throw error
+    return data
+  },
+
+  async submitOnboardingCorrection(correctionId, correctedValue) {
+    const { data, error } = await supabase.rpc('submit_onboarding_correction', { p_correction_id: correctionId, p_corrected_value: correctedValue })
+    if (error) throw error
+    return data
+  },
+
+  async approveOnboardingCorrection(correctionId) {
+    const { data, error } = await supabase.rpc('approve_onboarding_correction', { p_correction_id: correctionId })
+    if (error) throw error
+    return data
+  },
+
+  async rejectOnboardingCorrection(correctionId, reason) {
+    const { data, error } = await supabase.rpc('reject_onboarding_correction', { p_correction_id: correctionId, p_reason: reason })
+    if (error) throw error
+    return data
   },
 }
 

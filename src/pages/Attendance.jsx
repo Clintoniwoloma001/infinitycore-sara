@@ -1,10 +1,49 @@
-import React, { useEffect, useState, useRef } from 'react'
-import { CalendarClock, Clock, LogIn, LogOut, MapPin, AlertCircle, X, Loader2, Send, CheckCircle2, Clock3, Navigation, ShieldCheck, AlertTriangle } from 'lucide-react'
+import React, { useEffect, useState, useMemo } from 'react'
+import { Calendar, TrendingUp, Clock, CheckCircle2, AlertTriangle, XCircle, Activity } from 'lucide-react'
 import { attendanceService } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState } from '../components/PageStates'
-import { date, status } from './hrShared'
+import ClockCard from '../components/attendance/ClockCard'
+import TrendChart from '../components/attendance/TrendChart'
+import SaraBriefing from '../components/attendance/SaraBriefing'
+
+const FILTERS = [
+  { key: 'today', label: 'Today' },
+  { key: 'week', label: 'This Week' },
+  { key: 'month', label: 'This Month' },
+  { key: 'prev_month', label: 'Previous Month' },
+  { key: 'quarter', label: 'Quarter' },
+]
+
+function dateRange(filter) {
+  const now = new Date()
+  const today = now.toISOString().slice(0, 10)
+  switch (filter) {
+    case 'today':
+      return { start: today, end: today }
+    case 'week': {
+      const day = now.getDay() || 7
+      const monday = new Date(now)
+      monday.setDate(now.getDate() - day + 1)
+      const sunday = new Date(monday)
+      sunday.setDate(monday.getDate() + 6)
+      return { start: monday.toISOString().slice(0, 10), end: sunday.toISOString().slice(0, 10) }
+    }
+    case 'month':
+      return { start: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10), end: new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10) }
+    case 'prev_month': {
+      const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      return { start: prev.toISOString().slice(0, 10), end: new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10) }
+    }
+    case 'quarter': {
+      const q = Math.floor(now.getMonth() / 3)
+      return { start: new Date(now.getFullYear(), q * 3, 1).toISOString().slice(0, 10), end: new Date(now.getFullYear(), q * 3 + 3, 0).toISOString().slice(0, 10) }
+    }
+    default:
+      return { start: today, end: today }
+  }
+}
 
 const LATE_REASONS = [
   { key: 'traffic', label: 'Traffic' },
@@ -38,36 +77,7 @@ export default function Attendance() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState({ kind: '', text: '' })
-  const [geo, setGeo] = useState(null)
-  const [geoStatus, setGeoStatus] = useState(null) // { inside, nearest, distance, noGeofences }
-  const [geoLoading, setGeoLoading] = useState(false)
-  const [lateModal, setLateModal] = useState(null)
-  const [issueModal, setIssueModal] = useState(false)
-  const [geofenceBlocked, setGeofenceBlocked] = useState(null)
-  const [currentTime, setCurrentTime] = useState(new Date())
-  const [workingDuration, setWorkingDuration] = useState('')
-  const [clockAnim, setClockAnim] = useState(false)
-
-  const tickRef = useRef(null)
-
-  useEffect(() => {
-    tickRef.current = setInterval(() => setCurrentTime(new Date()), 1000)
-    return () => clearInterval(tickRef.current)
-  }, [])
-
-  useEffect(() => {
-    if (record?.clock_in && !record?.clock_out) {
-      const update = () => {
-        const diff = Date.now() - new Date(record.clock_in).getTime()
-        const h = Math.floor(diff / 3600000)
-        const m = Math.floor((diff % 3600000) / 60000)
-        setWorkingDuration(`${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m`)
-      }
-      update()
-      const id = setInterval(update, 1000)
-      return () => clearInterval(id)
-    }
-  }, [record])
+  const [filter, setFilter] = useState('month')
 
   const load = async () => {
     setLoading(true)
@@ -77,7 +87,8 @@ export default function Attendance() {
       if (emp) {
         const today = await attendanceService.getToday(emp.id)
         setRecord(today)
-        const hist = await attendanceService.getHistory(emp.id, 30)
+        const range = dateRange(filter)
+        const hist = await attendanceService.getHistory(emp.id, range)
         setHistory(hist)
       }
       try {
@@ -95,110 +106,17 @@ export default function Attendance() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [filter])
 
-  const isLate = () => {
-    if (!config) return false
-    const now = new Date()
-    const [expH, expM] = (config.expected_start_time || '08:00').split(':').map(Number)
-    const grace = config.grace_period_minutes || 15
-    const lateThreshold = new Date()
-    lateThreshold.setHours(expH, expM + grace, 0, 0)
-    return now > lateThreshold
-  }
-
-  const isEarlyDeparture = () => {
-    if (!config) return false
-    const now = new Date()
-    const [expH, expM] = (config.expected_end_time || '17:00').split(':').map(Number)
-    const threshold = new Date()
-    threshold.setHours(expH, expM, 0, 0)
-    const earlyThreshold = new Date(threshold)
-    earlyThreshold.setMinutes(earlyThreshold.getMinutes() - (config.early_departure_threshold_minutes || 30))
-    return now < earlyThreshold
-  }
-
-  const requestLocation = async () => {
-    if (!config?.geofence_enabled) return { lat: null, lng: null, skip: true }
-    setGeoLoading(true)
-    try {
-      const pos = await attendanceEngineService.getCurrentPosition()
-      setGeo({ lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy })
-      const result = attendanceEngineService.verifyLocation(pos.lat, pos.lng, geofences)
-      setGeoStatus(result)
-      return { lat: pos.lat, lng: pos.lng, ...result }
-    } catch (e) {
-      setGeoStatus({ inside: false, error: e.message, noGeofences: false })
-      return { lat: null, lng: null, inside: false, error: e.message }
-    } finally {
-      setGeoLoading(false)
-    }
-  }
-
-  const doClockIn = async () => {
+  const doClockIn = async (geo) => {
     setBusy(true)
     setMessage({})
     setClockAnim(true)
     setGeofenceBlocked(null)
     try {
-      // Get location if geofencing is enabled
-      let locResult = { lat: null, lng: null, skip: true }
-      if (config?.geofence_enabled) {
-        locResult = await requestLocation()
-        if (locResult.error) {
-          setMessage({ kind: 'error', text: `Unable to verify location: ${locResult.error}. Please enable location permissions and try again.` })
-          setBusy(false)
-          setClockAnim(false)
-          return
-        }
-        if (!locResult.inside && !locResult.noGeofences) {
-          setGeofenceBlocked({
-            nearest: locResult.nearest,
-            distance: locResult.distance,
-            radius: locResult.nearest?.radius_meters,
-          })
-          setMessage({ kind: 'error', text: "You're outside the authorized attendance area." })
-          setBusy(false)
-          setClockAnim(false)
-          return
-        }
-        if (locResult.noGeofences) {
-          setMessage({ kind: 'error', text: 'No active geofences configured. Contact HR to set up attendance locations.' })
-          setBusy(false)
-          setClockAnim(false)
-          return
-        }
-      }
-
-      const r = await attendanceEngineService.clockInWithGeofence({
-        employeeId: employee.id,
-        lat: locResult.lat,
-        lng: locResult.lng,
-        geofences,
-        config,
-      })
-
-      if (r.blocked) {
-        setGeofenceBlocked({ nearest: r.nearest, distance: r.distance, radius: r.nearest?.radius_meters })
-        setMessage({ kind: 'error', text: r.message })
-      } else {
-        setRecord(r.data)
-        setMessage({ kind: 'ok', text: `Clock-in successful at ${new Date(r.data.clock_in).toLocaleTimeString()}. ${config?.geofence_enabled ? 'GPS Verified' : ''}` })
-
-        // Check if late
-        if (isLate() && config) {
-          const [expH, expM] = config.expected_start_time.split(':').map(Number)
-          const expTime = new Date()
-          expTime.setHours(expH, expM, 0, 0)
-          setLateModal({
-            attendanceId: r.data.id,
-            employeeId: employee.id,
-            expectedTime: expTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-            actualTime: new Date(r.data.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          })
-        }
-        await load()
-      }
+      const r = await attendanceService.clockIn(geo)
+      setMessage({ kind: 'ok', text: `Clocked in at ${new Date(r.clock_in_at).toLocaleTimeString()}.${r.late_minutes > 0 ? ` You are ${r.late_minutes} minutes late.` : ''}` })
+      await load()
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Clock in failed' })
     } finally {
@@ -207,20 +125,13 @@ export default function Attendance() {
     }
   }
 
-  const doClockOut = async () => {
+  const doClockOut = async (geo) => {
     setBusy(true)
     setMessage({})
     setClockAnim(true)
     try {
-      const r = await attendanceService.clockOut(record?.id)
-      setRecord(r)
-
-      // Check early departure
-      if (isEarlyDeparture() && config) {
-        setMessage({ kind: 'ok', text: `Clocked out at ${new Date(r.clock_out).toLocaleTimeString()}. Note: You're leaving before your scheduled time.` })
-      } else {
-        setMessage({ kind: 'ok', text: `Clocked out at ${new Date(r.clock_out).toLocaleTimeString()}. Hours worked: ${r.work_hours}.` })
-      }
+      const r = await attendanceService.clockOut(record?.id, geo)
+      setMessage({ kind: 'ok', text: `Clocked out at ${new Date(r.clock_out_at).toLocaleTimeString()}. Worked ${r.work_hours} hours.` })
       await load()
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Clock out failed' })
@@ -269,6 +180,36 @@ export default function Attendance() {
     }
   }
 
+  // Compute stats
+  const stats = useMemo(() => {
+    if (!history.length) return { present: 0, absent: 0, late: 0, onTime: 0, earlyDep: 0, avgHours: 0, pct: 0, streak: 0 }
+    const present = history.filter((r) => r.clock_in).length
+    const late = history.filter((r) => r.status === 'late').length
+    const onTime = history.filter((r) => r.status === 'present' && r.clock_in).length
+    const earlyDep = history.filter((r) => r.status === 'early_exit').length
+    const withHours = history.filter((r) => r.work_hours != null)
+    const avgHours = withHours.length > 0 ? (withHours.reduce((s, r) => s + parseFloat(r.work_hours), 0) / withHours.length).toFixed(1) : 0
+    const workingDays = history.length
+    const pct = workingDays > 0 ? Math.round((present / workingDays) * 100) : 0
+    // Streak: consecutive days with clock_in, most recent first
+    let streak = 0
+    for (const r of history) {
+      if (r.clock_in) streak++
+      else break
+    }
+    return { present, absent: workingDays - present, late, onTime, earlyDep, avgHours, pct, streak }
+  }, [history])
+
+  // Trend data for chart
+  const trendData = useMemo(() => {
+    const days = [...history].reverse().slice(-14)
+    return days.map((r) => ({
+      label: new Date(r.attendance_date).toLocaleDateString('en-US', { weekday: 'short' }).charAt(0),
+      value: r.work_hours ? parseFloat(r.work_hours) : 0,
+      color: r.status === 'late' ? '#f59e0b' : r.status === 'early_exit' ? '#f97316' : r.clock_in ? '#009944' : '#e2e8f0',
+    }))
+  }, [history])
+
   if (loading) return <LoadingState label="Loading attendance..." />
 
   if (!employee) {
@@ -283,213 +224,87 @@ export default function Attendance() {
     )
   }
 
-  const open = record && !record.clock_out
-  const greeting = (() => {
-    const h = new Date().getHours()
-    if (h < 12) return 'Good morning'
-    if (h < 17) return 'Good afternoon'
-    return 'Good evening'
-  })()
-
   return (
-    <div>
-      {/* Greeting */}
-      <div className="mb-6">
-        <h2 className="text-2xl font-semibold text-slate-900">{greeting}, {employee.full_name?.split(' ')[0] || name?.split(' ')[0] || 'there'}</h2>
-        <p className="text-sm text-slate-500 mt-1">{new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
-      </div>
-
-      {message.text && (
-        <div className={`mb-5 rounded-lg border p-4 text-sm animate-[fadeIn_0.2s_ease] ${message.kind === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`}>
-          {message.text}
-        </div>
-      )}
-
-      {/* Geofence blocked panel */}
-      {geofenceBlocked && (
-        <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 p-5 animate-[fadeIn_0.2s_ease]">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="w-6 h-6 text-rose-600 flex-shrink-0 mt-0.5" />
-            <div>
-              <h3 className="font-semibold text-rose-900">You're outside the authorized attendance area.</h3>
-              <div className="mt-2 space-y-1 text-sm text-rose-700">
-                <p>Required location: <span className="font-medium">{geofenceBlocked.nearest?.name || 'Unknown'}</span></p>
-                <p>Allowed radius: <span className="font-medium">{geofenceBlocked.radius}m</span></p>
-                <p>Approximate distance: <span className="font-medium">{geofenceBlocked.distance ? `${geofenceBlocked.distance}m away` : 'Unknown'}</span></p>
-              </div>
-              <p className="text-xs text-rose-500 mt-2">Move to an authorized location to clock in, or contact HR for an exception.</p>
-            </div>
-          </div>
-        </div>
-      )}
+    <div className="max-w-5xl">
+      <h2 className="text-2xl font-semibold text-slate-900 mb-1">My Attendance</h2>
+      <p className="text-sm text-slate-500 mb-6">Clock in, clock out, and track your attendance.</p>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        {/* Clock In/Out Card */}
-        <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-6">
-          <div className="flex items-start justify-between gap-4 mb-6">
-            <div>
-              <h3 className="font-semibold text-slate-900">{employee.full_name}</h3>
-              <p className="text-sm text-slate-500">{employee.position || 'Staff'} {employee.department ? `· ${employee.department}` : ''}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-slate-400">Current time</p>
-              <p className="text-xl font-bold text-slate-900 tabular-nums">{currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</p>
-            </div>
-          </div>
-
-          {/* Geofence status indicator */}
-          {config?.geofence_enabled && (
-            <div className="mb-4 flex items-center gap-2 text-sm">
-              {geoLoading ? (
-                <span className="flex items-center gap-1.5 text-slate-500"><Loader2 className="w-4 h-4 animate-spin" /> Detecting location...</span>
-              ) : geoStatus?.inside ? (
-                <span className="flex items-center gap-1.5 text-emerald-600"><ShieldCheck className="w-4 h-4" /> GPS Verified · {geoStatus.nearest?.name}</span>
-              ) : geoStatus?.error ? (
-                <span className="flex items-center gap-1.5 text-amber-600"><AlertCircle className="w-4 h-4" /> {geoStatus.error}</span>
-              ) : (
-                <span className="flex items-center gap-1.5 text-slate-400"><MapPin className="w-4 h-4" /> Geofencing enabled — location will be checked on clock-in</span>
-              )}
-            </div>
-          )}
-
-          {/* Central Clock Control */}
-          <div className="flex flex-col items-center py-6">
-            {open && (
-              <div className="mb-4 text-center">
-                <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-medium">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  Clocked In
-                </div>
-                <p className="text-2xl font-bold text-slate-900 mt-2 tabular-nums">
-                  {new Date(record.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                </p>
-                <p className="text-sm text-slate-500 mt-1">Working for: <span className="font-medium text-slate-700 tabular-nums">{workingDuration}</span></p>
-                {record.verification_method === 'GPS' && (
-                  <p className="text-xs text-emerald-600 mt-1 flex items-center justify-center gap-1"><ShieldCheck className="w-3 h-3" /> GPS Verified</p>
-                )}
-              </div>
-            )}
-
-            {!record && (
-              <button
-                onClick={doClockIn}
-                disabled={busy}
-                className={`relative w-40 h-40 rounded-full bg-gradient-to-br from-[#009944] to-[#007a36] text-white font-semibold text-lg flex flex-col items-center justify-center shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-300 disabled:opacity-50 ${clockAnim ? 'scale-95' : ''}`}
-              >
-                {busy ? <Loader2 className="w-8 h-8 animate-spin" /> : <LogIn className="w-8 h-8 mb-1" />}
-                {busy ? 'Please wait' : 'Clock In'}
-              </button>
-            )}
-
-            {open && (
-              <button
-                onClick={doClockOut}
-                disabled={busy}
-                className={`relative w-40 h-40 rounded-full bg-gradient-to-br from-rose-500 to-rose-700 text-white font-semibold text-lg flex flex-col items-center justify-center shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-300 disabled:opacity-50 ${clockAnim ? 'scale-95' : ''}`}
-              >
-                {busy ? <Loader2 className="w-8 h-8 animate-spin" /> : <LogOut className="w-8 h-8 mb-1" />}
-                {busy ? 'Please wait' : 'Clock Out'}
-              </button>
-            )}
-
-            {record && record.clock_out && (
-              <div className="flex flex-col items-center gap-2">
-                <div className="w-40 h-40 rounded-full bg-slate-100 flex flex-col items-center justify-center text-slate-500">
-                  <CheckCircle2 className="w-10 h-10 mb-1 text-emerald-500" />
-                  <span className="font-medium text-sm">Shift Complete</span>
-                </div>
-                <p className="text-sm text-slate-500 mt-2">{record.work_hours || 0} hours worked</p>
-              </div>
-            )}
-          </div>
-
-          {/* Clock In/Out times */}
-          <div className="grid grid-cols-2 gap-4 mt-4">
-            <div className="rounded-xl bg-slate-50 p-4">
-              <p className="text-xs text-slate-400 flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> Clock In</p>
-              <p className="text-lg font-semibold text-slate-900 mt-1 tabular-nums">{record?.clock_in ? new Date(record.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</p>
-            </div>
-            <div className="rounded-xl bg-slate-50 p-4">
-              <p className="text-xs text-slate-400 flex items-center gap-1"><CalendarClock className="w-3.5 h-3.5" /> Clock Out</p>
-              <p className="text-lg font-semibold text-slate-900 mt-1 tabular-nums">{record?.clock_out ? new Date(record.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : open ? 'In progress' : '—'}</p>
-            </div>
-          </div>
-
-          {/* Status + Actions */}
-          <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-100">
-            <div className="flex items-center gap-3">
-              {record && <span className="text-sm">{status(record.status)}</span>}
-              {!record && <span className="text-sm text-slate-400">Not clocked in today</span>}
-              {config?.geofence_enabled && !geo && (
-                <button onClick={requestLocation} className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-[#009944]">
-                  <Navigation className="w-4 h-4" /> Check location
-                </button>
-              )}
-              {geo && !config?.geofence_enabled && (
-                <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
-                  <MapPin className="w-4 h-4" /> Location attached
-                </span>
-              )}
-            </div>
-            <button
-              onClick={() => setIssueModal(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium hover:bg-slate-50"
-            >
-              <AlertCircle className="w-3.5 h-3.5" /> Report Attendance Issue
-            </button>
-          </div>
-          <p className="text-xs text-slate-400 mt-3">Official clock-in/out times are stamped by the server — the browser clock is never trusted.</p>
+        {/* Clock card — takes 2 columns */}
+        <div className="lg:col-span-2">
+          <ClockCard
+            record={record}
+            employee={employee}
+            onClockIn={doClockIn}
+            onClockOut={doClockOut}
+            busy={busy}
+            message={message}
+          />
         </div>
 
-        {/* This Week */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5">
-          <h3 className="font-semibold text-slate-900 mb-3">This week</h3>
-          {history.length === 0 && <p className="text-sm text-slate-400">No records yet</p>}
-          <ul className="space-y-2">
-            {history.slice(0, 7).map((r) => (
-              <li key={r.id} className="flex items-center justify-between text-sm py-1.5 border-b border-slate-50 last:border-0">
-                <span className="text-slate-600">{date(r.attendance_date)}</span>
-                <span className="text-xs">{status(r.status)}</span>
-              </li>
-            ))}
-          </ul>
-          {config && (
-            <div className="mt-4 pt-3 border-t border-slate-100">
-              <p className="text-xs text-slate-400 mb-1">Expected start: <span className="font-medium text-slate-600">{config.expected_start_time}</span></p>
-              <p className="text-xs text-slate-400">Grace period: <span className="font-medium text-slate-600">{config.grace_period_minutes} min</span></p>
-              {config.geofence_enabled && <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> Geofencing enabled</p>}
-            </div>
-          )}
+        {/* SARA briefing */}
+        <div>
+          <SaraBriefing records={history} isManager={false} />
         </div>
       </div>
 
-      {/* Recent History */}
-      <h3 className="text-lg font-semibold text-slate-900 mb-3">Recent history</h3>
-      {history.length === 0 && <EmptyState title="No attendance history" />}
-      {history.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+      {/* Stats grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
+        <StatCard icon={CheckCircle2} label="Days Present" value={stats.present} color="text-emerald-600" />
+        <StatCard icon={XCircle} label="Days Absent" value={stats.absent} color="text-rose-600" />
+        <StatCard icon={AlertTriangle} label="Late Days" value={stats.late} color="text-amber-600" />
+        <StatCard icon={Clock} label="On-Time" value={stats.onTime} color="text-blue-600" />
+        <StatCard icon={Activity} label="Early Dep." value={stats.earlyDep} color="text-orange-600" />
+        <StatCard icon={TrendingUp} label="Avg Hours" value={stats.avgHours} color="text-violet-600" />
+        <StatCard icon={Calendar} label="Attendance %" value={`${stats.pct}%`} color="text-[#009944]" />
+      </div>
+
+      {/* Trend chart */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <h3 className="text-sm font-semibold text-slate-700 mb-4">Attendance Trend — Hours Worked</h3>
+        <TrendChart data={trendData} />
+      </div>
+
+      {/* Filter + History table */}
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-slate-900">Attendance History</h3>
+        <div className="flex gap-1.5">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setFilter(f.key)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${filter === f.key ? 'bg-[#009944] text-white' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {history.length === 0 ? (
+        <EmptyState title="No attendance records" description="Your attendance history will appear here once you start clocking in." />
+      ) : (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-left">
               <tr>
-                <th className="px-6 py-3 font-medium">Date</th>
-                <th className="px-6 py-3 font-medium">Clock In</th>
-                <th className="px-6 py-3 font-medium">Clock Out</th>
-                <th className="px-6 py-3 font-medium">Hours</th>
-                <th className="px-6 py-3 font-medium">Source</th>
-                <th className="px-6 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium">Date</th>
+                <th className="px-5 py-3 font-medium">Clock In</th>
+                <th className="px-5 py-3 font-medium">Clock Out</th>
+                <th className="px-5 py-3 font-medium">Hours</th>
+                <th className="px-5 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium">Late</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {history.map((r) => (
-                <tr key={r.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-3 text-slate-700">{date(r.attendance_date)}</td>
-                  <td className="px-6 py-3 text-slate-700 tabular-nums">{r.clock_in ? new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                  <td className="px-6 py-3 text-slate-700 tabular-nums">{r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                  <td className="px-6 py-3 text-slate-700">{r.work_hours || '—'}</td>
-                  <td className="px-6 py-3">
-                    <SourceBadge source={r.source_detail || r.source} />
-                  </td>
-                  <td className="px-6 py-3">{status(r.status)}</td>
+                <tr key={r.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-5 py-3 text-slate-700">{new Date(r.attendance_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                  <td className="px-5 py-3 text-slate-700 tabular-nums">{r.clock_in ? new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                  <td className="px-5 py-3 text-slate-700 tabular-nums">{r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                  <td className="px-5 py-3 text-slate-700 tabular-nums">{r.work_hours || '—'}</td>
+                  <td className="px-5 py-3"><StatusPill status={r.status} /></td>
+                  <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -600,63 +415,29 @@ function LateModal({ data, onSubmit, onClose, busy }) {
   )
 }
 
-// ============================================================
-// ATTENDANCE ISSUE MODAL
-// ============================================================
-function IssueModal({ onSubmit, onClose, busy }) {
-  const [issueType, setIssueType] = useState('')
-  const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10))
-  const [explanation, setExplanation] = useState('')
-
+function StatCard({ icon: Icon, label, value, color }) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 animate-[fadeIn_0.15s_ease]">
-      <div className="bg-white rounded-xl w-full max-w-md p-6 shadow-xl">
-        <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center">
-              <AlertCircle className="w-5 h-5 text-rose-600" />
-            </div>
-            <h3 className="text-lg font-semibold text-slate-900">Report Attendance Issue</h3>
-          </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Date</label>
-            <input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Issue Type</label>
-            <select value={issueType} onChange={(e) => setIssueType(e.target.value)} className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]">
-              <option value="">Select issue type...</option>
-              {ISSUE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Explanation</label>
-            <textarea
-              className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
-              rows={3}
-              value={explanation}
-              onChange={(e) => setExplanation(e.target.value)}
-              placeholder="Describe what happened..."
-            />
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-2 mt-5">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
-          <button
-            onClick={() => onSubmit({ date: issueDate, type: issueType, explanation })}
-            disabled={busy || !issueType}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50"
-          >
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            Submit Issue
-          </button>
-        </div>
-      </div>
+    <div className="bg-white rounded-xl border border-slate-200 p-3.5">
+      <Icon className={`w-4 h-4 ${color}`} />
+      <div className={`text-xl font-bold ${color} mt-1.5`}>{value}</div>
+      <div className="text-xs text-slate-400 mt-0.5">{label}</div>
     </div>
+  )
+}
+
+function StatusPill({ status }) {
+  const styles = {
+    present: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    late: 'bg-amber-50 text-amber-700 border-amber-200',
+    absent: 'bg-rose-50 text-rose-700 border-rose-200',
+    early_exit: 'bg-orange-50 text-orange-700 border-orange-200',
+    on_leave: 'bg-blue-50 text-blue-700 border-blue-200',
+    corrected: 'bg-violet-50 text-violet-700 border-violet-200',
+    incomplete: 'bg-slate-100 text-slate-600 border-slate-200',
+  }
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border capitalize ${styles[status] || styles.incomplete}`}>
+      {status.replace(/_/g, ' ')}
+    </span>
   )
 }

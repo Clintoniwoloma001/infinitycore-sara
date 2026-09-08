@@ -42,18 +42,55 @@ export default function HRJobs() {
     load()
   }, [])
 
+  const [formError, setFormError] = useState('')
+  const [formSuccess, setFormSuccess] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
   const handleSubmit = async (e) => {
     e.preventDefault()
+    setFormError('')
+
+    // Validate required fields
+    if (!formData.job_title?.trim()) { setFormError('Job title is required.'); return }
+    if (!formData.department?.trim()) { setFormError('Department is required.'); return }
+    if (!formData.description?.trim()) { setFormError('Job description is required.'); return }
+    if (!formData.employment_type) { setFormError('Employment type is required.'); return }
+
+    // Validate numeric fields
+    const expYears = formData.experience_years ? parseInt(formData.experience_years) : null
+    if (expYears !== null && isNaN(expYears)) { setFormError('Experience years must be a valid number.'); return }
+    const salaryMin = formData.salary_min ? parseFloat(formData.salary_min) : null
+    const salaryMax = formData.salary_max ? parseFloat(formData.salary_max) : null
+    if (salaryMin !== null && isNaN(salaryMin)) { setFormError('Minimum salary must be a valid number.'); return }
+    if (salaryMax !== null && isNaN(salaryMax)) { setFormError('Maximum salary must be a valid number.'); return }
+    if (salaryMin !== null && salaryMax !== null && salaryMin > salaryMax) { setFormError('Minimum salary cannot exceed maximum salary.'); return }
+
+    setSubmitting(true)
     try {
-      const { user } = await supabase.auth.getUser()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { setFormError('Authentication required. Please sign in again.'); return }
+
       const { data, error } = await supabase
         .from('hr_jobs')
-        .insert([{ ...formData, created_by: user.id, status: 'draft' }])
+        .insert([{
+          job_title: formData.job_title.trim(),
+          department: formData.department.trim(),
+          location: formData.location?.trim() || null,
+          employment_type: formData.employment_type,
+          experience_years: expYears,
+          salary_min: salaryMin,
+          salary_max: salaryMax,
+          description: formData.description.trim(),
+          requirements: formData.requirements?.trim() || null,
+          created_by: user.id,
+          status: 'draft',
+        }])
         .select()
 
       if (error) throw error
       setJobs([data[0], ...jobs])
       setShowForm(false)
+      setFormSuccess('Job posting created successfully!')
       setFormData({
         job_title: '',
         department: '',
@@ -65,8 +102,12 @@ export default function HRJobs() {
         description: '',
         requirements: '',
       })
+      setTimeout(() => setFormSuccess(''), 4000)
     } catch (e) {
-      console.error('Failed to create job:', e)
+      const msg = e?.message || 'Failed to create job posting. Please try again.'
+      setFormError(msg.includes('policy') ? 'Not authorized to create job postings. Contact your administrator.' : msg)
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -87,6 +128,11 @@ export default function HRJobs() {
 
   return (
     <div>
+      {formSuccess && (
+        <div className="mb-4 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-700 flex items-center gap-2">
+          ✓ {formSuccess}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
@@ -188,6 +234,7 @@ export default function HRJobs() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
             <h3 className="text-xl font-bold text-slate-900 mb-6">Create New Job Posting</h3>
+            {formError && <div className="mb-4 rounded-lg bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">{formError}</div>}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <input
@@ -246,9 +293,10 @@ export default function HRJobs() {
               <div className="flex gap-3 pt-4">
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition"
+                  disabled={submitting}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-60"
                 >
-                  Create Job
+                  {submitting ? 'Creating...' : 'Create Job'}
                 </button>
                 <button
                   type="button"

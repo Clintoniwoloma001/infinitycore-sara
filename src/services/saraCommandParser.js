@@ -74,6 +74,26 @@ export function parseSaraCommand(raw) {
     return { intent: 'SHOW_PENDING', filters: {} }
   }
 
+  // Onboarding reviews
+  if (/onboarding.*review|review.*onboarding|pending.*onboarding|onboarding.*pending/i.test(text)) {
+    return { intent: 'PENDING_ONBOARDING', filters: {} }
+  }
+
+  // Active employees count
+  if (/how many.*(active.*employee|employee)|active.*employee.*count/i.test(text)) {
+    return { intent: 'ACTIVE_EMPLOYEES', filters: {} }
+  }
+
+  // Interviews today
+  if (/interview.*today|today.*interview|scheduled.*today/i.test(text)) {
+    return { intent: 'INTERVIEWS_TODAY', filters: {} }
+  }
+
+  // Pending users/approvals
+  if (/pending.*user|user.*pending|new.*signup|new.*user.*pending/i.test(text)) {
+    return { intent: 'PENDING_USERS', filters: {} }
+  }
+
   if (/\b(open|show me|go to|take me to|navigate to|switch to)\b/i.test(text) && text.split(/\s+/).length < 10) {
     const target = extractNavigateTarget(text)
     if (target) return { intent: 'NAVIGATE', filters: { target } }

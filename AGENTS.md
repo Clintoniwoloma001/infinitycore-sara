@@ -25,6 +25,18 @@ credentials arrive; the platform file overrides them (listed last in `env_file:`
   so the preview root URL serves the app correctly.
 - `server.host: true` + `allowedHosts: true` so the preview's external hostname works.
 
+## Onboarding Review Center (Phase 8)
+- Full-screen review workspace at `src/components/review/OnboardingReviewCenter.jsx`
+- Replaces the old compact `OnboardingReviewModal.jsx` (still present, unused)
+- Mirrors all 10 sections of `OnboardingForm.jsx` via `src/components/review/sectionConfig.js`
+- Field-level correction requests stored in `onboarding_corrections` table (Phase 8 migration)
+- Guarantor corrections use the existing Phase 7 `guarantor_corrections` table
+- Correction workflow: HR requests → candidate provides value → HR submits → HR approves/rejects
+- Approved corrections update the submission payload (active value) server-side via RPC
+- Approval is blocked when unresolved corrections exist (both frontend + server-side)
+- Storage security fix: removed anon read on guarantor documents (was exposing sensitive docs)
+- Migration file: `schema_phase8_onboarding_corrections.sql` (idempotent, additive)
+
 ## Verification
 - `curl -sf http://localhost:3000/` returns the Vite-served HTML with `/src/main.jsx`.
 - `curl -sf -H "Host: external-preview.example.com" http://localhost:3000/` must also

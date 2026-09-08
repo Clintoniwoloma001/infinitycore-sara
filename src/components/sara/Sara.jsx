@@ -379,7 +379,7 @@ export default function Sara() {
           <div className="px-4 py-3 bg-[#0a0b0d] text-white flex items-center justify-between shrink-0">
             <div>
               <div className="font-semibold text-sm flex items-center gap-1.5"><Sparkles className="w-4 h-4 text-[#FF8C00]" /> SARA</div>
-              <div className="text-[11px] text-white/50">Smart Automated Reporting &amp; Analysis</div>
+              <div className="text-[11px] text-white/50">Smart Automated Reporting &amp; Approval Assistant</div>
             </div>
             <div className="flex items-center gap-1">
               <button onClick={() => updateSettings({ voiceOn: !settings.voiceOn })} title={settings.voiceOn ? 'Voice mode on' : 'Voice mode off'} className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10">

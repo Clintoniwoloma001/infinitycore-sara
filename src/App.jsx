@@ -31,15 +31,10 @@ import Attendance from './pages/Attendance'
 import AttendanceManagement from './pages/AttendanceManagement'
 import EmployeeProfile from './pages/EmployeeProfile'
 import DataImport from './pages/DataImport'
-import BankOneImportCenter from './pages/BankOneImportCenter'
-import Reconciliation from './pages/Reconciliation'
-import Performance from './pages/Performance'
-import Settings from './pages/Settings'
-import OnboardingReview from './pages/OnboardingReview'
+import HRQueries from './pages/HRQueries'
+import Appraisals from './pages/Appraisals'
 import WorkManagement from './pages/WorkManagement'
-import AttendanceTerminal from './pages/AttendanceTerminal'
-import OnboardingFlow from './components/OnboardingFlow'
-import { supabase } from './supabaseClient'
+import PlatformSettings from './pages/PlatformSettings'
 
 const pageComponents = {
   Dashboard,
@@ -64,13 +59,10 @@ const pageComponents = {
   Attendance,
   AttendanceManagement,
   DataImport,
-  BankOneImportCenter,
-  Reconciliation,
-  Performance,
-  Settings,
-  OnboardingReview,
+  HRQueries,
+  Appraisals,
   WorkManagement,
-  AttendanceTerminal,
+  PlatformSettings,
 }
 
 function Protected({ children }) {

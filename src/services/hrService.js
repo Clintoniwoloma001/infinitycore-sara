@@ -172,6 +172,28 @@ export const hrService = {
     return data
   },
 
+  async updateInterview(interviewId, updates) {
+    const { data, error } = await supabase
+      .from('hr_interviews')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', interviewId)
+      .select()
+
+    if (error) throw error
+    return data[0]
+  },
+
+  async getInterviewById(interviewId) {
+    const { data, error } = await supabase
+      .from('hr_interviews')
+      .select('*')
+      .eq('id', interviewId)
+      .single()
+
+    if (error) throw error
+    return data
+  },
+
   async submitInterviewFeedback(interviewId, feedback, rating) {
     const { user } = await supabase.auth.getUser()
     const { data, error } = await supabase
