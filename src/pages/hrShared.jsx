@@ -8,6 +8,9 @@ export function useTable(table, orderBy = 'created_at') {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
+
+  const reload = () => setReloadKey((k) => k + 1)
 
   useEffect(() => {
     let active = true
@@ -31,9 +34,9 @@ export function useTable(table, orderBy = 'created_at') {
     }
     load()
     return () => { active = false }
-  }, [table, orderBy])
+  }, [table, orderBy, reloadKey])
 
-  return { rows, loading, error }
+  return { rows, loading, error, reload }
 }
 
 export function ModuleTable({ title, subtitle, rows, columns, loading, error, searchKeys = [], filter }) {

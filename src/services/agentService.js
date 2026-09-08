@@ -6,6 +6,11 @@ import { myQueue as computeMyQueue, currentStage, executeLeaveDecision } from '.
 import { LEAVE_TYPE_LABELS } from './leaveBalanceService'
 import { countRows } from './saraStats'
 import { protectedRoutes, canAccessRoute } from '../config/navigation'
+import {
+  queryPendingOnboardingReviews, queryActiveEmployees, queryInterviewsToday, queryPendingUsers,
+  formatOnboardingResponse, formatEmployeesResponse, formatInterviewsResponse, formatPendingUsersResponse,
+  matchLeaveForApproval, executeBatchApproval, logSaraAction,
+} from './saraIntelligence'
 
 // ------------------------------------------------------------------
 // AGENTIC ARCHITECTURE (conceptual):
@@ -125,7 +130,7 @@ export async function runSaraCommand({ command, pool, ctx }) {
       return { type: 'text', message: "I can't change your role. Role elevation requires an authorized administrator using User Management." }
 
     case 'HELP':
-      return { type: 'text', message: 'Try: "show my pending leave approvals", "how many leave approvals do I have", "approve John\'s leave", "open employees", "what requires my attention?", or "approve annual leave from Lagos that are 5 days or less".' }
+      return { type: 'text', message: 'Try: "show pending onboarding reviews", "how many active employees", "what interviews are scheduled today", "how many pending user approvals", "show my pending leave approvals", "approve annual leave 3 days or less", or "open employees".' }
 
     case 'NAVIGATE': {
       const nav = resolveNavigationTarget(parsed.filters.target, ctx)
@@ -141,6 +146,26 @@ export async function runSaraCommand({ command, pool, ctx }) {
       return pool.length === 0
         ? { type: 'text', message: "You have no pending leave approvals." }
         : { type: 'list', message: `You have ${pool.length} pending request${pool.length === 1 ? '' : 's'}.`, requests: pool }
+
+    case 'PENDING_ONBOARDING': {
+      const data = await queryPendingOnboardingReviews()
+      return { type: 'text', message: formatOnboardingResponse(data) }
+    }
+
+    case 'ACTIVE_EMPLOYEES': {
+      const data = await queryActiveEmployees()
+      return { type: 'text', message: formatEmployeesResponse(data) }
+    }
+
+    case 'INTERVIEWS_TODAY': {
+      const data = await queryInterviewsToday()
+      return { type: 'text', message: formatInterviewsResponse(data) }
+    }
+
+    case 'PENDING_USERS': {
+      const data = await queryPendingUsers()
+      return { type: 'text', message: formatPendingUsersResponse(data) }
+    }
 
     case 'PENDING_LOANS': {
       if (!ctx?.permissions?.includes('loans.read')) {
@@ -199,7 +224,7 @@ export async function runSaraCommand({ command, pool, ctx }) {
     }
 
     default:
-      return { type: 'text', message: "I didn't catch that. Try \"show my pending leave approvals\", \"what requires my attention?\", or \"help\"." }
+      return { type: 'text', message: "I didn't catch that. Try \"show pending onboarding reviews\", \"how many active employees\", \"what interviews are scheduled today\", or \"help\"." }
   }
 }
 
