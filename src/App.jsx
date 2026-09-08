@@ -31,6 +31,10 @@ import Attendance from './pages/Attendance'
 import AttendanceManagement from './pages/AttendanceManagement'
 import EmployeeProfile from './pages/EmployeeProfile'
 import DataImport from './pages/DataImport'
+import BankOneImportCenter from './pages/BankOneImportCenter'
+import Reconciliation from './pages/Reconciliation'
+import Performance from './pages/Performance'
+import Settings from './pages/Settings'
 
 const pageComponents = {
   Dashboard,
@@ -55,6 +59,10 @@ const pageComponents = {
   Attendance,
   AttendanceManagement,
   DataImport,
+  BankOneImportCenter,
+  Reconciliation,
+  Performance,
+  Settings,
 }
 
 function Protected({ children }) {

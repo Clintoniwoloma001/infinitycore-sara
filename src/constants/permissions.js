@@ -62,6 +62,17 @@ export const PERMISSIONS = {
 
   // Reports
   REPORTS_READ: 'reports.read',
+
+  // BankOne Intelligence (phase 8)
+  BANKONE_IMPORT: 'bankone.import',
+  BANKONE_READ: 'bankone.read',
+  RECONCILIATION_MANAGE: 'reconciliation.manage',
+  RECONCILIATION_READ: 'reconciliation.read',
+  PERFORMANCE_MANAGE: 'performance.manage',
+  PERFORMANCE_READ: 'performance.read',
+  APPRAISAL_MANAGE: 'appraisal.manage',
+  APPRAISAL_READ: 'appraisal.read',
+  HR_CONFIG_MANAGE: 'hr_config.manage',
 }
 
 // Permission categories for organization
@@ -74,4 +85,9 @@ export const PERMISSION_CATEGORIES = {
   admin: 'Administration',
   branches: 'Branches',
   reports: 'Reports',
+  bankone: 'BankOne Intelligence',
+  reconciliation: 'Reconciliation',
+  performance: 'Performance',
+  appraisal: 'Appraisal',
+  hr_config: 'HR Configuration',
 }
