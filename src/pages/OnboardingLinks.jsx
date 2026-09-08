@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Copy, Link2, Loader2, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Copy, Link2, Loader2, Plus, RefreshCw, Trash2, X, Archive, Eye } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
 import { useNavigate } from 'react-router-dom'
@@ -37,6 +37,8 @@ export default function OnboardingLinks() {
   const [createdLink, setCreatedLink] = useState(null)
   const [copied, setCopied] = useState('')
   const [form, setForm] = useState({})
+  const [statusTab, setStatusTab] = useState('all')
+  const [showArchived, setShowArchived] = useState(false)
 
   const load = async (showSpinner = true) => {
     if (showSpinner) setLoading(true)
@@ -145,10 +147,30 @@ export default function OnboardingLinks() {
 
   const stats = {
     total: links.length,
-    submitted: links.filter((l) => l.status === 'SUBMITTED').length,
-    opened: links.filter((l) => ['OPENED', 'IN_PROGRESS'].includes(l.status)).length,
     pending: links.filter((l) => l.status === 'PENDING').length,
+    opened: links.filter((l) => ['OPENED', 'IN_PROGRESS'].includes(l.status)).length,
+    submitted: links.filter((l) => l.status === 'SUBMITTED').length,
+    revoked: links.filter((l) => l.status === 'REVOKED').length,
+    expired: links.filter((l) => l.status === 'EXPIRED' || (l.expiry && new Date(l.expiry) < new Date() && l.status !== 'SUBMITTED')).length,
   }
+
+  const STATUS_TABS = [
+    { key: 'all', label: 'All' },
+    { key: 'PENDING', label: 'Pending' },
+    { key: 'OPENED', label: 'In Progress' },
+    { key: 'SUBMITTED', label: 'Submitted' },
+    { key: 'REVOKED', label: 'Revoked' },
+    { key: 'EXPIRED', label: 'Expired' },
+  ]
+
+  const filteredLinks = links.filter((l) => {
+    if (statusTab === 'all') return true
+    if (statusTab === 'EXPIRED') {
+      return l.status === 'EXPIRED' || (l.expiry && new Date(l.expiry) < new Date() && l.status !== 'SUBMITTED')
+    }
+    if (statusTab === 'OPENED') return ['OPENED', 'IN_PROGRESS'].includes(l.status)
+    return l.status === statusTab
+  })
 
   return (
     <div>
@@ -164,24 +186,35 @@ export default function OnboardingLinks() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-6">
         {[
-          { label: 'Total', value: stats.total, color: 'text-slate-900' },
-          { label: 'Pending', value: stats.pending, color: 'text-amber-600' },
-          { label: 'In Progress', value: stats.opened, color: 'text-blue-600' },
-          { label: 'Submitted', value: stats.submitted, color: 'text-[#009944]' },
+          { label: 'Total', value: stats.total, color: 'text-slate-900', tab: 'all' },
+          { label: 'Pending', value: stats.pending, color: 'text-amber-600', tab: 'PENDING' },
+          { label: 'In Progress', value: stats.opened, color: 'text-blue-600', tab: 'OPENED' },
+          { label: 'Submitted', value: stats.submitted, color: 'text-[#009944]', tab: 'SUBMITTED' },
+          { label: 'Revoked', value: stats.revoked, color: 'text-rose-600', tab: 'REVOKED' },
+          { label: 'Expired', value: stats.expired, color: 'text-slate-400', tab: 'EXPIRED' },
         ].map((s) => (
-          <div key={s.label} className="bg-white rounded-lg border border-slate-200 p-4">
-            <div className={`text-2xl font-bold ${s.color}`}>{s.value}</div>
-            <div className="text-xs text-slate-500 mt-0.5">{s.label}</div>
-          </div>
+          <button key={s.label} onClick={() => setStatusTab(s.tab)} className={`bg-white rounded-lg border p-3 text-left transition-colors ${statusTab === s.tab ? 'border-[#009944] ring-1 ring-[#009944]' : 'border-slate-200 hover:border-slate-300'}`}>
+            <div className={`text-xl font-bold ${s.color}`}>{s.value}</div>
+            <div className="text-xs text-slate-500">{s.label}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Status filter tabs */}
+      <div className="flex gap-2 overflow-x-auto pb-3 mb-4">
+        {STATUS_TABS.map((t) => (
+          <button key={t.key} onClick={() => setStatusTab(t.key)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border ${statusTab === t.key ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
+            {t.label}
+          </button>
         ))}
       </div>
 
       {error && <ErrorState message={error} />}
       {loading && <LoadingState label="Loading onboarding links..." />}
-      {!loading && !error && links.length === 0 && <EmptyState title="No onboarding links yet" description="Generate a one-time link for a new hire to begin onboarding." />}
-      {!loading && !error && links.length > 0 && (
+      {!loading && !error && filteredLinks.length === 0 && <EmptyState title="No onboarding links in this category" description="Try a different filter or create a new link." />}
+      {!loading && !error && filteredLinks.length > 0 && (
         <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto mb-10">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-left">
@@ -194,7 +227,7 @@ export default function OnboardingLinks() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {links.map((link) => (
+              {filteredLinks.map((link) => (
                 <tr key={link.id} className="hover:bg-slate-50">
                   <td className="px-6 py-3">
                     <div className="font-medium text-slate-900">{link.candidate_name}</div>
@@ -205,6 +238,17 @@ export default function OnboardingLinks() {
                   <td className="px-6 py-3">{status(link.status, ['SUBMITTED'])}</td>
                   <td className="px-6 py-3">
                     <div className="flex justify-end gap-2">
+                      {link.status === 'SUBMITTED' && (
+                        <button
+                          onClick={() => {
+                            const sub = submissions.find((s) => s.link_id === link.id)
+                            if (sub) navigate(`/onboarding-review/${sub.id}`)
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-[#009944] text-white text-xs font-medium hover:bg-[#007a36]"
+                        >
+                          <Eye className="w-3.5 h-3.5" /> Review
+                        </button>
+                      )}
                       {link.status !== 'REVOKED' && link.status !== 'SUBMITTED' && (
                         <>
                           {canManage && (

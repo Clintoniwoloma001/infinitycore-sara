@@ -69,12 +69,37 @@ export default function AttendanceManagement() {
     }
   }
 
+  const today = new Date().toISOString().slice(0, 10)
+  const todayRecords = rows.filter((r) => String(r.attendance_date) === today)
+  const summary = {
+    present: todayRecords.filter((r) => r.status === 'present' || (r.clock_in && !r.clock_out)).length,
+    late: todayRecords.filter((r) => r.status === 'late').length,
+    absent: todayRecords.filter((r) => r.status === 'absent').length,
+    onLeave: todayRecords.filter((r) => r.status === 'on_leave').length,
+    total: todayRecords.length,
+  }
+
   return (
     <div>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between mb-6">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">Attendance Management</h2>
           <p className="text-sm text-slate-500 mt-1">Oversight of team attendance and corrections.</p>
+        </div>
+        {/* Summary cards */}
+        <div className="hidden sm:flex gap-3">
+          {[
+            { label: 'Present Today', value: summary.present, color: 'text-emerald-600' },
+            { label: 'Late Today', value: summary.late, color: 'text-amber-600' },
+            { label: 'Absent Today', value: summary.absent, color: 'text-rose-600' },
+            { label: 'On Leave', value: summary.onLeave, color: 'text-blue-600' },
+            { label: 'Total Today', value: summary.total, color: 'text-slate-900' },
+          ].map((s) => (
+            <div key={s.label} className="bg-white rounded-lg border border-slate-200 p-3 min-w-[80px]">
+              <div className={`text-xl font-bold ${s.color}`}>{s.value}</div>
+              <div className="text-xs text-slate-500">{s.label}</div>
+            </div>
+          ))}
         </div>
         <div className="flex flex-wrap gap-3">
           <input type="date" value={dayFilter} onChange={(e) => setDayFilter(e.target.value)} className={inputCls} />
