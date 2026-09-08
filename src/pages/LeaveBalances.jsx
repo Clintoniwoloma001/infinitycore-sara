@@ -4,16 +4,23 @@ import { useAuth } from '../hooks/useAuth'
 import { logAction } from '../services/supabaseService'
 import {
   LEAVE_TYPE_LABELS,
+  LEAVE_ENTITLEMENTS,
   currentYear,
   listAllBalances,
   adjustBalance,
+  getEffectiveEntitlements,
 } from '../services/leaveBalanceService'
+import { getEmployeeCategory } from '../services/leaveRulesService'
+import { supabase } from '../supabaseClient'
+
+const ACTIVE_LEAVE_TYPES = Object.keys(LEAVE_TYPE_LABELS).filter((t) => t !== 'unpaid')
 
 export default function LeaveBalances() {
   const [rows, setRows] = useState([])
+  const [effectiveEnt, setEffectiveEnt] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [editing, setEditing] = useState(null) // row id
+  const [editing, setEditing] = useState(null)
   const [draft, setDraft] = useState({ entitled_days: '', used_days: '' })
   const { name: userName } = useAuth()
 
@@ -21,7 +28,30 @@ export default function LeaveBalances() {
     setLoading(true)
     setError(null)
     try {
-      setRows(await listAllBalances(currentYear()))
+      const balanceRows = await listAllBalances(currentYear())
+
+      // Fetch profiles to determine each employee's category
+      const employeeIds = [...new Set(balanceRows.map((r) => r.employee_id))]
+      let profileMap = new Map()
+      if (employeeIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, role')
+          .in('id', employeeIds)
+        for (const p of profiles || []) {
+          profileMap.set(p.id, p)
+        }
+      }
+
+      // Compute effective entitlements per employee
+      const entMap = {}
+      for (const empId of employeeIds) {
+        const profile = profileMap.get(empId)
+        const category = getEmployeeCategory(profile)
+        entMap[empId] = await getEffectiveEntitlements(category)
+      }
+      setEffectiveEnt(entMap)
+      setRows(balanceRows)
     } catch (e) {
       setError(e?.message || 'Failed to load balances')
     } finally {
@@ -53,13 +83,11 @@ export default function LeaveBalances() {
     return acc
   }, {})
 
-  const types = Object.keys(LEAVE_TYPE_LABELS).filter((t) => t !== 'unpaid')
-
   return (
     <div>
       <div className="mb-6">
         <h2 className="text-2xl font-semibold text-slate-900">Leave Balances</h2>
-        <p className="text-sm text-slate-500 mt-1">Company-wide entitlements for {currentYear()} — corrections logged to audit trail</p>
+        <p className="text-sm text-slate-500 mt-1">Company-wide entitlements for {currentYear()} — Available / Entitled · corrections logged to audit trail</p>
       </div>
 
       {error && <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-sm p-4">{error}</div>}
@@ -67,50 +95,68 @@ export default function LeaveBalances() {
       {loading ? (
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-slate-200 border-t-[#009944] rounded-full animate-spin" /></div>
       ) : Object.keys(byEmployee).length === 0 ? (
-        <div className="text-center py-16 text-slate-400">No leave balances found for {currentYear()}. Run the yearly reset function in Supabase to seed them.</div>
+        <div className="text-center py-16 text-slate-400">No leave balances found for {currentYear()}.</div>
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-left">
               <tr>
                 <th className="px-6 py-3 font-medium">Employee</th>
-                {types.map((t) => <th key={t} className="px-4 py-3 font-medium text-center">{LEAVE_TYPE_LABELS[t]}</th>)}
+                {ACTIVE_LEAVE_TYPES.map((t) => <th key={t} className="px-4 py-3 font-medium text-center">{LEAVE_TYPE_LABELS[t]}</th>)}
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {Object.entries(byEmployee).map(([empId, emp]) => (
-                <tr key={empId} className="hover:bg-slate-50">
-                  <td className="px-6 py-3 font-medium text-slate-800">{emp.name}</td>
-                  {types.map((t) => {
-                    const r = emp.balances[t]
-                    if (!r) return <td key={t} className="px-4 py-3 text-center text-slate-300">—</td>
-                    const isEditing = editing === r.id
-                    const remaining = Number(r.entitled_days) - Number(r.used_days)
-                    return (
-                      <td key={t} className="px-4 py-3 text-center">
-                        {isEditing ? (
-                          <div className="flex items-center justify-center gap-1">
-                            <input type="number" value={draft.entitled_days} onChange={(e) => setDraft({ ...draft, entitled_days: e.target.value })} className="w-14 h-8 text-center rounded border border-slate-300" />
-                            <span className="text-slate-300">/</span>
-                            <input type="number" value={draft.used_days} onChange={(e) => setDraft({ ...draft, used_days: e.target.value })} className="w-14 h-8 text-center rounded border border-slate-300" />
-                            <button onClick={() => save(r)} className="text-emerald-600 p-1"><Check className="w-4 h-4" /></button>
-                            <button onClick={() => setEditing(null)} className="text-slate-400 p-1"><X className="w-4 h-4" /></button>
-                          </div>
-                        ) : (
-                          <button onClick={() => startEdit(r)} className="group inline-flex items-center gap-1.5 text-slate-700 hover:text-[#009944]">
-                            <span>{remaining}<span className="text-slate-400">/{r.entitled_days}</span></span>
-                            <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100" />
-                          </button>
-                        )}
-                      </td>
-                    )
-                  })}
-                  <td />
-                </tr>
-              ))}
+              {Object.entries(byEmployee).map(([empId, emp]) => {
+                const ent = effectiveEnt[empId] || LEAVE_ENTITLEMENTS
+                return (
+                  <tr key={empId} className="hover:bg-slate-50">
+                    <td className="px-6 py-3 font-medium text-slate-800">{emp.name}</td>
+                    {ACTIVE_LEAVE_TYPES.map((t) => {
+                      const r = emp.balances[t]
+                      // Use the effective entitlement from leave_rules, not the stale DB row
+                      const entitled = ent[t] !== undefined ? ent[t] : (r ? Number(r.entitled_days) : LEAVE_ENTITLEMENTS[t] || 0)
+                      const used = r ? Number(r.used_days) : 0
+                      const remaining = entitled - used
+
+                      if (!r) {
+                        // No balance row exists yet — show the effective entitlement
+                        return (
+                          <td key={t} className="px-4 py-3 text-center">
+                            <span className="text-slate-700">{remaining}<span className="text-slate-400">/{entitled}</span></span>
+                          </td>
+                        )
+                      }
+
+                      const isEditing = editing === r.id
+                      return (
+                        <td key={t} className="px-4 py-3 text-center">
+                          {isEditing ? (
+                            <div className="flex items-center justify-center gap-1">
+                              <input type="number" value={draft.entitled_days} onChange={(e) => setDraft({ ...draft, entitled_days: e.target.value })} className="w-14 h-8 text-center rounded border border-slate-300" />
+                              <span className="text-slate-300">/</span>
+                              <input type="number" value={draft.used_days} onChange={(e) => setDraft({ ...draft, used_days: e.target.value })} className="w-14 h-8 text-center rounded border border-slate-300" />
+                              <button onClick={() => save(r)} className="text-emerald-600 p-1"><Check className="w-4 h-4" /></button>
+                              <button onClick={() => setEditing(null)} className="text-slate-400 p-1"><X className="w-4 h-4" /></button>
+                            </div>
+                          ) : (
+                            <button onClick={() => startEdit(r)} className="group inline-flex items-center gap-1.5 text-slate-700 hover:text-[#009944]">
+                              <span>{remaining}<span className="text-slate-400">/{entitled}</span></span>
+                              <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100" />
+                            </button>
+                          )}
+                        </td>
+                      )
+                    })}
+                    <td />
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
+          <div className="px-6 py-3 bg-slate-50 border-t border-slate-100 text-xs text-slate-400">
+            Format: Available / Entitled days · Entitlements determined by employee category from leave policy rules
+          </div>
         </div>
       )}
     </div>

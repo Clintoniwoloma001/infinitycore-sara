@@ -154,6 +154,9 @@ export default function MyWork() {
           <button key={t.id} onClick={() => setTab(t.id)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border ${tab === t.id ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-500 border-slate-200'}`}>{t.label}</button>
         ))}
       </div>
+    </div>
+  )
+}
 
       {/* Tasks */}
       {tab === 'tasks' && (
@@ -344,7 +347,13 @@ export default function MyWork() {
             </div>
           </div>
         </div>
-      )}
+        <div className="flex justify-end gap-2 mt-5">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+          <button onClick={() => onSubmit({ actualValue: Number(actualValue) || 0, narrative })} disabled={busy || !actualValue} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Submit
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

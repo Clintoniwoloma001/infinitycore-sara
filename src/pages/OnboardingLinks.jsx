@@ -409,6 +409,24 @@ export default function OnboardingLinks() {
     return <div className="flex justify-end gap-1.5">{actions}</div>
   }
 
+  const STATUS_TABS = [
+    { key: 'all', label: 'All' },
+    { key: 'PENDING', label: 'Pending' },
+    { key: 'OPENED', label: 'In Progress' },
+    { key: 'SUBMITTED', label: 'Submitted' },
+    { key: 'REVOKED', label: 'Revoked' },
+    { key: 'EXPIRED', label: 'Expired' },
+  ]
+
+  const filteredLinks = links.filter((l) => {
+    if (statusTab === 'all') return true
+    if (statusTab === 'EXPIRED') {
+      return l.status === 'EXPIRED' || (l.expiry && new Date(l.expiry) < new Date() && l.status !== 'SUBMITTED')
+    }
+    if (statusTab === 'OPENED') return ['OPENED', 'IN_PROGRESS'].includes(l.status)
+    return l.status === statusTab
+  })
+
   return (
     <div>
       {/* Header */}

@@ -1,19 +1,18 @@
 import { supabase } from '../supabaseClient'
 import { createService } from './supabaseService'
+import { getEmployeeCategory } from './leaveRulesService'
 
 // ------------------------------------------------------------------
-// Leave entitlements are now DATABASE-BACKED via the leave_rules table
-// (see schema_phase8_bankone_intelligence.sql and leaveRulesService.js).
+// Leave entitlements are DATABASE-BACKED via the leave_rules table.
 // These constants are FALLBACKS used only when the DB table is not yet
 // available. HR can update policy values from Settings without code changes.
 //
 // Actual HR policy:
-//   Annual: Normal Staff = 20, Management = 15, MD = 20
+//   Annual: Normal Staff = 10, Management = 15, MD = 20
 //   Maternity = 90 days (3 months)
 //   Examination = 5 days
 //   Paternity = 2 days
-//   Sick = 10 days
-//   Personal = 5 days
+//   No Sick Leave. No Personal Leave.
 // ------------------------------------------------------------------
 export const LEAVE_ENTITLEMENTS = {
   annual: 10,
@@ -40,23 +39,67 @@ export function currentYear() {
   return new Date().getFullYear()
 }
 
-// Fetch every balance row for one employee/year. Auto-creates any
-// missing rows at the default entitlement (first-time-use case).
-// Try to fetch database-backed entitlements; fall back to hardcoded if
-// the leave_rules table doesn't exist yet (pre-Phase-8 migration).
+// Cache for leave rules fetched within the same render cycle.
+let _rulesCache = null
+let _rulesCacheTime = 0
+
 async function fetchDbEntitlements() {
+  // Cache for 30 seconds to avoid repeated queries
+  if (_rulesCache && Date.now() - _rulesCacheTime < 30000) return _rulesCache
   try {
     const { data, error } = await supabase
       .from('leave_rules')
       .select('leave_type, employee_category, entitled_days')
       .eq('is_active', true)
     if (error) return null
-    return data || []
+    _rulesCache = data || []
+    _rulesCacheTime = Date.now()
+    return _rulesCache
   } catch {
     return null
   }
 }
 
+// Clear the cache when rules are updated from Settings
+export function clearRulesCache() {
+  _rulesCache = null
+  _rulesCacheTime = 0
+}
+
+// Get the effective entitlement for a leave type + employee category.
+// This is the SINGLE SOURCE OF TRUTH for entitlements.
+// Both LeaveRequests and LeaveBalances use this.
+export async function getEffectiveEntitlement(leaveType, employeeCategory = 'normal_staff') {
+  if (leaveType === 'unpaid') return null
+  const dbRules = await fetchDbEntitlements()
+  if (dbRules && dbRules.length > 0) {
+    const specific = dbRules.find((r) => r.leave_type === leaveType && r.employee_category === employeeCategory)
+    if (specific) return Number(specific.entitled_days)
+    const general = dbRules.find((r) => r.leave_type === leaveType && r.employee_category === null)
+    if (general) return Number(general.entitled_days)
+  }
+  // Fallback to constants
+  return LEAVE_ENTITLEMENTS[leaveType] || 0
+}
+
+// Get all effective entitlements for a category at once.
+export async function getEffectiveEntitlements(employeeCategory = 'normal_staff') {
+  const dbRules = await fetchDbEntitlements()
+  const entitlements = { ...LEAVE_ENTITLEMENTS }
+  if (dbRules) {
+    for (const leaveType of Object.keys(LEAVE_ENTITLEMENTS)) {
+      if (leaveType === 'unpaid') continue
+      const specific = dbRules.find((r) => r.leave_type === leaveType && r.employee_category === employeeCategory)
+      if (specific) { entitlements[leaveType] = Number(specific.entitled_days); continue }
+      const general = dbRules.find((r) => r.leave_type === leaveType && r.employee_category === null)
+      if (general) { entitlements[leaveType] = Number(general.entitled_days); continue }
+    }
+  }
+  return entitlements
+}
+
+// Fetch every balance row for one employee/year. Auto-creates any
+// missing rows AND syncs existing rows' entitled_days with leave_rules.
 export async function getEmployeeBalances(employeeId, employeeName, year = currentYear(), employeeCategory = 'normal_staff') {
   const { data, error } = await supabase
     .from('leave_balances')
@@ -67,22 +110,34 @@ export async function getEmployeeBalances(employeeId, employeeName, year = curre
 
   const existing = data || []
 
-  // Try database-backed rules first
-  const dbRules = await fetchDbEntitlements()
-  let entitlements = { ...LEAVE_ENTITLEMENTS }
+  // Get the authoritative entitlements from leave_rules
+  const entitlements = await getEffectiveEntitlements(employeeCategory)
 
-  if (dbRules) {
-    for (const leaveType of Object.keys(LEAVE_ENTITLEMENTS)) {
-      if (leaveType === 'unpaid') continue
-      // Category-specific rule
-      const specific = dbRules.find((r) => r.leave_type === leaveType && r.employee_category === employeeCategory)
-      if (specific) { entitlements[leaveType] = Number(specific.entitled_days); continue }
-      // General rule
-      const general = dbRules.find((r) => r.leave_type === leaveType && r.employee_category === null)
-      if (general) { entitlements[leaveType] = Number(general.entitled_days); continue }
+  // Sync existing rows: update entitled_days to match current leave_rules
+  const updates = []
+  for (const row of existing) {
+    if (row.leave_type === 'unpaid') continue
+    const correctEntitlement = entitlements[row.leave_type]
+    if (correctEntitlement !== undefined && Number(row.entitled_days) !== Number(correctEntitlement)) {
+      updates.push({
+        id: row.id,
+        entitled_days: correctEntitlement,
+      })
     }
   }
 
+  if (updates.length > 0) {
+    for (const u of updates) {
+      await supabase.from('leave_balances').update({ entitled_days: u.entitled_days }).eq('id', u.id)
+    }
+    // Update the in-memory copies
+    for (const u of updates) {
+      const row = existing.find((r) => r.id === u.id)
+      if (row) row.entitled_days = u.entitled_days
+    }
+  }
+
+  // Create missing rows
   const missingTypes = Object.keys(entitlements).filter(
     (t) => entitlements[t] !== null && !existing.some((b) => b.leave_type === t)
   )
@@ -107,6 +162,8 @@ export async function getEmployeeBalances(employeeId, employeeName, year = curre
   return existing
 }
 
+// Calculate balance for a leave type from the balance rows.
+// entitled_days comes from the (now-synced) database row.
 export function balanceFor(balances, leaveType) {
   if (leaveType === 'unpaid') return { entitled_days: null, used_days: 0, remaining: Infinity }
   const b = balances.find((x) => x.leave_type === leaveType)
@@ -159,16 +216,55 @@ export async function restoreBalance(employeeId, leaveType, days, year = current
   return updated
 }
 
-// HR-wide view: every balance row for a given year, newest employee
-// name first for readability.
+// HR-wide view: every balance row for a given year.
+// Overrides entitled_days with values from leave_rules based on
+// each employee's category (from profiles.role).
 export async function listAllBalances(year = currentYear()) {
-  const { data, error } = await supabase
+  const { data: rows, error } = await supabase
     .from('leave_balances')
     .select('*')
     .eq('year', year)
     .order('employee_name', { ascending: true })
   if (error) throw error
-  return data || []
+
+  if (!rows || rows.length === 0) return []
+
+  // Fetch leave rules to override stale entitled_days
+  const dbRules = await fetchDbEntitlements()
+
+  // Fetch all profiles to determine employee category
+  const employeeIds = [...new Set(rows.map((r) => r.employee_id))]
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, role')
+    .in('id', employeeIds)
+
+  const profileMap = new Map()
+  for (const p of profiles || []) {
+    profileMap.set(p.id, p)
+  }
+
+  // Override entitled_days with authoritative values from leave_rules
+  const result = rows.map((row) => {
+    if (row.leave_type === 'unpaid') return row
+    const profile = profileMap.get(row.employee_id)
+    const category = getEmployeeCategory(profile)
+    let correctEntitlement = null
+    if (dbRules && dbRules.length > 0) {
+      const specific = dbRules.find((r) => r.leave_type === row.leave_type && r.employee_category === category)
+      if (specific) correctEntitlement = Number(specific.entitled_days)
+      else {
+        const general = dbRules.find((r) => r.leave_type === row.leave_type && r.employee_category === null)
+        if (general) correctEntitlement = Number(general.entitled_days)
+      }
+    }
+    if (correctEntitlement !== null && Number(row.entitled_days) !== Number(correctEntitlement)) {
+      return { ...row, entitled_days: correctEntitlement }
+    }
+    return row
+  })
+
+  return result
 }
 
 // Manual HR correction of a specific balance row.

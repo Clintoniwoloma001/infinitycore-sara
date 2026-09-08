@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { BriefcaseBusiness, CalendarDays, ClipboardCheck, CheckCircle2, Sparkles, Users, Wallet } from 'lucide-react'
 import { supabase } from '../supabaseClient'
+import { attendanceEngineService } from '../services/attendanceEngineService'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
 import { formatDate } from '../lib/utils'
 
@@ -34,6 +35,10 @@ export default function HRDashboard() {
         ['kpis', safeList('employee_kpis')],
       ].map(async ([key, promise]) => [key, await promise]))
 
+      // HR metrics
+      let hrMetrics = null
+      try { hrMetrics = await attendanceEngineService.getHRMetrics() } catch { hrMetrics = null }
+
       if (!active) return
       const data = {}
       const errors = []
@@ -41,6 +46,7 @@ export default function HRDashboard() {
         data[key] = result.data
         if (result.error) errors.push(`${key}: ${result.error.message}`)
       })
+      data.hrMetrics = hrMetrics
       setState({ loading: false, data, errors })
     }
     load()
@@ -79,12 +85,13 @@ export default function HRDashboard() {
     ...leave.slice(0, 4).map((item) => ({ id: `leave-${item.id}`, label: `${item.employee_name || 'Employee'} leave request ${item.status || 'pending'}`, date: item.created_at })),
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).slice(0, 6)
 
-  const Stat = ({ icon: Icon, label, value, accent }) => (
+  const Stat = ({ icon: Icon, label, value, accent, subtitle }) => (
     <div className="bg-white border border-slate-200 rounded-lg p-5">
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs font-medium uppercase text-slate-500">{label}</p>
           <p className="text-2xl font-semibold text-slate-900 mt-1">{value}</p>
+          {subtitle && <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>}
         </div>
         <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${accent}15`, color: accent }}>
           <Icon className="w-5 h-5" />
@@ -93,18 +100,43 @@ export default function HRDashboard() {
     </div>
   )
 
+  const MetricCard = ({ icon: Icon, label, value, trend, accent }) => (
+    <div className="bg-gradient-to-br from-white to-slate-50 border border-slate-200 rounded-xl p-5">
+      <div className="flex items-center gap-3 mb-3">
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${accent}15`, color: accent }}>
+          <Icon className="w-4.5 h-4.5" />
+        </div>
+        <p className="text-xs font-medium uppercase text-slate-500">{label}</p>
+      </div>
+      <p className="text-3xl font-bold text-slate-900">{value}</p>
+      {trend && <p className="text-xs mt-1" style={{ color: accent }}>{trend}</p>}
+    </div>
+  )
+
   return (
     <div>
       <div className="mb-6">
         <h2 className="text-2xl font-semibold text-slate-900">HR Dashboard</h2>
-        <p className="text-sm text-slate-500 mt-1">Workforce, recruitment, interviews, leave, and payroll overview</p>
+        <p className="text-sm text-slate-500 mt-1">Workforce metrics, recruitment, attendance, and employee engagement overview</p>
       </div>
 
       {state.errors.length > 0 && <div className="mb-6"><ErrorState title="Some HR datasets are not available" message={state.errors.join(' | ')} /></div>}
 
+      {/* KEY HR METRICS */}
+      <div className="mb-6">
+        <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-[#009944]" /> Key HR Metrics</h3>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <MetricCard icon={UserPlus} label="Hire Rate" value={`${hireRate}%`} trend={`${hiredThisMonth.length} hired this month`} accent="#009944" />
+          <MetricCard icon={UserMinus} label="Fire / Exit Rate" value={`${fireRate}%`} trend={`${terminatedThisMonth.length} exits this month`} accent="#ef4444" />
+          <MetricCard icon={DollarSign} label="Cost Per Hire" value={`₦${costPerHire}`} trend="Estimated recruitment cost" accent="#f59e0b" />
+          <MetricCard icon={Activity} label="Turnover Rate" value={`${turnoverRate}%`} trend={`${terminatedEmployees.length} total exits`} accent="#6366f1" />
+        </div>
+      </div>
+
+      {/* WORKFORCE STATS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
         <Stat icon={Users} label="Total Employees" value={employees.length} accent="#009944" />
-        <Stat icon={Users} label="Active Employees" value={employees.filter((e) => (e.employment_status || 'active') === 'active').length} accent="#0ea5e9" />
+        <Stat icon={Users} label="Active Employees" value={activeEmployees.length} accent="#0ea5e9" />
         <Stat icon={BriefcaseBusiness} label="Pending Recruitment" value={candidates.filter((c) => ['received', 'screening', 'shortlisted'].includes(c.application_status)).length} accent="#f59e0b" />
         <Stat icon={CalendarDays} label="Interviews" value={interviews.length} accent="#6366f1" />
         <Stat icon={CalendarDays} label="Pending Leave" value={leave.filter((l) => l.status === 'pending').length} accent="#f43f5e" />

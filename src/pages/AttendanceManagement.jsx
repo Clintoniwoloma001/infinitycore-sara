@@ -10,6 +10,53 @@ const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm fo
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 
 export default function AttendanceManagement() {
+  const [tab, setTab] = useState('records')
+  const [notice, setNotice] = useState({ kind: '', text: '' })
+
+  const tabs = [
+    { id: 'records', label: 'Attendance Records' },
+    { id: 'exceptions', label: 'Late Exceptions' },
+    { id: 'issues', label: 'Attendance Issues' },
+    { id: 'config', label: 'Configuration' },
+  ]
+
+  return (
+    <div>
+      <div className="mb-6">
+        <h2 className="text-2xl font-semibold text-slate-900">Attendance Management</h2>
+        <p className="text-sm text-slate-500 mt-1">Oversight of team attendance, exceptions, issues, and configuration.</p>
+      </div>
+
+      {notice.text && (
+        <div className={`mb-5 rounded-lg border p-4 text-sm ${notice.kind === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`}>
+          {notice.text}
+        </div>
+      )}
+
+      <div className="flex gap-2 mb-5 overflow-x-auto pb-1">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition ${tab === t.id ? 'bg-[#009944] text-white shadow-sm' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'records' && <RecordsTab setNotice={setNotice} />}
+      {tab === 'exceptions' && <ExceptionsTab setNotice={setNotice} />}
+      {tab === 'issues' && <IssuesTab setNotice={setNotice} />}
+      {tab === 'config' && <ConfigTab setNotice={setNotice} />}
+    </div>
+  )
+}
+
+// ============================================================
+// RECORDS TAB (existing functionality, enhanced)
+// ============================================================
+function RecordsTab({ setNotice }) {
   const [rows, setRows] = useState([])
   const [employees, setEmployees] = useState([])
   const [branches, setBranches] = useState([])
@@ -20,7 +67,6 @@ export default function AttendanceManagement() {
   const [correcting, setCorrecting] = useState(null)
   const [form, setForm] = useState({})
   const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState({ kind: '', text: '' })
 
   const load = async () => {
     setLoading(true)
@@ -93,7 +139,6 @@ export default function AttendanceManagement() {
 
   const openCorrection = (row) => {
     setCorrecting(row)
-    setNotice({ kind: '', text: '' })
     setForm({
       clock_in: row.clock_in ? row.clock_in.slice(0, 16) : '',
       clock_out: row.clock_out ? row.clock_out.slice(0, 16) : '',
@@ -103,7 +148,6 @@ export default function AttendanceManagement() {
 
   const submitCorrection = async () => {
     setBusy(true)
-    setNotice({ kind: '', text: '' })
     try {
       await attendanceService.correct({
         id: correcting.id,
@@ -121,6 +165,18 @@ export default function AttendanceManagement() {
     }
   }
 
+  const today = new Date().toISOString().slice(0, 10)
+  const todayRecords = rows.filter((r) => String(r.attendance_date) === today)
+  const departments = [...new Set(rows.map((r) => r.employees?.department).filter(Boolean))]
+  const summary = {
+    present: todayRecords.filter((r) => r.status === 'present' || (r.clock_in && !r.clock_out)).length,
+    late: todayRecords.filter((r) => r.status === 'late').length,
+    absent: todayRecords.filter((r) => r.status === 'absent').length,
+    onLeave: todayRecords.filter((r) => r.status === 'on_leave').length,
+    notClockedIn: 0, // Would need total employee count
+    total: todayRecords.length,
+  }
+
   return (
     <div className="max-w-7xl">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between mb-6">
@@ -133,7 +189,6 @@ export default function AttendanceManagement() {
         </button>
       </div>
 
-      {notice.text && <div className={`mb-5 rounded-lg border p-4 text-sm ${notice.kind === 'error' ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>{notice.text}</div>}
       {error && <ErrorState message={error} />}
       {loading && <LoadingState label="Loading attendance records..." />}
 
@@ -258,7 +313,7 @@ export default function AttendanceManagement() {
       {/* Correction Modal */}
       {correcting && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl w-full max-w-md p-6">
+          <div className="bg-white rounded-xl w-full max-w-md p-6 shadow-xl">
             <div className="flex items-center justify-between mb-5">
               <div>
                 <h3 className="text-lg font-semibold text-slate-900">Correct attendance</h3>
@@ -276,13 +331,12 @@ export default function AttendanceManagement() {
                 <input type="datetime-local" className={inputCls} value={form.clock_out} onChange={(e) => setForm({ ...form, clock_out: e.target.value })} />
               </div>
               <div>
-                <label className={labelCls}>Reason</label>
+                <label className={labelCls}>Reason (required for audit)</label>
                 <textarea className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" rows={3} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="e.g. Missed clock-in due to staff meeting" />
               </div>
-              {notice.text && <p className="text-sm text-rose-600">{notice.text}</p>}
               <div className="flex justify-end gap-2 pt-2">
                 <button onClick={() => setCorrecting(null)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
-                <button onClick={submitCorrection} disabled={busy || !form.clock_in} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+                <button onClick={submitCorrection} disabled={busy || !form.clock_in || !form.reason} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
                   {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Save correction
                 </button>
               </div>

@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Briefcase, Loader2, Pencil, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Briefcase, Loader2, Pencil, Plus, RefreshCw, Save, Trash2, X, Star, MessageSquare } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import { date, money, status } from './hrShared'
 import { employeeService } from '../services/employeeService'
 import { attendanceService } from '../services/attendanceService'
+import { attendanceEngineService } from '../services/attendanceEngineService'
 import { documentService } from '../services/documentService'
 import { guarantorVerificationService } from '../services/guarantorVerificationService'
 import { payrollService } from '../services/payrollService'
@@ -892,6 +893,31 @@ export default function EmployeeProfile() {
             </div>
           </div>
         </div>
+      )}
+
+      {showAppraisal && (
+        <AppraisalModal
+          employee={employee}
+          onClose={() => setShowAppraisal(false)}
+          onSaved={async () => { const aps = await attendanceEngineService.listAppraisals(id); setAppraisals(aps) }}
+        />
+      )}
+
+      {showQuery && (
+        <QueryModal
+          employee={employee}
+          onClose={() => setShowQuery(false)}
+          onSaved={async () => { const qs = await attendanceEngineService.listQueries(id); setQueries(qs) }}
+        />
+      )}
+
+      {resolvingQuery && (
+        <QueryResolutionModal
+          query={resolvingQuery}
+          employee={employee}
+          onClose={() => setResolvingQuery(null)}
+          onResolved={async () => { const qs = await attendanceEngineService.listQueries(id); setQueries(qs) }}
+        />
       )}
     </div>
   )

@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { Calendar, TrendingUp, Clock, CheckCircle2, AlertTriangle, XCircle, Activity } from 'lucide-react'
 import { attendanceService } from '../services/attendanceService'
+import { attendanceEngineService } from '../services/attendanceEngineService'
+import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState } from '../components/PageStates'
 import ClockCard from '../components/attendance/ClockCard'
 import TrendChart from '../components/attendance/TrendChart'
@@ -43,10 +45,35 @@ function dateRange(filter) {
   }
 }
 
+const LATE_REASONS = [
+  { key: 'traffic', label: 'Traffic' },
+  { key: 'transport_delay', label: 'Transport delay' },
+  { key: 'medical', label: 'Medical' },
+  { key: 'personal_emergency', label: 'Personal emergency' },
+  { key: 'official_assignment', label: 'Official assignment' },
+  { key: 'approved_exception', label: 'Approved exception' },
+  { key: 'other', label: 'Other' },
+]
+
+const ISSUE_TYPES = [
+  { key: 'forgot_clock_in', label: 'Forgot to clock in' },
+  { key: 'forgot_clock_out', label: 'Forgot to clock out' },
+  { key: 'gps_problem', label: 'GPS problem' },
+  { key: 'fingerprint_not_recognized', label: 'Fingerprint not recognized' },
+  { key: 'device_unavailable', label: 'Device unavailable' },
+  { key: 'network_failure', label: 'Network failure' },
+  { key: 'wrong_time', label: 'Wrong attendance time' },
+  { key: 'wrong_location', label: 'Wrong location' },
+  { key: 'other', label: 'Other' },
+]
+
 export default function Attendance() {
+  const { name } = useAuth()
   const [employee, setEmployee] = useState(null)
   const [record, setRecord] = useState(null)
   const [history, setHistory] = useState([])
+  const [config, setConfig] = useState(null)
+  const [geofences, setGeofences] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState({ kind: '', text: '' })
@@ -64,6 +91,14 @@ export default function Attendance() {
         const hist = await attendanceService.getHistory(emp.id, range)
         setHistory(hist)
       }
+      try {
+        const cfg = await attendanceEngineService.getConfig()
+        setConfig(cfg)
+        if (cfg?.geofence_enabled) {
+          const gf = await attendanceEngineService.listGeofences()
+          setGeofences(gf.filter((g) => g.active))
+        }
+      } catch { /* config may not exist yet */ }
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Unable to load attendance' })
     } finally {
@@ -76,6 +111,8 @@ export default function Attendance() {
   const doClockIn = async (geo) => {
     setBusy(true)
     setMessage({})
+    setClockAnim(true)
+    setGeofenceBlocked(null)
     try {
       const r = await attendanceService.clockIn(geo)
       setMessage({ kind: 'ok', text: `Clocked in at ${new Date(r.clock_in_at).toLocaleTimeString()}.${r.late_minutes > 0 ? ` You are ${r.late_minutes} minutes late.` : ''}` })
@@ -84,18 +121,60 @@ export default function Attendance() {
       setMessage({ kind: 'error', text: e?.message || 'Clock in failed' })
     } finally {
       setBusy(false)
+      setTimeout(() => setClockAnim(false), 600)
     }
   }
 
   const doClockOut = async (geo) => {
     setBusy(true)
     setMessage({})
+    setClockAnim(true)
     try {
       const r = await attendanceService.clockOut(record?.id, geo)
       setMessage({ kind: 'ok', text: `Clocked out at ${new Date(r.clock_out_at).toLocaleTimeString()}. Worked ${r.work_hours} hours.` })
       await load()
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Clock out failed' })
+    } finally {
+      setBusy(false)
+      setTimeout(() => setClockAnim(false), 600)
+    }
+  }
+
+  const submitLateReason = async (reason, customExplanation) => {
+    setBusy(true)
+    try {
+      await attendanceService.submitException({
+        attendanceId: lateModal.attendanceId,
+        employeeId: lateModal.employeeId,
+        exceptionType: 'late_arrival',
+        reason,
+        customExplanation,
+        expectedTime: lateModal.expectedTime,
+        actualTime: lateModal.actualTime,
+      })
+      setMessage({ kind: 'ok', text: 'Late reason submitted for HR review.' })
+      setLateModal(null)
+    } catch (e) {
+      setMessage({ kind: 'error', text: e?.message || 'Failed to submit reason' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submitIssue = async (issueData) => {
+    setBusy(true)
+    try {
+      await attendanceService.submitIssue({
+        employeeId: employee.id,
+        issueDate: issueData.date,
+        issueType: issueData.type,
+        explanation: issueData.explanation,
+      })
+      setMessage({ kind: 'ok', text: 'Attendance issue submitted for HR review.' })
+      setIssueModal(false)
+    } catch (e) {
+      setMessage({ kind: 'error', text: e?.message || 'Failed to submit issue' })
     } finally {
       setBusy(false)
     }
@@ -232,6 +311,106 @@ export default function Attendance() {
           </table>
         </div>
       )}
+
+      {/* Late Arrival Modal */}
+      {lateModal && <LateModal data={lateModal} onSubmit={submitLateReason} onClose={() => setLateModal(null)} busy={busy} />}
+
+      {/* Attendance Issue Modal */}
+      {issueModal && <IssueModal onSubmit={submitIssue} onClose={() => setIssueModal(false)} busy={busy} />}
+    </div>
+  )
+}
+
+// Source badge component
+function SourceBadge({ source }) {
+  const config = {
+    WEB: { label: 'Web', color: 'bg-blue-50 text-blue-700' },
+    MOBILE: { label: 'Mobile', color: 'bg-cyan-50 text-cyan-700' },
+    FINGERPRINT: { label: 'Fingerprint', color: 'bg-purple-50 text-purple-700' },
+    BIOMETRIC_DEVICE: { label: 'Biometric', color: 'bg-indigo-50 text-indigo-700' },
+    ATTENDANCE_TERMINAL: { label: 'Terminal', color: 'bg-slate-100 text-slate-700' },
+    ADMIN: { label: 'Admin', color: 'bg-amber-50 text-amber-700' },
+    API: { label: 'API', color: 'bg-emerald-50 text-emerald-700' },
+    IMPORT: { label: 'Import', color: 'bg-orange-50 text-orange-700' },
+  }
+  const s = (source || 'WEB').toUpperCase()
+  const c = config[s] || config.WEB
+  return <span className={`text-xs px-2 py-0.5 rounded-full ${c.color}`}>{c.label}</span>
+}
+
+// ============================================================
+// LATE ARRIVAL MODAL
+// ============================================================
+function LateModal({ data, onSubmit, onClose, busy }) {
+  const [reason, setReason] = useState('')
+  const [custom, setCustom] = useState('')
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 animate-[fadeIn_0.15s_ease]">
+      <div className="bg-white rounded-xl w-full max-w-md p-6 shadow-xl">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+              <Clock3 className="w-5 h-5 text-amber-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">You're clocking in late</h3>
+              <p className="text-sm text-slate-500">Please provide a reason</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="rounded-lg bg-slate-50 p-3">
+            <p className="text-xs text-slate-400">Expected time</p>
+            <p className="text-lg font-semibold text-slate-700">{data.expectedTime}</p>
+          </div>
+          <div className="rounded-lg bg-amber-50 p-3">
+            <p className="text-xs text-amber-500">Current time</p>
+            <p className="text-lg font-semibold text-amber-700">{data.actualTime}</p>
+          </div>
+        </div>
+
+        <div className="space-y-2 mb-4">
+          <label className="block text-sm font-medium text-slate-700 mb-1.5">Reason</label>
+          {LATE_REASONS.map((r) => (
+            <button
+              key={r.key}
+              onClick={() => setReason(r.key)}
+              className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm text-left transition ${reason === r.key ? 'border-[#009944] bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'}`}
+            >
+              <div className={`w-4 h-4 rounded-full border-2 ${reason === r.key ? 'border-[#009944] bg-[#009944]' : 'border-slate-300'}`} />
+              {r.label}
+            </button>
+          ))}
+        </div>
+
+        {reason === 'other' && (
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Custom explanation</label>
+            <textarea
+              className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+              rows={2}
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              placeholder="Please explain..."
+            />
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Skip</button>
+          <button
+            onClick={() => onSubmit(reason, custom)}
+            disabled={busy || !reason}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            Submit Reason
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

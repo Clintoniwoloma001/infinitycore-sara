@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth, AuthProvider } from './hooks/useAuth'
 import Layout from './components/Layout'
@@ -85,6 +85,43 @@ function Protected({ children }) {
       </div>
     </div>
   )
+  // Block pending/suspended users from accessing the app
+  if (profile.status === 'pending') return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+      <div className="max-w-md text-center bg-white border border-slate-200 rounded-lg p-8">
+        <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <h1 className="text-xl font-semibold text-slate-900 mb-2">Account Pending Approval</h1>
+        <p className="text-sm text-slate-500">Your account is awaiting administrator approval. You will be able to access the system once an administrator approves your account.</p>
+        <button onClick={() => { window.location.hash = '#/login'; window.location.reload() }} className="mt-4 px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Sign Out</button>
+      </div>
+    </div>
+  )
+  if (profile.status === 'suspended') return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+      <div className="max-w-md text-center bg-white border border-slate-200 rounded-lg p-8">
+        <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center mx-auto mb-4">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        </div>
+        <h1 className="text-xl font-semibold text-slate-900 mb-2">Account Suspended</h1>
+        <p className="text-sm text-slate-500">Your account has been suspended. {profile.rejected_reason ? `Reason: ${profile.rejected_reason}` : 'Please contact your administrator.'}</p>
+        <button onClick={() => { window.location.hash = '#/login'; window.location.reload() }} className="mt-4 px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Sign Out</button>
+      </div>
+    </div>
+  )
+  if (profile.status === 'rejected') return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+      <div className="max-w-md text-center bg-white border border-slate-200 rounded-lg p-8">
+        <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center mx-auto mb-4">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </div>
+        <h1 className="text-xl font-semibold text-slate-900 mb-2">Account Rejected</h1>
+        <p className="text-sm text-slate-500">Your registration was not approved. {profile.rejected_reason ? `Reason: ${profile.rejected_reason}` : 'Please contact your administrator.'}</p>
+        <button onClick={() => { window.location.hash = '#/login'; window.location.reload() }} className="mt-4 px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Sign Out</button>
+      </div>
+    </div>
+  )
   return <Layout>{children}</Layout>
 }
 
@@ -96,7 +133,44 @@ function ProtectedModule({ route }) {
 }
 
 function Home() {
-  const { role } = useAuth()
+  const { role, user } = useAuth()
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [checking, setChecking] = useState(true)
+
+  useEffect(() => {
+    const checkOnboarding = async () => {
+      if (role === 'customer' || !user?.id) { setChecking(false); return }
+      try {
+        // Check if employee record exists and onboarding is complete
+        const { data: emp } = await supabase
+          .from('employees')
+          .select('id')
+          .eq('user_id', user.id)
+          .limit(1)
+        if (!emp || emp.length === 0) {
+          // No employee record — show onboarding for non-customer users
+          setShowOnboarding(true)
+        } else {
+          // Check digital file
+          const { data: file } = await supabase
+            .from('employee_digital_files')
+            .select('onboarding_completed')
+            .eq('employee_id', emp[0].id)
+            .single()
+          if (!file || !file.onboarding_completed) {
+            setShowOnboarding(true)
+          }
+        }
+      } catch {
+        // Tables might not exist yet — don't block the user
+      }
+      setChecking(false)
+    }
+    checkOnboarding()
+  }, [user?.id, role])
+
+  if (checking) return <div className="flex justify-center items-center h-screen"><div className="w-8 h-8 border-4 border-slate-200 border-t-[#009944] rounded-full animate-spin" /></div>
+  if (showOnboarding) return <OnboardingFlow onComplete={() => setShowOnboarding(false)} />
   return role === 'customer' ? <CustomerDashboard /> : <Dashboard />
 }
 
@@ -106,6 +180,7 @@ export default function App() {
       <HashRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/attendance-terminal" element={<AttendanceTerminal />} />
           <Route path="/" element={<Protected><Home /></Protected>} />
           <Route path="/onboarding/:token" element={<OnboardingForm />} />
           <Route path="/guarantor-verification/:token" element={<GuarantorVerificationForm />} />

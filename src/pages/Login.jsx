@@ -58,7 +58,7 @@ export default function Login() {
             </button>
           </form>
           {mode === 'signup' && (
-            <p className="text-xs text-slate-400 mt-4 text-center">New users are assigned the "staff" role by default. An admin can promote you from User Management.</p>
+            <p className="text-xs text-slate-400 mt-4 text-center">New accounts start as pending customers. An administrator must approve your account before you can access the system.</p>
           )}
         </div>
       </div>

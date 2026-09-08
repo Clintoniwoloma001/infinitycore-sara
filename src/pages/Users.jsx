@@ -44,6 +44,7 @@ export default function Users() {
 
   const load = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
       const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
       if (error) throw error
@@ -158,7 +159,37 @@ export default function Users() {
     } catch (e) {
       setErr(e?.message || 'Not authorized')
     } finally {
-      setBusyId(null)
+      setBusy(false)
+    }
+  }
+
+  const handleSuspend = async (user, reason) => {
+    setBusy(true)
+    setNotice({ kind: '', text: '' })
+    try {
+      await userApprovalService.suspendUser({ userId: user.id, reason })
+      setNotice({ kind: 'ok', text: `${user.email || 'User'} has been suspended.` })
+      setReviewUser(null)
+      await load()
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Suspension failed' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleActivate = async (user) => {
+    setBusy(true)
+    setNotice({ kind: '', text: '' })
+    try {
+      await userApprovalService.activateUser(user.id)
+      setNotice({ kind: 'ok', text: `${user.email || 'User'} has been activated.` })
+      setReviewUser(null)
+      await load()
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Activation failed' })
+    } finally {
+      setBusy(false)
     }
   }
 

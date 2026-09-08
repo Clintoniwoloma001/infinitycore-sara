@@ -21,6 +21,7 @@ import {
   UserCog,
   Users,
   Wallet,
+  Monitor,
 } from 'lucide-react'
 import { PERMISSIONS } from '../constants/permissions'
 
@@ -77,6 +78,7 @@ export const routeConfig = [
       { label: 'Audit Logs', path: '/audit-logs', icon: ScrollText, element: 'AuditLogs', permissions: [PERMISSIONS.ADMIN_VIEW_AUDIT] },
       { label: 'Settings', path: '/settings', icon: Settings, element: 'Settings', permissions: [PERMISSIONS.HR_CONFIG_MANAGE] },
       { label: 'User Management', path: '/users', icon: UserCog, element: 'Users', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
+      { label: 'Attendance Terminal', path: '/attendance-terminal', icon: Monitor, element: 'AttendanceTerminal', permissions: [] },
     ],
   },
   {
@@ -93,6 +95,22 @@ export const protectedRoutes = routeConfig.flatMap((group) => group.items)
 export function canAccessRoute(route, auth) {
   if (!auth?.user || !auth?.profile) return false
   if (auth.role === 'super_admin') return true
+
+  // If the user has a per-user access profile, check it first.
+  // The access profile stores module keys that match route paths.
+  if (auth.accessModules && auth.accessModules.length > 0) {
+    // Map route paths to module keys
+    const moduleKey = route.path === '/' ? 'dashboard' : route.path.replace(/^\//, '').replace(/-/g, '_')
+    const moduleKeyDash = route.path === '/' ? 'dashboard' : route.path.replace(/^\//, '')
+    // Check both dash and underscore variants, plus the raw path
+    if (auth.accessModules.includes(moduleKey) || auth.accessModules.includes(moduleKeyDash) || auth.accessModules.includes(route.path)) {
+      return true
+    }
+    // If access modules are defined but this route isn't in them, deny
+    // unless the user also has the role-based permission
+    if (!route.permissions?.length) return false
+  }
+
   if (!route.permissions?.length) return auth.role !== 'customer'
   return auth.hasAnyPermission(route.permissions)
 }

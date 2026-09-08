@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   AlertTriangle, ArrowLeft, Briefcase, Camera, Check, CheckCircle2, Clock,
-  Copy, FileText, IdCard, Loader2, PenTool, Send, User, X,
+  Copy, FileText, IdCard, Loader2, PenTool, Send, Sparkles, User, X,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, ErrorState } from '../components/PageStates'
@@ -368,6 +368,52 @@ export default function OnboardingReview() {
           <CheckCircle2 className="w-4 h-4" /> {successMsg}
         </div>
       )}
+
+      {/* SARA Pre-Review */}
+      {(() => {
+        const saraFindings = []
+        const p = payload
+        // Check for missing required fields
+        if (!p.residential_address) saraFindings.push({ severity: 'warning', text: 'Residential address not provided' })
+        if (!p.bvn) saraFindings.push({ severity: 'warning', text: 'BVN not provided' })
+        if (!p.nin) saraFindings.push({ severity: 'warning', text: 'NIN not provided' })
+        if (!p.next_of_kin_name) saraFindings.push({ severity: 'warning', text: 'Next of kin name missing' })
+        if (!p.next_of_kin_phone) saraFindings.push({ severity: 'warning', text: 'Next of kin phone missing' })
+        if (!guarantorName) saraFindings.push({ severity: 'warning', text: 'Guarantor information not provided' })
+        if (!verification) saraFindings.push({ severity: 'info', text: 'Guarantor verification link not yet sent' })
+        else if (verification.status !== 'approved' && verification.status !== 'submitted')
+          saraFindings.push({ severity: 'info', text: `Guarantor verification status: ${verification.status.replace(/_/g, ' ')}` })
+        if ((childrenData.employee_education || []).length === 0) saraFindings.push({ severity: 'warning', text: 'No education records' })
+        if ((childrenData.employee_work_history || []).length === 0) saraFindings.push({ severity: 'warning', text: 'No previous work history records' })
+        if ((childrenData.employee_fidelity_bonds || []).length === 0) saraFindings.push({ severity: 'info', text: 'No fidelity bond records' })
+        const pendingCorrections = corrections.filter((c) => c.status === 'requested' || c.status === 'submitted')
+        if (pendingCorrections.length > 0) saraFindings.push({ severity: 'warning', text: `${pendingCorrections.length} correction(s) pending resolution` })
+        if (!p.bank_name && !p.account_number) saraFindings.push({ severity: 'info', text: 'Bank details not yet completed' })
+        if (!p.start_date) saraFindings.push({ severity: 'warning', text: 'Employment start date not specified' })
+
+        if (saraFindings.length === 0) return null
+
+        return (
+          <div className="mb-6 rounded-lg border border-violet-200 bg-violet-50 p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Sparkles className="w-5 h-5 text-violet-600" />
+              <h3 className="font-semibold text-violet-900">SARA Pre-Review</h3>
+            </div>
+            <p className="text-sm text-violet-700 mb-3">SARA has reviewed this submission. The following items may require HR attention:</p>
+            <div className="space-y-1.5">
+              {saraFindings.map((f, i) => (
+                <div key={i} className="flex items-start gap-2 text-sm">
+                  <span className={f.severity === 'warning' ? 'text-amber-600' : 'text-blue-600'}>
+                    {f.severity === 'warning' ? '⚠' : 'ℹ'}
+                  </span>
+                  <span className={f.severity === 'warning' ? 'text-amber-800' : 'text-blue-800'}>{f.text}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-violet-500 mt-3 italic">SARA does not invent facts — items marked ⚠ require HR review, items marked ℹ are informational.</p>
+          </div>
+        )
+      })()}
 
       {/* Tabs */}
       <div className="flex gap-2 overflow-x-auto pb-3 mb-6">
