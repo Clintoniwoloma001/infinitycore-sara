@@ -36,6 +36,7 @@ import Reconciliation from './pages/Reconciliation'
 import Performance from './pages/Performance'
 import Settings from './pages/Settings'
 import OnboardingReview from './pages/OnboardingReview'
+import WorkManagement from './pages/WorkManagement'
 
 const pageComponents = {
   Dashboard,
@@ -65,6 +66,7 @@ const pageComponents = {
   Performance,
   Settings,
   OnboardingReview,
+  WorkManagement,
 }
 
 function Protected({ children }) {
@@ -84,6 +86,43 @@ function Protected({ children }) {
       <div className="max-w-md text-center bg-white border border-slate-200 rounded-lg p-8">
         <h1 className="text-xl font-semibold text-slate-900 mb-2">Profile unavailable</h1>
         <p className="text-sm text-slate-500">{profileError || 'Your account is authenticated, but no profile record is available yet.'}</p>
+      </div>
+    </div>
+  )
+  // Block pending/suspended users from accessing the app
+  if (profile.status === 'pending') return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+      <div className="max-w-md text-center bg-white border border-slate-200 rounded-lg p-8">
+        <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <h1 className="text-xl font-semibold text-slate-900 mb-2">Account Pending Approval</h1>
+        <p className="text-sm text-slate-500">Your account is awaiting administrator approval. You will be able to access the system once an administrator approves your account.</p>
+        <button onClick={() => { window.location.hash = '#/login'; window.location.reload() }} className="mt-4 px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Sign Out</button>
+      </div>
+    </div>
+  )
+  if (profile.status === 'suspended') return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+      <div className="max-w-md text-center bg-white border border-slate-200 rounded-lg p-8">
+        <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center mx-auto mb-4">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        </div>
+        <h1 className="text-xl font-semibold text-slate-900 mb-2">Account Suspended</h1>
+        <p className="text-sm text-slate-500">Your account has been suspended. {profile.rejected_reason ? `Reason: ${profile.rejected_reason}` : 'Please contact your administrator.'}</p>
+        <button onClick={() => { window.location.hash = '#/login'; window.location.reload() }} className="mt-4 px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Sign Out</button>
+      </div>
+    </div>
+  )
+  if (profile.status === 'rejected') return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+      <div className="max-w-md text-center bg-white border border-slate-200 rounded-lg p-8">
+        <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center mx-auto mb-4">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </div>
+        <h1 className="text-xl font-semibold text-slate-900 mb-2">Account Rejected</h1>
+        <p className="text-sm text-slate-500">Your registration was not approved. {profile.rejected_reason ? `Reason: ${profile.rejected_reason}` : 'Please contact your administrator.'}</p>
+        <button onClick={() => { window.location.hash = '#/login'; window.location.reload() }} className="mt-4 px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Sign Out</button>
       </div>
     </div>
   )

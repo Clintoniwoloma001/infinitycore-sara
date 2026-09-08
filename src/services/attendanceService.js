@@ -115,6 +115,127 @@ export const attendanceService = {
     if (error) throw error
     return data
   },
+
+  // ---- ATTENDANCE EXCEPTIONS (late arrival reasons) ----
+
+  async submitException({ attendanceId, employeeId, exceptionType, reason, customExplanation, expectedTime, actualTime }) {
+    const { data, error } = await supabase
+      .from('attendance_exceptions')
+      .insert([{
+        attendance_id: attendanceId,
+        employee_id: employeeId,
+        exception_type: exceptionType || 'late_arrival',
+        reason,
+        custom_explanation: customExplanation || null,
+        expected_time: expectedTime || null,
+        actual_time: actualTime || null,
+      }])
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  async listExceptions(employeeId) {
+    let query = supabase.from('attendance_exceptions').select('*').order('created_at', { ascending: false })
+    if (employeeId) query = query.eq('employee_id', employeeId)
+    const { data, error } = await query
+    if (error) throw error
+    return data || []
+  },
+
+  async listAllExceptions(limit = 100) {
+    const { data, error } = await supabase
+      .from('attendance_exceptions')
+      .select('*, employees(full_name, department)')
+      .order('created_at', { ascending: false })
+      .limit(limit)
+    if (error) throw error
+    return data || []
+  },
+
+  async reviewException(exceptionId, { status, comment }) {
+    const { data, error } = await supabase
+      .from('attendance_exceptions')
+      .update({
+        status,
+        review_comment: comment || null,
+        reviewed_by: (await supabase.auth.getUser()).data.user?.id,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq('id', exceptionId)
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  // ---- ATTENDANCE ISSUES (employee-reported) ----
+
+  async submitIssue({ employeeId, issueDate, issueType, explanation, attachmentPath, attachmentName }) {
+    const { data, error } = await supabase
+      .from('attendance_issues')
+      .insert([{
+        employee_id: employeeId,
+        issue_date: issueDate,
+        issue_type: issueType,
+        explanation: explanation || null,
+        attachment_path: attachmentPath || null,
+        attachment_name: attachmentName || null,
+      }])
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  async listMyIssues(employeeId) {
+    const { data, error } = await supabase
+      .from('attendance_issues')
+      .select('*')
+      .eq('employee_id', employeeId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return data || []
+  },
+
+  async listAllIssues(limit = 100) {
+    const { data, error } = await supabase
+      .from('attendance_issues')
+      .select('*, employees(full_name, department)')
+      .order('created_at', { ascending: false })
+      .limit(limit)
+    if (error) throw error
+    return data || []
+  },
+
+  async reviewIssue(issueId, { status, comment }) {
+    const { data, error } = await supabase
+      .from('attendance_issues')
+      .update({
+        status,
+        review_comment: comment || null,
+        reviewed_by: (await supabase.auth.getUser()).data.user?.id,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq('id', issueId)
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  // ---- ATTENDANCE CONFIG ----
+
+  async getConfig() {
+    const { data, error } = await supabase
+      .from('attendance_config')
+      .select('*')
+      .eq('id', 1)
+      .single()
+    if (error && error.code !== 'PGRST116') throw error
+    return data
+  },
 }
 
 export default attendanceService

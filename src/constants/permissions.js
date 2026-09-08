@@ -73,6 +73,15 @@ export const PERMISSIONS = {
   APPRAISAL_MANAGE: 'appraisal.manage',
   APPRAISAL_READ: 'appraisal.read',
   HR_CONFIG_MANAGE: 'hr_config.manage',
+
+  // Work management (phase 10)
+  WORK_TASKS_MANAGE: 'work.tasks.manage',
+  WORK_KPIS_MANAGE: 'work.kpis.manage',
+  WORK_TARGETS_MANAGE: 'work.targets.manage',
+  WORK_PLANS_MANAGE: 'work.plans.manage',
+  WORK_REPORTS_REVIEW: 'work.reports.review',
+  WORK_TEAM_PERFORMANCE: 'work.team.performance',
+  ATTENDANCE_CONFIG_MANAGE: 'attendance.config.manage',
 }
 
 // Permission categories for organization

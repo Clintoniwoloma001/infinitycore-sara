@@ -11,10 +11,12 @@ export function AuthProvider({ children }) {
   const [authError, setAuthError] = useState(false)
   const [profileError, setProfileError] = useState(null)
   const [viewingAsRole, setViewingAsRole] = useState(null)
+  const [accessModules, setAccessModules] = useState([])
 
   const fetchProfile = async (sessionUser) => {
     if (!sessionUser) {
       setProfile(null)
+      setAccessModules([])
       return null
     }
     try {
@@ -22,10 +24,24 @@ export function AuthProvider({ children }) {
       if (error) throw error
       setProfile(data)
       setProfileError(null)
+
+      // Fetch per-user access modules
+      try {
+        const { data: access } = await supabase
+          .from('user_access_profiles')
+          .select('modules')
+          .eq('user_id', sessionUser.id)
+          .single()
+        setAccessModules(access?.modules || [])
+      } catch {
+        setAccessModules([])
+      }
+
       return data
     } catch (e) {
       console.error('Error fetching profile:', e)
       setProfile(null)
+      setAccessModules([])
       setProfileError(e?.message || 'Profile unavailable')
       return null
     }
@@ -153,6 +169,7 @@ export function AuthProvider({ children }) {
     canSwitchViews,
 
     availableModules,
+    accessModules,
     userPermissions,
     hasPermission,
     hasAnyPermission,

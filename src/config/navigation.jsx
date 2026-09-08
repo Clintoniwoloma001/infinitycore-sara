@@ -81,6 +81,7 @@ export const routeConfig = [
     section: 'Work',
     items: [
       { label: 'My Work', path: '/my-work', icon: ListChecks, element: 'MyWork', permissions: [] },
+      { label: 'Work Management', path: '/work-management', icon: ClipboardCheck, element: 'WorkManagement', permissions: [PERMISSIONS.WORK_TASKS_MANAGE] },
     ],
   },
 ]
@@ -90,6 +91,22 @@ export const protectedRoutes = routeConfig.flatMap((group) => group.items)
 export function canAccessRoute(route, auth) {
   if (!auth?.user || !auth?.profile) return false
   if (auth.role === 'super_admin') return true
+
+  // If the user has a per-user access profile, check it first.
+  // The access profile stores module keys that match route paths.
+  if (auth.accessModules && auth.accessModules.length > 0) {
+    // Map route paths to module keys
+    const moduleKey = route.path === '/' ? 'dashboard' : route.path.replace(/^\//, '').replace(/-/g, '_')
+    const moduleKeyDash = route.path === '/' ? 'dashboard' : route.path.replace(/^\//, '')
+    // Check both dash and underscore variants, plus the raw path
+    if (auth.accessModules.includes(moduleKey) || auth.accessModules.includes(moduleKeyDash) || auth.accessModules.includes(route.path)) {
+      return true
+    }
+    // If access modules are defined but this route isn't in them, deny
+    // unless the user also has the role-based permission
+    if (!route.permissions?.length) return false
+  }
+
   if (!route.permissions?.length) return auth.role !== 'customer'
   return auth.hasAnyPermission(route.permissions)
 }
