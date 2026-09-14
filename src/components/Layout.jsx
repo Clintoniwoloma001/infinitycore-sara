@@ -8,6 +8,7 @@ import { canAccessRoute, routeConfig } from '../config/navigation'
 import NotificationBell from './NotificationBell'
 import Sara from './sara/Sara'
 import EmployeeCompletionModal from './EmployeeCompletionModal'
+import { isOnboardingDismissed, dismissOnboarding } from '../utils/onboardingState'
 
 export default function Layout({ children }) {
   const [open, setOpen] = useState(false)
@@ -46,9 +47,8 @@ export default function Layout({ children }) {
         const { data } = await supabase.rpc('get_employee_completion')
         if (cancelled || !data?.ok) return
         if (!data.is_complete && data.completion_pct < 100) {
-          // Check if we already dismissed it this session
-          const dismissed = sessionStorage.getItem('emp_completion_dismissed')
-          if (dismissed === 'true') return
+          // Check if we already dismissed it inside the 30-minute window
+          if (isOnboardingDismissed()) return
           // Find the employee ID
           const { data: emp } = await supabase
             .from('employees')
@@ -125,7 +125,7 @@ export default function Layout({ children }) {
       {showCompletion && completionEmpId && (
         <EmployeeCompletionModal
           employeeId={completionEmpId}
-          onClose={() => { setShowCompletion(false); sessionStorage.setItem('emp_completion_dismissed', 'true') }}
+          onClose={() => { setShowCompletion(false); dismissOnboarding(30) }}
           onSaved={() => {}}
         />
       )}

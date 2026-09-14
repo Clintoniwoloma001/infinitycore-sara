@@ -2,12 +2,28 @@ import React from 'react'
 import Logo from './Logo'
 
 // InfinityCore Staff ID Card — front & back.
-// Printed alone (parent wraps it in .print-area) for card printing.
-// No BVN / NIN / salary data on the card.
-export default function StaffIdCard({ employee = {}, photoUrl = null }) {
+// Employee-facing ID is ALWAYS the official IMFB/<numeric> number
+// (employee_number). Rendered straight into a body-level print portal
+// for card printing (see .print-idcard page rules).
+// No BVN / NIN / salary / bank account data appears on the card.
+//
+// Expiry configuration:
+//   expiryMode: 'none' | 'date'
+//   expiryDate: ISO string used when expiryMode === 'date'
+//   issueDate / issuedBy / status: HR-provided card metadata.
+export default function StaffIdCard({
+  employee = {},
+  photoUrl = null,
+  expiryMode = 'date',
+  expiryDate = null,
+  issueDate = null,
+  issuedBy = 'Human Resources',
+  status = 'active',
+}) {
   const name = employee?.full_name || '—'
-  const number = employee?.staff_id || employee?.employee_number || employee?.employee_code || '—'
-  const position = employee?.position || 'Staff'
+  // Official staff ID — always IMFB/<n> when available.
+  const number = employee?.employee_number || employee?.staff_id || employee?.employee_code || '—'
+  const position = employee?.position || employee?.job_title || 'Staff'
   const department = employee?.department || '—'
   const branch = employee?.branch || 'Head Office'
 
@@ -18,21 +34,33 @@ export default function StaffIdCard({ employee = {}, photoUrl = null }) {
     .map((n) => n[0]?.toUpperCase())
     .join('') || 'IB'
 
-  const issueDate = employee?.staff_id_issued_at ? new Date(employee.staff_id_issued_at).toLocaleDateString() : new Date().toLocaleDateString()
-  const expiryDate = new Date()
-  expiryDate.setFullYear(expiryDate.getFullYear() + 3)
+  const issue = issueDate ? new Date(issueDate).toLocaleDateString('en-GB') : (employee?.staff_id_issued_at ? new Date(employee.staff_id_issued_at).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB'))
+  const effectiveStatus = status || (expiryMode === 'date' && expiryDate && new Date(expiryDate) < new Date() ? 'expired' : 'active')
+  const isExpired = effectiveStatus === 'expired'
+
+  let expiryLabel = 'NO EXPIRY'
+  if (expiryMode === 'date' && expiryDate) {
+    expiryLabel = new Date(expiryDate).toLocaleDateString('en-GB')
+  }
+
+  const fmtDate = (v) => {
+    if (!v) return '—'
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return String(v)
+    return d.toLocaleDateString('en-GB')
+  }
 
   return (
-    <div className="flex flex-col gap-6 items-start">
+    <div className="flex flex-col gap-6 items-center">
       {/* FRONT */}
-      <div className="w-[340px] rounded-2xl overflow-hidden shadow-xl border border-slate-200 bg-white">
+      <div className="idcard" data-status={effectiveStatus}>
         <div className="h-[120px] bg-gradient-to-br from-[#009944] to-[#007a36] relative px-5 pt-4 pb-2">
           <div className="absolute -bottom-1 right-0 left-0 h-2 bg-gradient-to-r from-[#ff9d00] via-[#FF8C00] to-[#ffb84d]" />
           <div className="flex items-start justify-between">
             <Logo size={34} variant="light" />
             <div className="text-right">
               <p className="text-white text-[10px] font-medium tracking-[0.2em] uppercase">Staff ID Card</p>
-              <p className="text-emerald-100 text-[10px]">Identity & Access</p>
+              <p className="text-emerald-100 text-[10px]">Identity &amp; Access</p>
             </div>
           </div>
         </div>
@@ -48,9 +76,9 @@ export default function StaffIdCard({ employee = {}, photoUrl = null }) {
                 </div>
               )}
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="text-xs text-slate-400 mb-0.5">Full Name</p>
-              <p className="text-lg font-semibold text-slate-900 leading-tight break-words">{name}</p>
+              <p className="text-base font-semibold text-slate-900 leading-tight break-words">{name}</p>
               <p className="text-xs text-slate-500 mt-1 break-words">{position}</p>
             </div>
           </div>
@@ -58,59 +86,77 @@ export default function StaffIdCard({ employee = {}, photoUrl = null }) {
           <div className="mt-5 space-y-2.5">
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-slate-400 font-medium uppercase tracking-wide">Staff ID</span>
-              <span className="text-sm font-bold text-slate-900 tracking-wide">{number}</span>
+              <span className="text-sm font-bold text-[#009944] tracking-wide">{number}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-slate-400 font-medium uppercase tracking-wide">Department</span>
-              <span className="text-sm font-medium text-slate-800">{department}</span>
+              <span className="text-sm font-medium text-slate-800 text-right">{department}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-slate-400 font-medium uppercase tracking-wide">Branch</span>
-              <span className="text-sm font-medium text-slate-800">{branch}</span>
+              <span className="text-sm font-medium text-slate-800 text-right">{branch}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-400 font-medium uppercase tracking-wide">Status</span>
+              <span className={`text-xs font-bold uppercase ${isExpired ? 'text-rose-600' : 'text-emerald-600'}`}>
+                {isExpired ? 'EXPIRED' : effectiveStatus}
+              </span>
             </div>
           </div>
 
           <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between">
             <div>
               <p className="text-[10px] text-slate-400 uppercase">Issue Date</p>
-              <p className="text-xs font-medium text-slate-700">{issueDate}</p>
+              <p className="text-xs font-medium text-slate-700">{issue}</p>
             </div>
             <div className="text-right">
               <p className="text-[10px] text-slate-400 uppercase">Expiry Date</p>
-              <p className="text-xs font-medium text-slate-700">{expiryDate.toLocaleDateString()}</p>
+              <p className="text-xs font-medium text-slate-700">{expiryLabel}</p>
             </div>
           </div>
         </div>
       </div>
 
       {/* BACK */}
-      <div className="w-[340px] rounded-2xl overflow-hidden shadow-xl border border-slate-200 bg-white min-h-[200px]">
+      <div className="idcard bg-white min-h-[200px]">
         <div className="h-2 bg-gradient-to-r from-[#ff9d00] via-[#FF8C00] to-[#ffb84d]" />
         <div className="px-6 py-5">
-          <p className="text-xs font-semibold text-slate-800 uppercase tracking-wide mb-4">Human Resources</p>
-          <div className="space-y-2.5 text-sm">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-slate-800 uppercase tracking-wide">Human Resources</p>
+            <span className="text-sm font-bold text-slate-900">{number}</span>
+          </div>
+          <div className="space-y-2.5 text-sm mt-3">
             <div className="flex justify-between">
-              <span className="text-slate-400">HR Office</span>
-              <span className="font-medium text-slate-800 text-right">hr@infinitycorebank.com</span>
+              <span className="text-slate-400">Employee</span>
+              <span className="font-medium text-slate-800 text-right break-words">{name}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400">HR Line</span>
-              <span className="font-medium text-slate-800">+234 800 INF CORE</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">Emergency</span>
-              <span className="font-medium text-slate-800">+234 700 EMERGENCY</span>
+              <span className="text-slate-400">Emergency Contact</span>
+              <span className="font-medium text-slate-800 text-right">{employee?.emergency_contact_phone || '—'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Branch</span>
               <span className="font-medium text-slate-800 text-right">{branch}</span>
             </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Issued By</span>
+              <span className="font-medium text-slate-800 text-right">{issuedBy || 'Human Resources'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Issue Date</span>
+              <span className="font-medium text-slate-800">{issue}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Expiry</span>
+              <span className="font-medium text-slate-800">{expiryLabel}</span>
+            </div>
           </div>
+
           <div className="mt-5 pt-4 border-t border-slate-100">
             <p className="text-[11px] text-slate-400 leading-relaxed">
               This card remains the property of InfinityCore Bank Ltd. If found, please return to the nearest branch or HR office.
             </p>
-            <p className="text-[10px] text-slate-300 mt-2">Generated by InfinityCore HR · Valid for identification purposes only</p>
+            <p className="text-[10px] text-slate-300 mt-2">This card is issued by Human Resources of Infinity Bank and is valid for identification purposes only. {expiryMode === 'date' && expiryDate ? `Expires ${expiryLabel}.` : 'This card has no expiry.'}</p>
           </div>
         </div>
       </div>

@@ -12,6 +12,40 @@ import { logAction } from './supabaseService'
 
 const CHILD_TABLES = ['employee_education', 'employee_work_history', 'employee_guarantors', 'employee_fidelity_bonds']
 
+// PostgREST returns code PGRST202 when an RPC is missing from its schema
+// cache (common right after a migration is applied). Retry once, then rethrow
+// with `code = 'PGRST202'` so callers can surface a migrated-first message.
+async function rpcWithRetry(fn) {
+  const isMissing = (err) => {
+    const msg = (err?.message || '').toLowerCase()
+    return msg.includes('pgrst202') || msg.includes('schema cache') || msg.includes('could not find the function')
+  }
+  try {
+    const out = await fn()
+    if (out?.error && isMissing(out.error)) {
+      const retried = await fn()
+      if (retried?.error) throw renamed(retried.error)
+      return retried
+    }
+    if (out?.error) throw out.error
+    return out
+  } catch (err) {
+    if (isMissing(err)) {
+      const retried = await fn()
+      if (retried?.error && isMissing(retried.error)) throw renamed(retried.error)
+      if (retried?.error) throw retried.error
+      return retried
+    }
+    throw err
+  }
+}
+
+function renamed(err) {
+  const e = new Error(err?.message || 'Database function unavailable')
+  e.code = 'PGRST202'
+  return e
+}
+
 export const employeeService = {
   async list() {
     const { data, error } = await supabase
@@ -45,14 +79,25 @@ export const employeeService = {
   },
 
   // Phase 12: HR/Admin field-protected update via server-side RPC.
-  // Only allows HR-controlled fields; rejects anything else.
+  // Only allows HR-controlled fields; rejects anything else. Retries once on a
+  // stale PostgREST schema cache, then surfaces an actionable message.
   async updateHrFields(employeeId, fields) {
-    const { data, error } = await supabase.rpc('update_employee_hr_fields', {
-      p_employee_id: employeeId,
-      p_fields: fields,
-    })
-    if (error) throw error
-    return data
+    try {
+      return await rpcWithRetry(() =>
+        supabase.rpc('update_employee_hr_fields', {
+          p_employee_id: employeeId,
+          p_fields: fields,
+        })
+      )
+    } catch (err) {
+      if (err?.code === 'PGRST202') {
+        throw new Error(
+          'The HR fields update function is not available in the database yet. ' +
+          'Please run the phase14 migration (`schema_phase14_hr_documents_fixes.sql`) in Supabase, then retry.'
+        )
+      }
+      throw err
+    }
   },
 
   // Phase 12: Self-service personal info update via server-side RPC.
@@ -65,14 +110,23 @@ export const employeeService = {
     return data
   },
 
-  // Phase 13: Assign a permanent Employee Number / Staff ID.
+  // Phase 13: Assign a permanent Employee Number / Staff ID (IMFB/<n>).
   // Idempotent — returns the existing number if already assigned.
   async ensureEmployeeNumber(employeeId) {
-    const { data, error } = await supabase.rpc('generate_employee_number', {
-      p_employee_id: employeeId,
-    })
-    if (error) throw error
-    return data
+    try {
+      const data = await rpcWithRetry(() =>
+        supabase.rpc('generate_employee_number', { p_employee_id: employeeId })
+      )
+      return data
+    } catch (err) {
+      if (err?.code === 'PGRST202') {
+        throw new Error(
+          'Staff ID assignment is not available in the database yet. ' +
+          'Please run the phase14 migration (`schema_phase14_hr_documents_fixes.sql`) in Supabase, then retry.'
+        )
+      }
+      throw err
+    }
   },
 
   async childTable(name) {

@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, CheckCircle2, CreditCard, FileText, GraduationCap, Loader2, Save, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, CreditCard, Download, FileText, GraduationCap, Loader2, Printer, Save, ShieldCheck } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import { employeeService } from '../services/employeeService'
 import { documentService } from '../services/documentService'
 import { supabase } from '../supabaseClient'
 import StaffIdCard from '../components/StaffIdCard'
+import PrintPortal from '../components/PrintPortal'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -440,13 +441,34 @@ export default function Profile() {
             <div className="flex items-center justify-between mb-4 no-print">
               <h3 className="text-lg font-semibold text-slate-900">Staff ID Card</h3>
               <div className="flex items-center gap-2">
-                <button onClick={() => window.print()} className="text-sm text-[#009944] hover:underline font-medium">Print Card</button>
+                <button onClick={() => window.print()} className="inline-flex items-center gap-1 text-sm text-[#009944] hover:underline font-medium"><Printer className="w-4 h-4" /> Print Card</button>
+                <button onClick={() => window.print()} className="inline-flex items-center gap-1 text-sm text-slate-600 hover:underline font-medium"><Download className="w-4 h-4" /> Download</button>
                 <button onClick={() => setShowCard(false)} className="text-slate-400 hover:text-slate-600">✕</button>
               </div>
             </div>
-            <div className="print-area">
-              <StaffIdCard employee={employee} photoUrl={photoUrl} />
+            {cardError && <div className="mb-3"><ErrorState message={cardError} /></div>}
+            <div className="bg-white rounded-xl p-5 flex justify-center">
+              <StaffIdCard
+                employee={employee}
+                photoUrl={photoUrl}
+                expiryMode="date"
+                expiryDate={employee?.staff_id_expiry || new Date(Date.now() + 3 * 365 * 24 * 3600 * 1000).toISOString()}
+                issueDate={employee?.staff_id_issued_at}
+                issuedBy="Human Resources"
+                status={employee?.staff_id_status || 'active'}
+              />
             </div>
+            <PrintPortal className="print-idcard">
+              <StaffIdCard
+                employee={employee}
+                photoUrl={photoUrl}
+                expiryMode="date"
+                expiryDate={employee?.staff_id_expiry || new Date(Date.now() + 3 * 365 * 24 * 3600 * 1000).toISOString()}
+                issueDate={employee?.staff_id_issued_at}
+                issuedBy="Human Resources"
+                status={employee?.staff_id_status || 'active'}
+              />
+            </PrintPortal>
           </div>
         </div>
       )}

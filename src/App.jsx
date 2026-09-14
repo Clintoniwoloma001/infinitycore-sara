@@ -3,6 +3,7 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth, AuthProvider } from './hooks/useAuth'
 import { supabase } from './supabaseClient'
 import OnboardingFlow from './components/OnboardingFlow'
+import * as onboardingState from './utils/onboardingState'
 import AttendanceTerminal from './pages/AttendanceTerminal'
 import Layout from './components/Layout'
 import { AccessDenied } from './components/PageStates'
@@ -144,9 +145,16 @@ function Home() {
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [checking, setChecking] = useState(true)
 
+  const dismissOnboarding = () => {
+    if (!onboardingState.isOnboardingDismissed()) onboardingState.dismissOnboarding(30)
+    setShowOnboarding(false)
+    setChecking(false)
+  }
+
   useEffect(() => {
     const checkOnboarding = async () => {
       if (role === 'customer' || !user?.id) { setChecking(false); return }
+      if (onboardingState.isOnboardingDismissed()) { setChecking(false); return }
       try {
         // Check if employee record exists and onboarding is complete
         const { data: emp } = await supabase
@@ -177,7 +185,12 @@ function Home() {
   }, [user?.id, role])
 
   if (checking) return <div className="flex justify-center items-center h-screen"><div className="w-8 h-8 border-4 border-slate-200 border-t-[#009944] rounded-full animate-spin" /></div>
-  if (showOnboarding) return <OnboardingFlow onComplete={() => setShowOnboarding(false)} />
+  if (showOnboarding) return (
+    <OnboardingFlow
+      onComplete={() => { onboardingState.clearOnboardingDismiss(); setShowOnboarding(false) }}
+      onDismiss={dismissOnboarding}
+    />
+  )
   return role === 'customer' ? <CustomerDashboard /> : <Dashboard />
 }
 

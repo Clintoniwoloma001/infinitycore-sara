@@ -18,29 +18,339 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Print — only the .print-area is emitted (used for Employee Record + Staff ID card) */
-@page {
-  size: A4;
-  margin: 12mm;
+/* -----------------------------------------------------------
+   Personnel Record document (A4) + ID card styling.
+   Used inside the print portal; these classes also style the
+   on-screen preview in the modal.
+----------------------------------------------------------- */
+.record-doc {
+  width: 100%;
+  max-width: 794px;
+  margin: 0 auto;
+  background: #fff;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.record-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 2px solid #009944;
+  margin-bottom: 16px;
+}
+
+.record-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #009944;
+  line-height: 1.2;
+}
+
+.record-subtitle {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+.record-head-meta {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.record-photo-frame {
+  width: 68px;
+  height: 82px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.record-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+}
+
+.record-meta {
+  font-size: 11px;
+  color: #64748b;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.record-meta strong {
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.record-summary {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: linear-gradient(to right, #f0fdf4, #ffffff);
+}
+
+.record-summary-identity {
+  display: flex;
+  flex-direction: column;
+}
+
+.record-summary-name {
+  font-size: 17px;
+  font-weight: 700;
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+
+.record-section {
+  margin-bottom: 14px;
+}
+
+.record-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 10px;
+}
+
+.record-section-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  background: #009944;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.record-section-heading {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 4px;
+  flex: 1;
+}
+
+/* Field containers — the key fix for overlapping text. */
+.record-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 16px;
+}
+
+.record-field {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.record-field.col-span-2 {
+  grid-column: span 2;
+}
+
+.record-field-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  font-weight: 500;
+  margin-bottom: 1px;
+  overflow-wrap: anywhere;
+}
+
+.record-field-value {
+  font-size: 13px;
+  color: #1e293b;
+  line-height: 1.4;
+  min-height: 1.25rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.record-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.record-table th {
+  padding: 5px 8px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
+  font-weight: 600;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.record-table td {
+  padding: 5px 8px;
+  border: 1px solid #e2e8f0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: top;
+}
+
+.record-subtitle-list {
+  font-size: 11px;
+  font-weight: 700;
+  color: #0f172a;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 14px 0 6px;
+}
+
+.record-box {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.record-pill {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.record-signature {
+  max-width: 240px;
+  margin-top: 10px;
+}
+
+.record-signature-img {
+  max-height: 48px;
+  max-width: 200px;
+  object-fit: contain;
+  display: block;
+  background: #fff;
+}
+
+.record-footer {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.avoid-break {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+/* ID card dimensions — standard credit-card ratio (~85.6 × 54 mm). */
+.idcard {
+  width: 366px;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 10px 24px -8px rgba(10, 11, 13, 0.18);
+  border: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+@media (min-width: 480px) {
+  .idcard {
+    width: 378px;
+  }
 }
 
 @media print {
-  body * {
-    visibility: hidden;
+  .record-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
-  .print-area,
-  .print-area * {
-    visibility: visible;
+  .idcard {
+    width: 378px;
+    box-shadow: none;
   }
-  .print-area {
-    position: absolute;
-    left: 0;
-    top: 0;
+}
+
+/* ------------------------------------------------------------------
+   Print system — A4 documents (Employee Personnel Record + Staff ID card).
+   Documents are rendered into a body-level portal (.print-area-print)
+   that is hidden on screen and becomes the ONLY visible content on
+   print. Keeping the document outside fixed-position modals lets it
+   flow across multiple A4 pages without clipping/overlapping.
+------------------------------------------------------------------- */
+.print-area-print {
+  display: none;
+}
+
+@page {
+  size: A4;
+  margin: 14mm 13mm 18mm 13mm;
+}
+
+@page {
+  @bottom-center {
+    content: "Page " counter(page) " of " counter(pages);
+    font-size: 9px;
+    color: #475569;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  @bottom-left {
+    content: "Confidential — HR Records | Infinity Bank";
+    font-size: 8px;
+    color: #94a3b8;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+}
+
+/* Single-card print job (Staff ID card) — drop the numbered footer */
+.print-idcard {
+  page: idcard;
+}
+
+@page idcard {
+  @bottom-center {
+    content: none;
+  }
+  @bottom-left {
+    content: none;
+  }
+}
+
+@media print {
+  body > *:not(.print-area-print) {
+    display: none !important;
+  }
+
+  html, body {
+    background: #fff !important;
+    margin: 0 !important;
+  }
+
+  .print-area-print {
+    display: block !important;
     width: 100%;
     margin: 0 !important;
+    padding: 0 !important;
     box-shadow: none !important;
     border: none !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
+
   .no-print {
     display: none !important;
   }

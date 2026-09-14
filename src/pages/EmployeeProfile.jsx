@@ -12,7 +12,8 @@ import { payrollService } from '../services/payrollService'
 import { supabase } from '../supabaseClient'
 import EmployeeHRActions from '../components/EmployeeHRActions'
 import StaffIdCard from '../components/StaffIdCard'
-import EmployeeRecordPrint from '../components/EmployeeRecordPrint'
+import EmployeeRecordPrint, { RECORD_SECTIONS, ALL_RECORD_SECTIONS } from '../components/EmployeeRecordPrint'
+import PrintPortal from '../components/PrintPortal'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -149,6 +150,17 @@ export default function EmployeeProfile() {
   const [photoUrl, setPhotoUrl] = useState(null)
   const [recordBusy, setRecordBusy] = useState(false)
   const [recordError, setRecordError] = useState('')
+
+  // Record section selection (default = full employee file)
+  const [recordSections, setRecordSections] = useState(ALL_RECORD_SECTIONS)
+
+  // Staff ID card configuration
+  const [cardExpiryMode, setCardExpiryMode] = useState('date')
+  const [cardExpiryDate, setCardExpiryDate] = useState('')
+  const [cardIssueDate, setCardIssueDate] = useState(new Date().toISOString().slice(0, 10))
+  const [cardIssuedBy, setCardIssuedBy] = useState('Human Resources')
+  const [cardStatus, setCardStatus] = useState('active')
+  const [cardSaving, setCardSaving] = useState(false)
 
   const canReadPayroll = hasPermission('hr.payroll.read')
   const canManagePayroll = hasPermission('payroll.manage')
@@ -365,6 +377,11 @@ export default function EmployeeProfile() {
           setDraft((prev) => ({ ...prev, ...res }))
         }
       }
+      setCardExpiryMode(employee?.staff_id_expiry ? 'date' : 'date')
+      setCardExpiryDate(employee?.staff_id_expiry ? employee.staff_id_expiry.slice(0, 10) : new Date(Date.now() + 3 * 365 * 24 * 3600 * 1000).toISOString().slice(0, 10))
+      setCardIssueDate((employee?.staff_id_issued_at || new Date().toISOString()).slice(0, 10))
+      setCardIssuedBy(user?.full_name || user?.email || 'Human Resources')
+      setCardStatus(employee?.staff_id_status || 'active')
       setShowCard(true)
     } catch (e) {
       setRecordError(e?.message || 'Unable to generate staff ID')
@@ -380,6 +397,35 @@ export default function EmployeeProfile() {
       setShowRecord(true)
     } catch (e) {
       setRecordError(e?.message || 'Unable to prepare employee record')
+    }
+  }
+
+  const toggleSection = (key) => {
+    setRecordSections((prev) => (
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    ))
+  }
+
+  const selectAllSections = () => setRecordSections(ALL_RECORD_SECTIONS)
+
+  // Persist staff ID card configuration (expiry, issue, status, official ID)
+  const saveCardConfig = async () => {
+    setCardSaving(true)
+    setRecordError('')
+    try {
+      const payload = {
+        staff_id_expiry: cardExpiryMode === 'date' && cardExpiryDate ? cardExpiryDate : null,
+        staff_id_status: cardStatus,
+      }
+      const res = await employeeService.updateHrFields(id, payload)
+      if (res?.ok) {
+        setEmployee((prev) => ({ ...prev, staff_id_expiry: payload.staff_id_expiry, staff_id_status: cardStatus }))
+        setMessage('ID card settings saved.')
+      }
+    } catch (e) {
+      setRecordError(e?.message || 'Unable to save ID card settings — please check that the Phase 12/14 migration is applied.')
+    } finally {
+      setCardSaving(false)
     }
   }
 
@@ -998,20 +1044,86 @@ export default function EmployeeProfile() {
       {/* ---- Staff ID Card Modal ---- */}
       {showCard && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-slate-100 rounded-xl w-full max-w-[440px] max-h-[90vh] overflow-y-auto p-6">
+          <div className="bg-slate-100 rounded-xl w-full max-w-[520px] max-h-[90vh] overflow-y-auto p-6">
             <div className="flex items-center justify-between mb-4 no-print">
               <h3 className="text-lg font-semibold text-slate-900">Staff ID Card</h3>
               <div className="flex items-center gap-3">
                 <button onClick={() => window.print()} className="inline-flex items-center gap-1 text-sm text-[#009944] hover:underline font-medium">
                   <Printer className="w-4 h-4" /> Print Card
                 </button>
+                <button onClick={() => window.print()} className="inline-flex items-center gap-1 text-sm text-slate-600 hover:underline font-medium">
+                  <Download className="w-4 h-4" /> Download
+                </button>
                 <button onClick={() => setShowCard(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
               </div>
             </div>
             {recordError && <div className="mb-3"><ErrorState message={recordError} /></div>}
-            <div className="print-area">
-              <StaffIdCard employee={employee} photoUrl={photoUrl} />
+
+            {canEdit && (
+              <div className="mb-5 rounded-xl border border-slate-200 bg-white p-4">
+                <p className="text-sm font-medium text-slate-800 mb-3">Card Configuration</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelCls}>Expiry</label>
+                    <select className={inputCls} value={cardExpiryMode} onChange={(e) => setCardExpiryMode(e.target.value)}>
+                      <option value="date">Set Expiry Date</option>
+                      <option value="none">No Expiry</option>
+                    </select>
+                  </div>
+                  {cardExpiryMode === 'date' && (
+                    <div>
+                      <label className={labelCls}>Expiry Date</label>
+                      <input type="date" className={inputCls} value={cardExpiryDate} onChange={(e) => setCardExpiryDate(e.target.value)} />
+                    </div>
+                  )}
+                  <div>
+                    <label className={labelCls}>Issue Date</label>
+                    <input type="date" className={inputCls} value={cardIssueDate} onChange={(e) => setCardIssueDate(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Issued By</label>
+                    <input className={inputCls} value={cardIssuedBy} onChange={(e) => setCardIssuedBy(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Status</label>
+                    <select className={inputCls} value={cardStatus} onChange={(e) => setCardStatus(e.target.value)}>
+                      <option value="active">Active</option>
+                      <option value="replaced">Replaced</option>
+                      <option value="expired">Expired</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end">
+                    <button onClick={saveCardConfig} disabled={cardSaving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 disabled:opacity-60">
+                      {cardSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save Settings
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white rounded-xl p-5 flex justify-center">
+              <StaffIdCard
+                employee={employee}
+                photoUrl={photoUrl}
+                expiryMode={cardExpiryMode}
+                expiryDate={cardExpiryDate}
+                issueDate={cardIssueDate}
+                issuedBy={cardIssuedBy}
+                status={cardStatus}
+              />
             </div>
+
+            <PrintPortal className="print-idcard">
+              <StaffIdCard
+                employee={employee}
+                photoUrl={photoUrl}
+                expiryMode={cardExpiryMode}
+                expiryDate={cardExpiryDate}
+                issueDate={cardIssueDate}
+                issuedBy={cardIssuedBy}
+                status={cardStatus}
+              />
+            </PrintPortal>
           </div>
         </div>
       )}
@@ -1020,22 +1132,42 @@ export default function EmployeeProfile() {
       {showRecord && (
         <div className="fixed inset-0 z-50 bg-black/50 overflow-y-auto p-4">
           <div className="max-w-[900px] mx-auto bg-white rounded-xl shadow-xl no-print sticky top-4 z-10">
-            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 flex-wrap gap-3">
               <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
                 <FileText className="w-5 h-5 text-[#009944]" /> Employee Personnel Record
               </h3>
-              <div className="flex items-center gap-2">
-                <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
-                  <Printer className="w-4 h-4" /> Print
+              <div className="flex items-center gap-2 flex-wrap">
+                <button onClick={selectAllSections} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-50">
+                  <CheckCircle2 className="w-4 h-4 text-[#009944]" /> Full Employee File
                 </button>
-                <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-50">
-                  <Download className="w-4 h-4" /> Download PDF
+                <button onClick={() => { selectAllSections(); window.print() }} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+                  <Printer className="w-4 h-4" /> Print {recordSections.length === ALL_RECORD_SECTIONS.length ? 'Full Record' : 'Selected'}
+                </button>
+                <button onClick={() => { selectAllSections(); window.print() }} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-50">
+                  <Download className="w-4 h-4" /> Download {recordSections.length === ALL_RECORD_SECTIONS.length ? 'Full Record' : 'Selected'} PDF
                 </button>
                 <button onClick={() => setShowRecord(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
               </div>
             </div>
+            <div className="px-5 py-3 border-b border-slate-100 bg-slate-50">
+              <p className="text-xs font-medium text-slate-500 mb-2">Select sections to include:</p>
+              <div className="flex flex-wrap gap-2">
+                {RECORD_SECTIONS.map((s) => {
+                  const on = recordSections.includes(s.key)
+                  return (
+                    <button key={s.key} onClick={() => toggleSection(s.key)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${on ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'}`}>
+                      <span className={`w-3 h-3 rounded border flex items-center justify-center ${on ? 'bg-white border-white' : 'border-slate-300'}`}>
+                        {on && <CheckCircle2 className="w-3 h-3 text-[#009944]" />}
+                      </span>
+                      {s.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
           </div>
-          <div className="max-w-[900px] mx-auto mt-0 bg-white border border-slate-200 rounded-b-xl print-area">
+          <div className="max-w-[900px] mx-auto mt-4 bg-white border border-slate-200 rounded-xl overflow-x-auto">
             <EmployeeRecordPrint
               employee={employee}
               education={childrenData.employee_education || []}
@@ -1045,8 +1177,36 @@ export default function EmployeeProfile() {
               documents={docs}
               verifications={verifications}
               photoUrl={photoUrl}
+              payrollItems={payrollItems}
+              onboardingSub={onboardingSub}
+              leaveRequests={leaveRequests}
+              attendance={attendance}
+              appraisals={appraisals}
+              queries={queries}
+              events={events}
+              enabledSections={recordSections}
             />
           </div>
+          <PrintPortal className="record-print">
+            <EmployeeRecordPrint
+              employee={employee}
+              education={childrenData.employee_education || []}
+              workHistory={childrenData.employee_work_history || []}
+              guarantors={childrenData.employee_guarantors || []}
+              fidelityBonds={childrenData.employee_fidelity_bonds || []}
+              documents={docs}
+              verifications={verifications}
+              photoUrl={photoUrl}
+              payrollItems={payrollItems}
+              onboardingSub={onboardingSub}
+              leaveRequests={leaveRequests}
+              attendance={attendance}
+              appraisals={appraisals}
+              queries={queries}
+              events={events}
+              enabledSections={recordSections}
+            />
+          </PrintPortal>
         </div>
       )}
     </div>

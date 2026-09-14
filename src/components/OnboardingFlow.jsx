@@ -18,7 +18,7 @@ const STEPS = [
   { id: 'complete', label: 'Complete', icon: Check },
 ]
 
-export default function OnboardingFlow({ onComplete }) {
+export default function OnboardingFlow({ onComplete, onDismiss }) {
   const { user, profile } = useAuth()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -266,6 +266,11 @@ export default function OnboardingFlow({ onComplete }) {
           >
             Let's Get Started <ArrowRight className="w-5 h-5" />
           </button>
+          {typeof onDismiss === 'function' && (
+            <button onClick={onDismiss} className="mt-3 text-sm text-slate-500 hover:text-slate-700 font-medium">
+              Not now — remind me later
+            </button>
+          )}
           <p className="text-xs text-slate-400 mt-4">Takes about 3 minutes · You can edit later</p>
         </div>
       </div>
