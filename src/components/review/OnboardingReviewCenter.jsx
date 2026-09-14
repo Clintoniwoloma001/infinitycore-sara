@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import {
-  AlertTriangle, Briefcase, Check, CheckCircle2, Clock, FileText,
+  AlertTriangle, Briefcase, Check, CheckCircle2, Clock, ExternalLink, FileText,
   Loader2, Send, X,
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
@@ -310,6 +310,12 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
   const guarantorApproved = verification?.status === 'approved'
   const canApprove = canManage && onboardingStatus !== 'completed' && onboardingStatus !== 'rejected' && !hasUnresolvedCorrections
 
+  const openEmployeeProfile = () => {
+    if (!submission?.employee_id) return
+    window.location.hash = `#/employees/${submission.employee_id}`
+    onClose?.()
+  }
+
   if (!submission) return null
 
   return (
@@ -332,6 +338,14 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
           <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${STATUS_BADGE_CLASSES[onboardingStatus] || STATUS_BADGE_CLASSES.submitted}`}>
             {onboardingStatus.replace(/_/g, ' ')}
           </span>
+          {onboardingStatus === 'completed' && submission?.employee_id && (
+            <button
+              onClick={openEmployeeProfile}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#009944] text-white text-xs font-medium hover:bg-[#007a36]"
+            >
+              <ExternalLink className="w-3.5 h-3.5" /> View Employee 360
+            </button>
+          )}
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100">
             <X className="w-5 h-5" />
           </button>

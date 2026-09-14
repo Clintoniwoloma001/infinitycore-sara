@@ -1,13 +1,21 @@
 import React, { useState } from 'react'
-import { CalendarPlus, Loader2, Video, MapPin, X } from 'lucide-react'
+import { CalendarPlus, CheckCircle2, Copy, Link2, Loader2, Video, MapPin, X } from 'lucide-react'
 import HRJobs from './HRJobs'
 import { date, ModuleTable, status, useTable } from './hrShared'
+import { ErrorState } from '../components/PageStates'
 import { hrService } from '../services/hrService'
+import { onboardingService, DEFAULT_EXPIRY_DAYS } from '../services/onboardingService'
 import { useAuth } from '../hooks/useAuth'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 const PLATFORMS = ['Google Meet', 'Zoom', 'Microsoft Teams', 'Other']
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text) } catch {
+    const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta)
+  }
+}
 
 export default function Recruitment() {
   const { user } = useAuth()
@@ -16,6 +24,10 @@ export default function Recruitment() {
   const [form, setForm] = useState({ interview_type: 'PHYSICAL' })
   const [creating, setCreating] = useState(false)
   const [formError, setFormError] = useState('')
+  const [onboardTarget, setOnboardTarget] = useState(null)
+  const [generatedLink, setGeneratedLink] = useState(null)
+  const [onboardBusy, setOnboardBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
 
@@ -56,6 +68,36 @@ export default function Recruitment() {
     }
   }
 
+  const createOnboardingLink = async (candidate) => {
+    setOnboardBusy(true)
+    setFormError('')
+    try {
+      const link = await onboardingService.createLink({
+        candidateName: candidate.full_name,
+        candidateEmail: candidate.email || '',
+        candidatePhone: candidate.phone || '',
+        position: candidate.applied_role || '',
+        department: candidate.department || '',
+        branch: '',
+        employmentType: 'full_time',
+        expiresInDays: DEFAULT_EXPIRY_DAYS,
+        createdBy: user?.id,
+      })
+      setGeneratedLink(link)
+    } catch (e) {
+      setFormError(e?.message || 'Failed to create onboarding link')
+    } finally {
+      setOnboardBusy(false)
+    }
+  }
+
+  const copyGeneratedLink = async () => {
+    if (!generatedLink?.url) return
+    await copyText(generatedLink.url)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
   return (
     <div className="space-y-8">
       <HRJobs />
@@ -74,9 +116,16 @@ export default function Recruitment() {
           { key: 'screening_score', label: 'Screening', render: (r) => r.screening_score ?? '-' },
           { key: 'created_at', label: 'Applied', render: (r) => date(r.created_at) },
           { key: 'actions', label: 'Actions', render: (r) => (
-            <button onClick={() => openScheduler(r)} className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-slate-300 text-slate-600 text-xs hover:bg-slate-100">
-              <CalendarPlus className="w-3.5 h-3.5" /> Schedule Interview
-            </button>
+            <div className="flex justify-end gap-1.5">
+              {r.application_status === 'hired' && (
+                <button onClick={() => { setOnboardTarget(r); setGeneratedLink(null); setFormError(''); createOnboardingLink(r) }} className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-emerald-300 text-emerald-600 text-xs hover:bg-emerald-50">
+                  <Link2 className="w-3.5 h-3.5" /> Onboard
+                </button>
+              )}
+              <button onClick={() => openScheduler(r)} className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-slate-300 text-slate-600 text-xs hover:bg-slate-100">
+                <CalendarPlus className="w-3.5 h-3.5" /> Schedule Interview
+              </button>
+            </div>
           ) },
         ]}
       />
@@ -133,6 +182,53 @@ export default function Recruitment() {
                 {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <CalendarPlus className="w-4 h-4" />} Schedule
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Onboard (generate onboarding link for hired candidate) ---- */}
+      {onboardTarget && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">{generatedLink ? 'Onboarding link generated' : 'Onboard Candidate'}</h3>
+                <p className="text-sm text-slate-500 mt-0.5">{onboardTarget.full_name} — {onboardTarget.email || 'No email'}</p>
+              </div>
+              <button onClick={() => setOnboardTarget(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+
+            {formError && <div className="mb-4"><ErrorState message={formError} /></div>}
+
+            {generatedLink ? (
+              <div>
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 mb-4 flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <span>Onboarding link created. Copy this link and send it to the candidate — it expires {date(generatedLink.expiry)} and then appears in Onboarding Links for review.</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input readOnly value={generatedLink.url} className={inputCls} />
+                  <button onClick={copyGeneratedLink} className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] whitespace-nowrap">
+                    <Copy className="w-4 h-4" /> {copied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+                <div className="flex justify-end mt-4">
+                  <button onClick={() => setOnboardTarget(null)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Done</button>
+                </div>
+              </div>
+            ) : (
+              <div className="py-2">
+                {onboardBusy ? (
+                  <div className="flex items-center justify-center py-8 text-slate-500 text-sm">
+                    <Loader2 className="w-5 h-5 animate-spin mr-2" /> Creating onboarding link…
+                  </div>
+                ) : (
+                  <button onClick={() => createOnboardingLink(onboardTarget)} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+                    <Link2 className="w-4 h-4" /> Generate Onboarding Link
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

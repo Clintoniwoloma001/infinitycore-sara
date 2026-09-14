@@ -24,6 +24,7 @@ import {
   Users,
   Wallet,
   Monitor,
+  UserCircle,
 } from 'lucide-react'
 import { PERMISSIONS } from '../constants/permissions'
 
@@ -32,6 +33,7 @@ export const routeConfig = [
     section: 'Core Banking Intelligence',
     items: [
       { label: 'Dashboard', path: '/', icon: LayoutDashboard, element: 'Dashboard', permissions: [] },
+      { label: 'My Profile', path: '/profile', icon: UserCircle, element: 'Profile', permissions: [] },
       { label: 'BankOne Imports', path: '/bankone-imports', icon: Database, element: 'BankOneImportCenter', permissions: [PERMISSIONS.BANKONE_READ] },
     ],
   },

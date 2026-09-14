@@ -94,13 +94,13 @@ export default function Layout({ children }) {
           ))}
         </nav>
         <div className="px-4 py-4 border-t border-white/10">
-          <div className="flex items-center gap-3 mb-3">
+          <Link to="/profile" onClick={() => setOpen(false)} className="flex items-center gap-3 mb-3 hover:bg-white/5 rounded-lg p-1 -m-1 transition-colors">
             <div className="w-9 h-9 rounded-full bg-[#FF8C00] flex items-center justify-center text-black font-semibold text-sm">{name?.charAt(0)?.toUpperCase()}</div>
             <div className="min-w-0">
               <div className="text-sm font-medium truncate">{name}</div>
               <div className="text-[11px] text-white/50 truncate">{roleMetadata?.label || role}</div>
             </div>
-          </div>
+          </Link>
           <button onClick={logout} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white/60 hover:bg-white/5 hover:text-white">
             <LogOut className="w-4 h-4" /> Sign out
           </button>

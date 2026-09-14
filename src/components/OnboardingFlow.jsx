@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../hooks/useAuth'
-import { Loader2, Check, User, Briefcase, Phone, MapPin, Heart, ArrowRight, ArrowLeft, Sparkles, Calendar, Building2, Banknote, FileText } from 'lucide-react'
+import { employeeService } from '../services/employeeService'
+import { Loader2, Check, User, Briefcase, Phone, MapPin, Heart, ArrowRight, ArrowLeft, Sparkles, Calendar, Building2, Banknote, FileText, CreditCard, UserCircle } from 'lucide-react'
 
 const inputCls = 'w-full h-11 rounded-lg border border-slate-300 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944] transition-all'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -23,6 +24,7 @@ export default function OnboardingFlow({ onComplete }) {
   const [saving, setSaving] = useState(false)
   const [animating, setAnimating] = useState(false)
   const [employee, setEmployee] = useState(null)
+  const [done, setDone] = useState(null)
   const [form, setForm] = useState({
     full_name: profile?.full_name || '',
     email: user?.email || '',
@@ -130,25 +132,45 @@ export default function OnboardingFlow({ onComplete }) {
         beneficiary_relationship: form.beneficiary_relationship || null,
       }
 
+      let insertedId = null
+      let insertedEmployeeNumber = null
       if (employee?.id) {
         await supabase.from('employees').update(payload).eq('id', employee.id)
       } else {
-        const { data } = await supabase.from('employees').insert(payload).select().single()
-        if (data) setEmployee(data)
+        const { data: inserted } = await supabase.from('employees').insert(payload).select().single()
+        insertedId = inserted?.id || null
+        insertedEmployeeNumber = inserted?.employee_number || null
+        if (inserted) {
+          setEmployee(inserted)
+          setForm((prev) => ({ ...prev, ...inserted }))
+        }
       }
 
-      // Create digital file record
+      const employeeId = employee?.id || insertedId
+
+      // Assign a permanent Employee Number / Staff ID (idempotent)
+      let employeeNumber = insertedEmployeeNumber || employee?.employee_number
+      if (employeeId && !employeeNumber) {
+        try {
+          const res = await employeeService.ensureEmployeeNumber(employeeId)
+          employeeNumber = res?.employee_number || res?.staff_id || employeeNumber
+        } catch {
+          // Never block completion on a numbering failure
+        }
+      }
+
+      // Create digital file record (tied to the real employee id)
       const setupSteps = STEPS.slice(1, -1).map((s) => ({ step: s.id, label: s.label, completed: true }))
       await supabase.from('employee_digital_files').upsert({
-        employee_id: employee?.id,
+        employee_id: employeeId,
         user_id: user?.id,
         onboarding_completed: true,
         onboarding_completed_at: new Date().toISOString(),
         profile_completion_pct: 100,
         setup_steps: setupSteps,
-      })
+      }, { onConflict: 'employee_id' })
 
-      onComplete?.()
+      setDone({ employeeId, employeeNumber, full_name: form.full_name, department: form.department, position: form.position })
     } catch (e) {
       console.error('Onboarding save error:', e)
     } finally {
@@ -157,6 +179,53 @@ export default function OnboardingFlow({ onComplete }) {
   }
 
   const progress = ((step + 1) / STEPS.length) * 100
+
+  // DONE — completion confirmation with employee number + next steps
+  if (done) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-emerald-50 flex items-center justify-center p-4">
+        <div className="max-w-lg w-full text-center">
+          <div className="w-24 h-24 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-6 animate-[fadeIn_0.5s_ease]">
+            <Check className="w-12 h-12 text-[#009944]" />
+          </div>
+          <h1 className="text-3xl font-bold text-slate-900 mb-3">Welcome to InfinityCore! 🎉</h1>
+          <p className="text-slate-600 text-lg mb-6">
+            Your employee record is complete. Your staff identity has been issued below.
+          </p>
+
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-6 text-left">
+            <div className="rounded-xl bg-gradient-to-br from-[#009944] to-[#007a36] text-white p-5 mb-5">
+              <p className="text-xs uppercase tracking-wider text-emerald-100 mb-1">Employee Number / Staff ID</p>
+              <p className="text-2xl font-bold tracking-wide">{done.employeeNumber || 'Assigning…'}</p>
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500">Employee</span>
+                <span className="font-medium text-slate-900">{done.full_name}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500">Department</span>
+                <span className="font-medium text-slate-900">{done.department || '—'}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500">Position</span>
+                <span className="font-medium text-slate-900">{done.position || '—'}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <button onClick={() => { window.location.hash = '#/profile' }} className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#009944] text-white font-medium hover:bg-[#007a36] transition-all hover:scale-105 shadow-lg">
+              <UserCircle className="w-5 h-5" /> View My Profile
+            </button>
+            <button onClick={() => { window.location.hash = '#/profile?card=1' }} className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl border-2 border-[#009944] text-[#009944] font-medium hover:bg-emerald-50 transition-all">
+              <CreditCard className="w-5 h-5" /> View Staff ID Card
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   // WELCOME STEP
   if (step === 0) {

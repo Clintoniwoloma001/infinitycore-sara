@@ -4,6 +4,10 @@ import { logAction } from './supabaseService'
 // ------------------------------------------------------------------
 // Employee profiles — core record plus the phase-6 child tables
 // (education, work history, guarantors, fidelity bonds).
+//
+// Phase 12: Two new RPC-backed update paths:
+//   - updateHrFields:      HR/Admin field-protected update via RPC
+//   - updatePersonalInfo:  Self-service personal info via RPC
 // ------------------------------------------------------------------
 
 const CHILD_TABLES = ['employee_education', 'employee_work_history', 'employee_guarantors', 'employee_fidelity_bonds']
@@ -37,6 +41,37 @@ export const employeeService = {
       .single()
     if (error) throw error
     logAction({ action: 'EMPLOYEE_UPDATED', entityType: 'Employee', entityId: employeeId, details: 'Employee profile updated' })
+    return data
+  },
+
+  // Phase 12: HR/Admin field-protected update via server-side RPC.
+  // Only allows HR-controlled fields; rejects anything else.
+  async updateHrFields(employeeId, fields) {
+    const { data, error } = await supabase.rpc('update_employee_hr_fields', {
+      p_employee_id: employeeId,
+      p_fields: fields,
+    })
+    if (error) throw error
+    return data
+  },
+
+  // Phase 12: Self-service personal info update via server-side RPC.
+  // Only allows personal contact fields; cannot change employment data.
+  async updatePersonalInfo(fields) {
+    const { data, error } = await supabase.rpc('update_profile_personal', {
+      p_fields: fields,
+    })
+    if (error) throw error
+    return data
+  },
+
+  // Phase 13: Assign a permanent Employee Number / Staff ID.
+  // Idempotent — returns the existing number if already assigned.
+  async ensureEmployeeNumber(employeeId) {
+    const { data, error } = await supabase.rpc('generate_employee_number', {
+      p_employee_id: employeeId,
+    })
+    if (error) throw error
     return data
   },
 

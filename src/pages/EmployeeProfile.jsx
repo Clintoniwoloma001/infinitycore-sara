@@ -1,17 +1,18 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Briefcase, Loader2, Pencil, Plus, RefreshCw, Save, Trash2, X, Star, MessageSquare } from 'lucide-react'
+import { ArrowLeft, Briefcase, CalendarDays, CheckCircle2, Clock, CreditCard, Download, FileText, GraduationCap, Loader2, Pencil, Plus, Printer, RefreshCw, Save, ShieldCheck, Trash2, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import { date, money, status } from './hrShared'
 import { employeeService } from '../services/employeeService'
 import { attendanceService } from '../services/attendanceService'
-import { attendanceEngineService } from '../services/attendanceEngineService'
 import { documentService } from '../services/documentService'
 import { guarantorVerificationService } from '../services/guarantorVerificationService'
 import { payrollService } from '../services/payrollService'
 import { supabase } from '../supabaseClient'
 import EmployeeHRActions from '../components/EmployeeHRActions'
+import StaffIdCard from '../components/StaffIdCard'
+import EmployeeRecordPrint from '../components/EmployeeRecordPrint'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -37,11 +38,22 @@ function Field({ label, value }) {
   )
 }
 
-function InputField({ label, value, onChange, type }) {
+function InputField({ label, value, onChange, type, disabled }) {
   return (
     <div>
       <label className={labelCls}>{label}</label>
-      <input className={inputCls} value={value || ''} onChange={(e) => onChange(e.target.value)} type={type || 'text'} />
+      <input className={`${inputCls} ${disabled ? 'bg-slate-50 text-slate-500' : ''}`} value={value || ''} onChange={(e) => onChange(e.target.value)} type={type || 'text'} disabled={disabled} readOnly={disabled} />
+    </div>
+  )
+}
+
+function SelectField({ label, value, onChange, options, disabled }) {
+  return (
+    <div>
+      <label className={labelCls}>{label}</label>
+      <select className={`${inputCls} ${disabled ? 'bg-slate-50 text-slate-500' : ''}`} value={value || ''} onChange={onChange} disabled={disabled}>
+        {options.map((o) => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
+      </select>
     </div>
   )
 }
@@ -66,32 +78,44 @@ function AddRow({ columns, onAdd }) {
   )
 }
 
+function ComingSoon({ title, description }) {
+  return (
+    <div className="text-center py-12">
+      <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-4">
+        <Clock className="w-7 h-7 text-slate-400" />
+      </div>
+      <h4 className="font-semibold text-slate-700 mb-1">{title}</h4>
+      <p className="text-sm text-slate-400">{description || 'This section will be available in a future update.'}</p>
+    </div>
+  )
+}
+
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'personal', label: 'Personal' },
-  { id: 'contact', label: 'Contact' },
   { id: 'employment', label: 'Employment' },
-  { id: 'bank', label: 'Bank & Payroll' },
-  { id: 'statutory', label: 'Statutory' },
-  { id: 'kin', label: 'Emergency / Next of Kin' },
-  { id: 'education', label: 'Education' },
-  { id: 'work', label: 'Experience' },
-  { id: 'guarantors', label: 'Guarantors' },
-  { id: 'bonds', label: 'Fidelity Bond' },
-  { id: 'certificates', label: 'Certificates' },
   { id: 'documents', label: 'Documents' },
   { id: 'onboarding', label: 'Onboarding' },
-  { id: 'payroll', label: 'Payroll' },
+  { id: 'guarantors', label: 'Guarantor' },
+  { id: 'leave', label: 'Leave' },
   { id: 'attendance', label: 'Attendance' },
-  { id: 'hr-actions', label: 'HR Actions' },
-  { id: 'appraisals', label: 'Appraisals' },
-  { id: 'queries', label: 'Queries' },
-  { id: 'audit', label: 'Audit Timeline' },
+  { id: 'performance', label: 'Performance' },
+  { id: 'payroll', label: 'Payroll' },
+  { id: 'queries', label: 'Queries / Disciplinary' },
+  { id: 'training', label: 'Training' },
+  { id: 'audit', label: 'Audit' },
+]
+
+const HR_CONTROLLED_FIELDS = [
+  'employee_code', 'department', 'position', 'employment_status', 'employment_type',
+  'hire_date', 'salary', 'basic_salary', 'allowances', 'branch', 'branch_manager_name',
+  'area_manager_name', 'bank_name', 'account_number', 'account_name', 'bank_sort_code',
+  'bvn', 'nin', 'pension_id', 'tax_id', 'nhf_id', 'hmo', 'manager_id', 'reporting_manager_id',
 ]
 
 export default function EmployeeProfile() {
   const { id } = useParams()
-  const { hasPermission } = useAuth()
+  const { hasPermission, user, isAdmin, isHR } = useAuth()
   const canEdit = hasPermission('hr.employee.update')
 
   const [employee, setEmployee] = useState(null)
@@ -117,6 +141,14 @@ export default function EmployeeProfile() {
   const [onboardingSub, setOnboardingSub] = useState(null)
   const [appraisals, setAppraisals] = useState([])
   const [queries, setQueries] = useState([])
+  const [leaveRequests, setLeaveRequests] = useState([])
+  const [trainingLoading, setTrainingLoading] = useState(false)
+
+  const [showCard, setShowCard] = useState(false)
+  const [showRecord, setShowRecord] = useState(false)
+  const [photoUrl, setPhotoUrl] = useState(null)
+  const [recordBusy, setRecordBusy] = useState(false)
+  const [recordError, setRecordError] = useState('')
 
   const canReadPayroll = hasPermission('hr.payroll.read')
   const canManagePayroll = hasPermission('payroll.manage')
@@ -132,14 +164,19 @@ export default function EmployeeProfile() {
       setChildrenData(childs)
       const docList = await documentService.list('employee', id).catch(() => [])
       setDocs(docList)
-      const att = await attendanceService.getHistory(id, 60).catch(() => [])
+      const passportDoc = docList.find((d) => /passport/i.test(d.document_type))
+      if (passportDoc?.file_path) {
+        const url = await documentService.getSignedUrl(passportDoc.file_path).catch(() => null)
+        if (url) setPhotoUrl(url)
+      }
+      const att = await attendanceService.getHistory(id, { limit: 90 }).catch(() => [])
       setAttendance(att)
 
-      // Load guarantor verifications for this employee
+      // Load guarantor verifications
       const verifs = await guarantorVerificationService.listVerificationsForEmployee(id).catch(() => [])
       setVerifications(verifs)
 
-      // Load guarantor documents from all verifications
+      // Load guarantor documents
       if (verifs.length > 0) {
         const allDocs = await Promise.all(
           verifs.map((v) => guarantorVerificationService.listGuarantorDocuments(v.id).catch(() => []))
@@ -149,7 +186,7 @@ export default function EmployeeProfile() {
         setGuarantorDocs([])
       }
 
-      // Load onboarding events for this employee's verifications
+      // Load onboarding events
       if (verifs.length > 0) {
         const verifIds = verifs.map((v) => v.id)
         const { data: evtData } = await supabase
@@ -163,7 +200,7 @@ export default function EmployeeProfile() {
         setEvents([])
       }
 
-      // Load payroll items for this employee (only if permitted)
+      // Load payroll
       if (canReadPayroll) {
         const items = await payrollService.itemsForEmployee(id).catch(() => [])
         setPayrollItems(items)
@@ -171,15 +208,19 @@ export default function EmployeeProfile() {
         setPayrollPeriods(periods)
       }
 
-      // Load onboarding submission, appraisals, and queries
-      const [subRes, apprRes, queryRes] = await Promise.all([
+      // Load onboarding submission, appraisals, queries, leave requests
+      const [subRes, apprRes, queryRes, leaveRes] = await Promise.all([
         supabase.from('employee_onboarding_submissions').select('*').eq('employee_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
         supabase.from('employee_appraisals').select('*').eq('employee_id', id).order('created_at', { ascending: false }),
         supabase.from('hr_queries').select('*').eq('employee_id', id).order('created_at', { ascending: false }),
+        emp?.user_id
+          ? supabase.from('leave_requests').select('*').eq('created_by', emp.user_id).order('created_at', { ascending: false })
+          : Promise.resolve({ data: [] }),
       ])
       setOnboardingSub(subRes?.data || null)
       setAppraisals(apprRes?.data || [])
       setQueries(queryRes?.data || [])
+      setLeaveRequests(leaveRes?.data || [])
     } catch (e) {
       setError(e?.message || 'Unable to load employee profile')
     } finally {
@@ -189,14 +230,89 @@ export default function EmployeeProfile() {
 
   useEffect(() => { load() }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const saveProfile = async () => {
+  // HR saves employment fields via RPC
+  const saveHrFields = async (fieldsToSave) => {
     setSaving(true)
     setMessage('')
     try {
-      const updated = await employeeService.update(id, draft)
-      setEmployee(updated)
-      setDraft(updated)
+      await employeeService.updateHrFields(id, fieldsToSave)
       setMessage('Saved.')
+      await load()
+    } catch (e) {
+      setMessage(e?.message || 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Personal info save (RPC)
+  const savePersonalInfo = async () => {
+    setSaving(true)
+    setMessage('')
+    try {
+      const personalFields = {
+        full_name: draft.full_name,
+        email: draft.email,
+        phone: draft.phone,
+        date_of_birth: draft.date_of_birth,
+        sex: draft.sex,
+        state_of_origin: draft.state_of_origin,
+        lga: draft.lga,
+        town: draft.town,
+        residential_address: draft.residential_address,
+        religion: draft.religion,
+        denomination: draft.denomination,
+        nationality: draft.nationality,
+        marital_status: draft.marital_status,
+        spouse_name: draft.spouse_name,
+        spouse_occupation: draft.spouse_occupation,
+        spouse_phone: draft.spouse_phone,
+        spouse_email: draft.spouse_email,
+        emergency_contact_name: draft.emergency_contact_name,
+        emergency_contact_phone: draft.emergency_contact_phone,
+      }
+      await employeeService.updatePersonalInfo(personalFields)
+      setMessage('Saved.')
+      await load()
+    } catch (e) {
+      setMessage(e?.message || 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // HR saves full employment record
+  const saveEmployment = async () => {
+    setSaving(true)
+    setMessage('')
+    try {
+      const empFields = {
+        employee_code: draft.employee_code,
+        department: draft.department,
+        position: draft.position,
+        employment_status: draft.employment_status,
+        employment_type: draft.employment_type,
+        hire_date: draft.hire_date,
+        salary: draft.salary,
+        basic_salary: draft.basic_salary,
+        allowances: draft.allowances,
+        branch: draft.branch,
+        branch_manager_name: draft.branch_manager_name,
+        area_manager_name: draft.area_manager_name,
+        bank_name: draft.bank_name,
+        account_number: draft.account_number,
+        account_name: draft.account_name,
+        bank_sort_code: draft.bank_sort_code,
+        bvn: draft.bvn,
+        nin: draft.nin,
+        pension_id: draft.pension_id,
+        tax_id: draft.tax_id,
+        nhf_id: draft.nhf_id,
+        hmo: draft.hmo,
+      }
+      await employeeService.updateHrFields(id, empFields)
+      setMessage('Saved.')
+      await load()
     } catch (e) {
       setMessage(e?.message || 'Save failed')
     } finally {
@@ -238,17 +354,49 @@ export default function EmployeeProfile() {
   const d = draft
   const setD = (key) => (e) => setDraft({ ...draft, [key]: e.target.value })
 
+  const openCard = async () => {
+    setRecordError('')
+    setRecordBusy(true)
+    try {
+      if (employee?.id && !employee.employee_number && !employee.staff_id) {
+        const res = await employeeService.ensureEmployeeNumber(id)
+        if (res?.employee_number) {
+          setEmployee((prev) => ({ ...prev, ...res }))
+          setDraft((prev) => ({ ...prev, ...res }))
+        }
+      }
+      setShowCard(true)
+    } catch (e) {
+      setRecordError(e?.message || 'Unable to generate staff ID')
+    } finally {
+      setRecordBusy(false)
+    }
+  }
+
+  const openRecord = async () => {
+    setRecordError('')
+    try {
+      await load()
+      setShowRecord(true)
+    } catch (e) {
+      setRecordError(e?.message || 'Unable to prepare employee record')
+    }
+  }
+
   return (
     <div>
       <Link to="/employees" className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-[#009944] mb-4">
         <ArrowLeft className="w-4 h-4" /> Back to employees
       </Link>
 
+      {/* Header */}
       <div className="bg-white rounded-lg border border-slate-200 p-6 mb-6">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div className="flex items-start gap-4">
-            <div className="w-14 h-14 rounded-full bg-[#009944] text-white flex items-center justify-center text-xl font-semibold">
-              {employee?.full_name?.charAt(0)?.toUpperCase() || 'E'}
+            <div className="w-14 h-14 rounded-full bg-[#009944] text-white flex items-center justify-center text-xl font-semibold overflow-hidden">
+              {photoUrl ? (
+                <img src={photoUrl} alt="Passport" className="w-full h-full object-cover" />
+              ) : employee?.full_name?.charAt(0)?.toUpperCase() || 'E'}
             </div>
             <div>
               <h2 className="text-2xl font-semibold text-slate-900">{employee?.full_name}</h2>
@@ -256,11 +404,22 @@ export default function EmployeeProfile() {
               <div className="flex flex-wrap gap-2 mt-2">
                 <span className="text-xs">{status(employee?.employment_status)}</span>
                 <span className="text-xs">{employee?.employee_code ? `Code: ${employee.employee_code}` : ''}</span>
+                {employee?.staff_id && <span className="text-xs font-semibold text-[#009944]">Staff ID: {employee.staff_id}</span>}
               </div>
             </div>
           </div>
-          {message && !message.includes('fail') && <span className="text-sm text-emerald-600">{message}</span>}
-          {message.includes('fail') && <span className="text-sm text-rose-600">{message}</span>}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+            {message && !message.includes('fail') && <span className="text-sm text-emerald-600">{message}</span>}
+            {message.includes('fail') && <span className="text-sm text-rose-600">{message}</span>}
+            <button onClick={openCard} disabled={recordBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-[#009944] text-[#009944] text-sm font-medium hover:bg-emerald-50 disabled:opacity-60 whitespace-nowrap">
+              {recordBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />} Staff ID Card
+            </button>
+            <button onClick={openRecord}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 whitespace-nowrap">
+              <Printer className="w-4 h-4" /> Print / Download Record
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
           {[
@@ -277,6 +436,7 @@ export default function EmployeeProfile() {
         </div>
       </div>
 
+      {/* Tabs */}
       <div className="flex gap-2 overflow-x-auto pb-3 mb-6">
         {TABS.map((t) => (
           <button key={t.id} onClick={() => setTab(t.id)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border ${tab === t.id ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-500 border-slate-200'}`}>
@@ -285,6 +445,7 @@ export default function EmployeeProfile() {
         ))}
       </div>
 
+      {/* ---- OVERVIEW ---- */}
       {tab === 'overview' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Section title="Personal">
@@ -306,6 +467,11 @@ export default function EmployeeProfile() {
               <Field label="Employment Type" value={d.employment_type} />
               <Field label="Hire Date" value={date(d.hire_date)} />
               <Field label="Salary" value={money(d.salary)} />
+              <Field label="Allowances" value={money(d.allowances)} />
+              <Field label="HMO" value={d.hmo} />
+              <Field label="Branch" value={d.branch} />
+              <Field label="Branch Manager" value={d.branch_manager_name} />
+              <Field label="Area Manager" value={d.area_manager_name} />
               <Field label="Bank" value={d.bank_name ? `${d.bank_name} ${d.account_number || ''}`.trim() : '—'} />
               <Field label="Pension ID" value={d.pension_id} />
               <Field label="Tax ID" value={d.tax_id} />
@@ -314,11 +480,12 @@ export default function EmployeeProfile() {
         </div>
       )}
 
+      {/* ---- PERSONAL (self-editable fields) ---- */}
       {tab === 'personal' && (
         <Section
           title="Personal Information"
-          actions={canEdit && (
-            <button onClick={saveProfile} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+          actions={(
+            <button onClick={savePersonalInfo} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
             </button>
           )}
@@ -343,111 +510,170 @@ export default function EmployeeProfile() {
             <InputField label="Spouse Email" value={d.spouse_email} onChange={(v) => setDraft({ ...draft, spouse_email: v })} />
             <InputField label="Number of Children" value={d.number_of_children} onChange={(v) => setDraft({ ...draft, number_of_children: v })} type="number" />
             <InputField label="Children Age Range" value={d.children_age_range} onChange={(v) => setDraft({ ...draft, children_age_range: v })} />
+            <InputField label="Emergency Contact Name" value={d.emergency_contact_name} onChange={(v) => setDraft({ ...draft, emergency_contact_name: v })} />
+            <InputField label="Emergency Contact Phone" value={d.emergency_contact_phone} onChange={(v) => setDraft({ ...draft, emergency_contact_phone: v })} />
           </div>
         </Section>
       )}
 
+      {/* ---- EMPLOYMENT (HR-controlled) ---- */}
       {tab === 'employment' && (
         <Section
-          title="Employment"
+          title="Employment Information"
           actions={canEdit && (
-            <button onClick={saveProfile} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+            <button onClick={saveEmployment} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
             </button>
           )}
         >
+          {!canEdit && (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800 mb-4">
+              <ShieldCheck className="w-4 h-4 inline mr-1" />
+              Employment fields are HR-controlled. Only authorized HR/Admin users can edit these fields.
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <InputField label="Employee Code" value={d.employee_code} onChange={(v) => setDraft({ ...draft, employee_code: v })} />
-            <InputField label="Department" value={d.department} onChange={(v) => setDraft({ ...draft, department: v })} />
-            <InputField label="Position" value={d.position} onChange={(v) => setDraft({ ...draft, position: v })} />
+            <InputField label="Employee Code" value={d.employee_code} onChange={(v) => setDraft({ ...draft, employee_code: v })} disabled={!canEdit} />
+            <InputField label="Department" value={d.department} onChange={(v) => setDraft({ ...draft, department: v })} disabled={!canEdit} />
+            <InputField label="Position" value={d.position} onChange={(v) => setDraft({ ...draft, position: v })} disabled={!canEdit} />
             <div>
               <label className={labelCls}>Employment Status</label>
-              <select className={inputCls} value={d.employment_status || 'onboarding'} onChange={setD('employment_status')}>
+              <select className={`${inputCls} ${!canEdit ? 'bg-slate-50 text-slate-500' : ''}`} value={d.employment_status || 'onboarding'} onChange={setD('employment_status')} disabled={!canEdit}>
                 {['onboarding', 'active', 'probation', 'on_leave', 'terminated', 'suspended', 'inactive'].map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <InputField label="Employment Type" value={d.employment_type} onChange={(v) => setDraft({ ...draft, employment_type: v })} />
-            <InputField label="Hire Date" value={d.hire_date} onChange={(v) => setDraft({ ...draft, hire_date: v })} type="date" />
-            <InputField label="Salary" value={d.salary} onChange={(v) => setDraft({ ...draft, salary: v })} type="number" />
-            <InputField label="Branch" value={d.branch} onChange={(v) => setDraft({ ...draft, branch: v })} />
-            <InputField label="Bank Name" value={d.bank_name} onChange={(v) => setDraft({ ...draft, bank_name: v })} />
-            <InputField label="Account Number" value={d.account_number} onChange={(v) => setDraft({ ...draft, account_number: v })} />
-            <InputField label="BVN" value={d.bvn} onChange={(v) => setDraft({ ...draft, bvn: v })} />
-            <InputField label="NIN" value={d.nin} onChange={(v) => setDraft({ ...draft, nin: v })} />
-            <InputField label="Pension ID" value={d.pension_id} onChange={(v) => setDraft({ ...draft, pension_id: v })} />
-            <InputField label="Tax ID" value={d.tax_id} onChange={(v) => setDraft({ ...draft, tax_id: v })} />
+            <InputField label="Employment Type" value={d.employment_type} onChange={(v) => setDraft({ ...draft, employment_type: v })} disabled={!canEdit} />
+            <InputField label="Hire Date" value={d.hire_date} onChange={(v) => setDraft({ ...draft, hire_date: v })} type="date" disabled={!canEdit} />
+            <InputField label="Salary" value={d.salary} onChange={(v) => setDraft({ ...draft, salary: v })} type="number" disabled={!canEdit} />
+            <InputField label="Basic Salary" value={d.basic_salary} onChange={(v) => setDraft({ ...draft, basic_salary: v })} type="number" disabled={!canEdit} />
+            <InputField label="Allowances" value={d.allowances} onChange={(v) => setDraft({ ...draft, allowances: v })} type="number" disabled={!canEdit} />
+            <InputField label="HMO" value={d.hmo} onChange={(v) => setDraft({ ...draft, hmo: v })} disabled={!canEdit} />
+            <InputField label="Branch" value={d.branch} onChange={(v) => setDraft({ ...draft, branch: v })} disabled={!canEdit} />
+            <InputField label="Branch Manager" value={d.branch_manager_name} onChange={(v) => setDraft({ ...draft, branch_manager_name: v })} disabled={!canEdit} />
+            <InputField label="Area Manager" value={d.area_manager_name} onChange={(v) => setDraft({ ...draft, area_manager_name: v })} disabled={!canEdit} />
+            <InputField label="Bank Name" value={d.bank_name} onChange={(v) => setDraft({ ...draft, bank_name: v })} disabled={!canEdit} />
+            <InputField label="Account Number" value={d.account_number} onChange={(v) => setDraft({ ...draft, account_number: v })} disabled={!canEdit} />
+            <InputField label="Account Name" value={d.account_name} onChange={(v) => setDraft({ ...draft, account_name: v })} disabled={!canEdit} />
+            <InputField label="Bank Sort Code" value={d.bank_sort_code} onChange={(v) => setDraft({ ...draft, bank_sort_code: v })} disabled={!canEdit} />
+            <InputField label="BVN" value={d.bvn} onChange={(v) => setDraft({ ...draft, bvn: v })} disabled={!canEdit} />
+            <InputField label="NIN" value={d.nin} onChange={(v) => setDraft({ ...draft, nin: v })} disabled={!canEdit} />
+            <InputField label="Pension ID" value={d.pension_id} onChange={(v) => setDraft({ ...draft, pension_id: v })} disabled={!canEdit} />
+            <InputField label="Tax ID" value={d.tax_id} onChange={(v) => setDraft({ ...draft, tax_id: v })} disabled={!canEdit} />
+            <InputField label="NHF ID" value={d.nhf_id} onChange={(v) => setDraft({ ...draft, nhf_id: v })} disabled={!canEdit} />
           </div>
         </Section>
       )}
 
-      {tab === 'kin' && (
-        <Section
-          title="Next of Kin & Beneficiary"
-          actions={canEdit && (
-            <button onClick={saveProfile} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
-            </button>
+      {/* ---- DOCUMENTS ---- */}
+      {tab === 'documents' && (
+        <>
+          <Section title="Employee Documents">
+            {docs.length === 0 && <EmptyState title="No employee documents" description="Uploaded onboarding documents will appear here." />}
+            {docs.length > 0 && (
+              <ul className="divide-y divide-slate-100">
+                {docs.map((doc) => (
+                  <li key={doc.id} className="py-3 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">{doc.file_name}</div>
+                      <div className="text-xs text-slate-400">{doc.document_type} · {date(doc.uploaded_at)}</div>
+                    </div>
+                    {status(doc.verification_status, ['verified'])}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+          {guarantorDocs.length > 0 && (
+            <Section title="Guarantor Documents">
+              <ul className="divide-y divide-slate-100">
+                {guarantorDocs.map((doc) => (
+                  <li key={doc.id} className="py-3 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">{doc.file_name}</div>
+                      <div className="text-xs text-slate-400">{doc.document_type.replace(/_/g, ' ')} · {date(doc.created_at)}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {status(doc.status, ['verified'])}
+                      <button
+                        onClick={async () => {
+                          try {
+                            const url = await guarantorVerificationService.getSignedUrl(doc.file_path)
+                            window.open(url, '_blank')
+                          } catch { /* ignore */ }
+                        }}
+                        className="text-xs text-[#009944] hover:underline"
+                      >View</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Section>
           )}
-        >
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <InputField label="Next of Kin Name" value={d.next_of_kin_name} onChange={(v) => setDraft({ ...draft, next_of_kin_name: v })} />
-            <InputField label="Next of Kin Relationship" value={d.next_of_kin_relationship} onChange={(v) => setDraft({ ...draft, next_of_kin_relationship: v })} />
-            <InputField label="Next of Kin Phone" value={d.next_of_kin_phone} onChange={(v) => setDraft({ ...draft, next_of_kin_phone: v })} />
-            <InputField label="Next of Kin Address" value={d.next_of_kin_address} onChange={(v) => setDraft({ ...draft, next_of_kin_address: v })} />
-            <InputField label="Beneficiary Name" value={d.beneficiary_name} onChange={(v) => setDraft({ ...draft, beneficiary_name: v })} />
-            <InputField label="Beneficiary Relationship" value={d.beneficiary_relationship} onChange={(v) => setDraft({ ...draft, beneficiary_relationship: v })} />
-            <InputField label="Beneficiary Phone" value={d.beneficiary_phone} onChange={(v) => setDraft({ ...draft, beneficiary_phone: v })} />
-            <InputField label="Beneficiary Address" value={d.beneficiary_address} onChange={(v) => setDraft({ ...draft, beneficiary_address: v })} />
-            <InputField label="Emergency Contact" value={d.emergency_contact_name} onChange={(v) => setDraft({ ...draft, emergency_contact_name: v })} />
-            <InputField label="Emergency Phone" value={d.emergency_contact_phone} onChange={(v) => setDraft({ ...draft, emergency_contact_phone: v })} />
-          </div>
+          <Section title="Certificates & Qualifications">
+            {docs.filter(d => d.document_type?.toLowerCase().includes('certificate') || d.document_type?.toLowerCase().includes('qualification')).length === 0 && (
+              <EmptyState title="No certificates uploaded" description="Certificate documents will appear here." />
+            )}
+            <ul className="divide-y divide-slate-100">
+              {docs.filter(d => d.document_type?.toLowerCase().includes('certificate') || d.document_type?.toLowerCase().includes('qualification')).map((doc) => (
+                <li key={doc.id} className="py-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium text-slate-800">{doc.file_name}</div>
+                    <div className="text-xs text-slate-400">{doc.document_type} · {date(doc.uploaded_at)}</div>
+                  </div>
+                  {status(doc.verification_status, ['verified'])}
+                </li>
+              ))}
+            </ul>
+          </Section>
+        </>
+      )}
+
+      {/* ---- ONBOARDING ---- */}
+      {tab === 'onboarding' && (
+        <Section title="Onboarding Information">
+          {!onboardingSub ? (
+            <EmptyState title="No onboarding record" description="This employee was not created through the onboarding flow." />
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Status</div>
+                  <div className="text-sm font-medium mt-0.5">{status(onboardingSub.status, ['approved'])}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Onboarding Status</div>
+                  <div className="text-sm font-medium mt-0.5">{onboardingSub.onboarding_status || '—'}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Submitted</div>
+                  <div className="text-sm font-medium mt-0.5">{date(onboardingSub.created_at)}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs text-slate-400">Reviewed</div>
+                  <div className="text-sm font-medium mt-0.5">{date(onboardingSub.reviewed_at)}</div>
+                </div>
+              </div>
+              {onboardingSub.review_comments && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                  <span className="font-medium">Review Comments:</span> {onboardingSub.review_comments}
+                </div>
+              )}
+              {onboardingSub.payload && (
+                <div>
+                  <h4 className="font-medium text-slate-800 mb-2 text-sm">Submitted Data</h4>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 max-h-64 overflow-y-auto">
+                    <pre className="text-xs text-slate-600 whitespace-pre-wrap">
+                      {JSON.stringify(onboardingSub.payload, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </Section>
       )}
 
-      {tab === 'education' && (
-        <Section title="Education">
-          {childrenData.employee_education?.length === 0 && <EmptyState title="No education records" />}
-          <ChildList rows={childrenData.employee_education || []} onRemove={(rid) => removeChild('employee_education', rid)} columns={[['institution', 'Institution'], ['education_level', 'Level'], ['field_of_study', 'Field'], ['from_year', 'From'], ['to_year', 'To']]} />
-          {canEdit && (
-            <AddRow
-              onAdd={(p) => addChild('employee_education', p)}
-              columns={[
-                { key: 'institution', label: 'Institution *' },
-                { key: 'education_level', label: 'Level' },
-                { key: 'from_year', label: 'From Year', type: 'number' },
-                { key: 'to_year', label: 'To Year', type: 'number' },
-                { key: 'field_of_study', label: 'Field of Study' },
-                { key: 'class_degree', label: 'Class / Degree' },
-              ]}
-            />
-          )}
-        </Section>
-      )}
-
-      {tab === 'work' && (
-        <Section title="Work History">
-          {childrenData.employee_work_history?.length === 0 && <EmptyState title="No work history records" />}
-          <ChildList rows={childrenData.employee_work_history || []} onRemove={(rid) => removeChild('employee_work_history', rid)} columns={[['company_name', 'Company'], ['position', 'Position'], ['start_date', 'Start'], ['end_date', 'End'], ['salary', 'Salary']]} />
-          {canEdit && (
-            <AddRow
-              onAdd={(p) => addChild('employee_work_history', p)}
-              columns={[
-                { key: 'company_name', label: 'Company *' },
-                { key: 'position', label: 'Position' },
-                { key: 'company_address', label: 'Company Address' },
-                { key: 'company_email', label: 'Company Email' },
-                { key: 'duties', label: 'Duties' },
-                { key: 'salary', label: 'Salary', type: 'number' },
-                { key: 'supervisor_name', label: 'Supervisor' },
-                { key: 'start_date', label: 'Start Date', type: 'date' },
-                { key: 'end_date', label: 'End Date', type: 'date' },
-                { key: 'reason_for_leaving', label: 'Reason for Leaving' },
-              ]}
-            />
-          )}
-        </Section>
-      )}
-
+      {/* ---- GUARANTOR ---- */}
       {tab === 'guarantors' && (
         <>
           {verifications.length > 0 && (
@@ -494,78 +720,65 @@ export default function EmployeeProfile() {
               />
             )}
           </Section>
+          <Section title="Fidelity Bond">
+            {childrenData.employee_fidelity_bonds?.length === 0 && <EmptyState title="No fidelity bonds recorded" />}
+            <ChildList rows={childrenData.employee_fidelity_bonds || []} onRemove={(rid) => removeChild('employee_fidelity_bonds', rid)} columns={[['surety_name', 'Surety'], ['occupation', 'Occupation'], ['relationship', 'Relationship'], ['verification_status', 'Verification']]} />
+            {canEdit && (
+              <AddRow
+                onAdd={(p) => addChild('employee_fidelity_bonds', p)}
+                columns={[
+                  { key: 'surety_name', label: 'Surety Name *' },
+                  { key: 'occupation', label: 'Occupation' },
+                  { key: 'email', label: 'Email' },
+                  { key: 'phone', label: 'Phone' },
+                  { key: 'relationship', label: 'Relationship' },
+                  { key: 'address', label: 'Address' },
+                  { key: 'bvn', label: 'BVN' },
+                  { key: 'nin', label: 'NIN' },
+                ]}
+              />
+            )}
+          </Section>
         </>
       )}
 
-      {tab === 'bonds' && (
-        <Section title="Fidelity Bond">
-          {childrenData.employee_fidelity_bonds?.length === 0 && <EmptyState title="No fidelity bonds recorded" />}
-          <ChildList rows={childrenData.employee_fidelity_bonds || []} onRemove={(rid) => removeChild('employee_fidelity_bonds', rid)} columns={[['surety_name', 'Surety'], ['occupation', 'Occupation'], ['relationship', 'Relationship'], ['verification_status', 'Verification']]} />
-          {canEdit && (
-            <AddRow
-              onAdd={(p) => addChild('employee_fidelity_bonds', p)}
-              columns={[
-                { key: 'surety_name', label: 'Surety Name *' },
-                { key: 'occupation', label: 'Occupation' },
-                { key: 'email', label: 'Email' },
-                { key: 'phone', label: 'Phone' },
-                { key: 'relationship', label: 'Relationship' },
-                { key: 'address', label: 'Address' },
-                { key: 'bvn', label: 'BVN' },
-                { key: 'nin', label: 'NIN' },
-              ]}
-            />
+      {/* ---- LEAVE ---- */}
+      {tab === 'leave' && (
+        <Section title={`Leave Requests (${leaveRequests.length})`}>
+          {leaveRequests.length === 0 ? (
+            <EmptyState title="No leave requests" description="Leave requests submitted by this employee will appear here." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-left">
+                  <tr>
+                    <th className="px-4 py-2 font-medium">Type</th>
+                    <th className="px-4 py-2 font-medium">Start</th>
+                    <th className="px-4 py-2 font-medium">End</th>
+                    <th className="px-4 py-2 font-medium">Days</th>
+                    <th className="px-4 py-2 font-medium">Status</th>
+                    <th className="px-4 py-2 font-medium">Submitted</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {leaveRequests.map((r) => (
+                    <tr key={r.id}>
+                      <td className="px-4 py-2 font-medium">{(r.leave_type || 'annual').replace(/_/g, ' ')}</td>
+                      <td className="px-4 py-2">{date(r.start_date)}</td>
+                      <td className="px-4 py-2">{date(r.end_date)}</td>
+                      <td className="px-4 py-2">{r.days || '—'}</td>
+                      <td className="px-4 py-2">{status(r.status, ['approved'])}</td>
+                      <td className="px-4 py-2">{date(r.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Section>
       )}
 
-      {tab === 'documents' && (
-        <>
-          <Section title="Employee Documents">
-            {docs.length === 0 && <EmptyState title="No employee documents" description="Uploaded onboarding documents will appear here." />}
-            {docs.length > 0 && (
-              <ul className="divide-y divide-slate-100">
-                {docs.map((doc) => (
-                  <li key={doc.id} className="py-3 flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">{doc.file_name}</div>
-                      <div className="text-xs text-slate-400">{doc.document_type} · {date(doc.uploaded_at)}</div>
-                    </div>
-                    {status(doc.verification_status, ['verified'])}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Section>
-          {guarantorDocs.length > 0 && (
-            <Section title="Guarantor Verification Documents">
-              <ul className="divide-y divide-slate-100">
-                {guarantorDocs.map((doc) => (
-                  <li key={doc.id} className="py-3 flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">{doc.file_name}</div>
-                      <div className="text-xs text-slate-400">{doc.document_type.replace(/_/g, ' ')} · {date(doc.created_at)}</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {status(doc.status, ['verified'])}
-                      <button
-                        onClick={async () => {
-                          try {
-                            const url = await guarantorVerificationService.getSignedUrl(doc.file_path)
-                            window.open(url, '_blank')
-                          } catch { /* ignore */ }
-                        }}
-                        className="text-xs text-[#009944] hover:underline"
-                      >View</button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </Section>
-          )}
-        </>
-      )}
-
+      {/* ---- ATTENDANCE ---- */}
       {tab === 'attendance' && (
         <Section title={`Attendance (${attendance.length} records)`}>
           {attendance.length === 0 && <EmptyState title="No attendance records" />}
@@ -598,6 +811,38 @@ export default function EmployeeProfile() {
         </Section>
       )}
 
+      {/* ---- PERFORMANCE ---- */}
+      {tab === 'performance' && (
+        <>
+          <Section title="Appraisals">
+            {appraisals.length === 0 ? (
+              <EmptyState title="No appraisals recorded" />
+            ) : (
+              <div className="space-y-3">
+                {appraisals.map((a) => (
+                  <div key={a.id} className="rounded-lg border border-slate-200 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-sm text-slate-800">{a.appraisal_type} · {a.quarter} {a.appraisal_year}</span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 capitalize">{(a.overall_rating || '').replace('_', ' ')}</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                      {a.reviewer && <div><span className="text-xs text-slate-400">Reviewer: </span><span className="text-slate-700">{a.reviewer}</span></div>}
+                      {a.strengths && <div><span className="text-xs text-slate-400">Strengths: </span><span className="text-slate-700">{a.strengths}</span></div>}
+                      {a.areas_for_improvement && <div><span className="text-xs text-slate-400">Improvement: </span><span className="text-slate-700">{a.areas_for_improvement}</span></div>}
+                      {a.comments && <div><span className="text-xs text-slate-400">Comments: </span><span className="text-slate-700">{a.comments}</span></div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+          <Section title="HR Actions">
+            <EmployeeHRActions employee={employee} canEdit={canEdit} />
+          </Section>
+        </>
+      )}
+
+      {/* ---- PAYROLL ---- */}
       {tab === 'payroll' && (
         <Section
           title="Payroll"
@@ -668,165 +913,11 @@ export default function EmployeeProfile() {
         </Section>
       )}
 
-      {tab === 'contact' && (
-        <Section
-          title="Contact Information"
-          actions={canEdit && (
-            <button onClick={saveProfile} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
-            </button>
-          )}
-        >
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <InputField label="Email" value={d.email} onChange={(v) => setDraft({ ...draft, email: v })} />
-            <InputField label="Phone" value={d.phone} onChange={(v) => setDraft({ ...draft, phone: v })} />
-            <InputField label="Residential Address" value={d.residential_address} onChange={(v) => setDraft({ ...draft, residential_address: v })} />
-            <InputField label="Town / City" value={d.town} onChange={(v) => setDraft({ ...draft, town: v })} />
-            <InputField label="State of Origin" value={d.state_of_origin} onChange={(v) => setDraft({ ...draft, state_of_origin: v })} />
-            <InputField label="LGA" value={d.lga} onChange={(v) => setDraft({ ...draft, lga: v })} />
-            <InputField label="Emergency Contact Name" value={d.emergency_contact_name} onChange={(v) => setDraft({ ...draft, emergency_contact_name: v })} />
-            <InputField label="Emergency Contact Phone" value={d.emergency_contact_phone} onChange={(v) => setDraft({ ...draft, emergency_contact_phone: v })} />
-          </div>
-        </Section>
-      )}
-
-      {tab === 'bank' && (
-        <Section
-          title="Bank & Payroll Details"
-          actions={canEdit && (
-            <button onClick={saveProfile} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
-            </button>
-          )}
-        >
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <InputField label="Bank Name" value={d.bank_name} onChange={(v) => setDraft({ ...draft, bank_name: v })} />
-            <InputField label="Account Name" value={d.account_name} onChange={(v) => setDraft({ ...draft, account_name: v })} />
-            <InputField label="Account Number" value={d.account_number} onChange={(v) => setDraft({ ...draft, account_number: v })} />
-            <InputField label="Bank Sort Code" value={d.bank_sort_code} onChange={(v) => setDraft({ ...draft, bank_sort_code: v })} />
-            <InputField label="Basic Salary" value={d.basic_salary || d.salary} onChange={(v) => setDraft({ ...draft, basic_salary: v })} type="number" />
-            <InputField label="NHF ID" value={d.nhf_id} onChange={(v) => setDraft({ ...draft, nhf_id: v })} />
-          </div>
-        </Section>
-      )}
-
-      {tab === 'statutory' && (
-        <Section
-          title="Statutory Information"
-          actions={canEdit && (
-            <button onClick={saveProfile} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
-            </button>
-          )}
-        >
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <InputField label="BVN" value={d.bvn} onChange={(v) => setDraft({ ...draft, bvn: v })} />
-            <InputField label="NIN" value={d.nin} onChange={(v) => setDraft({ ...draft, nin: v })} />
-            <InputField label="Tax ID" value={d.tax_id} onChange={(v) => setDraft({ ...draft, tax_id: v })} />
-            <InputField label="Pension ID" value={d.pension_id} onChange={(v) => setDraft({ ...draft, pension_id: v })} />
-            <InputField label="NHF ID" value={d.nhf_id} onChange={(v) => setDraft({ ...draft, nhf_id: v })} />
-          </div>
-        </Section>
-      )}
-
-      {tab === 'certificates' && (
-        <Section title="Certificates & Qualifications">
-          {docs.filter(d => d.document_type?.toLowerCase().includes('certificate') || d.document_type?.toLowerCase().includes('qualification')).length === 0 && (
-            <EmptyState title="No certificates uploaded" description="Certificate documents will appear here." />
-          )}
-          <ul className="divide-y divide-slate-100">
-            {docs.filter(d => d.document_type?.toLowerCase().includes('certificate') || d.document_type?.toLowerCase().includes('qualification')).map((doc) => (
-              <li key={doc.id} className="py-3 flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium text-slate-800">{doc.file_name}</div>
-                  <div className="text-xs text-slate-400">{doc.document_type} · {date(doc.uploaded_at)}</div>
-                </div>
-                {status(doc.verification_status, ['verified'])}
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {tab === 'onboarding' && (
-        <Section title="Onboarding Information">
-          {!onboardingSub ? (
-            <EmptyState title="No onboarding record" description="This employee was not created through the onboarding flow." />
-          ) : (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <div className="rounded-lg bg-slate-50 p-3">
-                  <div className="text-xs text-slate-400">Status</div>
-                  <div className="text-sm font-medium mt-0.5">{status(onboardingSub.status, ['approved'])}</div>
-                </div>
-                <div className="rounded-lg bg-slate-50 p-3">
-                  <div className="text-xs text-slate-400">Onboarding Status</div>
-                  <div className="text-sm font-medium mt-0.5">{onboardingSub.onboarding_status || '—'}</div>
-                </div>
-                <div className="rounded-lg bg-slate-50 p-3">
-                  <div className="text-xs text-slate-400">Submitted</div>
-                  <div className="text-sm font-medium mt-0.5">{date(onboardingSub.created_at)}</div>
-                </div>
-                <div className="rounded-lg bg-slate-50 p-3">
-                  <div className="text-xs text-slate-400">Reviewed</div>
-                  <div className="text-sm font-medium mt-0.5">{date(onboardingSub.reviewed_at)}</div>
-                </div>
-              </div>
-              {onboardingSub.review_comments && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                  <span className="font-medium">Review Comments:</span> {onboardingSub.review_comments}
-                </div>
-              )}
-              {onboardingSub.payload && (
-                <div>
-                  <h4 className="font-medium text-slate-800 mb-2 text-sm">Submitted Data</h4>
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 max-h-64 overflow-y-auto">
-                    <pre className="text-xs text-slate-600 whitespace-pre-wrap">
-                      {JSON.stringify(onboardingSub.payload, null, 2)}
-                    </pre>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </Section>
-      )}
-
-      {tab === 'hr-actions' && (
-        <Section title="HR Actions">
-          <EmployeeHRActions employee={employee} canEdit={canEdit} />
-        </Section>
-      )}
-
-      {tab === 'appraisals' && (
-        <Section title="Appraisals">
-          {appraisals.length === 0 ? (
-            <EmptyState title="No appraisals recorded" />
-          ) : (
-            <div className="space-y-3">
-              {appraisals.map((a) => (
-                <div key={a.id} className="rounded-lg border border-slate-200 p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-medium text-sm text-slate-800">{a.appraisal_type} · {a.quarter} {a.appraisal_year}</span>
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 capitalize">{(a.overall_rating || '').replace('_', ' ')}</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                    {a.reviewer && <div><span className="text-xs text-slate-400">Reviewer: </span><span className="text-slate-700">{a.reviewer}</span></div>}
-                    {a.strengths && <div><span className="text-xs text-slate-400">Strengths: </span><span className="text-slate-700">{a.strengths}</span></div>}
-                    {a.areas_for_improvement && <div><span className="text-xs text-slate-400">Improvement: </span><span className="text-slate-700">{a.areas_for_improvement}</span></div>}
-                    {a.comments && <div><span className="text-xs text-slate-400">Comments: </span><span className="text-slate-700">{a.comments}</span></div>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
-      )}
-
+      {/* ---- QUERIES / DISCIPLINARY ---- */}
       {tab === 'queries' && (
-        <Section title="HR Queries">
+        <Section title="HR Queries & Disciplinary Records">
           {queries.length === 0 ? (
-            <EmptyState title="No queries issued" />
+            <EmptyState title="No queries or disciplinary records" description="HR queries and disciplinary records for this employee will appear here." />
           ) : (
             <div className="space-y-3">
               {queries.map((q) => (
@@ -848,6 +939,14 @@ export default function EmployeeProfile() {
         </Section>
       )}
 
+      {/* ---- TRAINING ---- */}
+      {tab === 'training' && (
+        <Section title="Training & Development">
+          <ComingSoon title="Training & Development" description="Training records, certifications, and development plans will be available here once the training module is implemented." />
+        </Section>
+      )}
+
+      {/* ---- AUDIT ---- */}
       {tab === 'audit' && (
         <Section title="Audit Trail">
           {events.length === 0 ? (
@@ -868,6 +967,7 @@ export default function EmployeeProfile() {
         </Section>
       )}
 
+      {/* ---- Payroll Modal ---- */}
       {showAddPayroll && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-md p-6">
@@ -895,29 +995,59 @@ export default function EmployeeProfile() {
         </div>
       )}
 
-      {showAppraisal && (
-        <AppraisalModal
-          employee={employee}
-          onClose={() => setShowAppraisal(false)}
-          onSaved={async () => { const aps = await attendanceEngineService.listAppraisals(id); setAppraisals(aps) }}
-        />
+      {/* ---- Staff ID Card Modal ---- */}
+      {showCard && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-slate-100 rounded-xl w-full max-w-[440px] max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-center justify-between mb-4 no-print">
+              <h3 className="text-lg font-semibold text-slate-900">Staff ID Card</h3>
+              <div className="flex items-center gap-3">
+                <button onClick={() => window.print()} className="inline-flex items-center gap-1 text-sm text-[#009944] hover:underline font-medium">
+                  <Printer className="w-4 h-4" /> Print Card
+                </button>
+                <button onClick={() => setShowCard(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              </div>
+            </div>
+            {recordError && <div className="mb-3"><ErrorState message={recordError} /></div>}
+            <div className="print-area">
+              <StaffIdCard employee={employee} photoUrl={photoUrl} />
+            </div>
+          </div>
+        </div>
       )}
 
-      {showQuery && (
-        <QueryModal
-          employee={employee}
-          onClose={() => setShowQuery(false)}
-          onSaved={async () => { const qs = await attendanceEngineService.listQueries(id); setQueries(qs) }}
-        />
-      )}
-
-      {resolvingQuery && (
-        <QueryResolutionModal
-          query={resolvingQuery}
-          employee={employee}
-          onClose={() => setResolvingQuery(null)}
-          onResolved={async () => { const qs = await attendanceEngineService.listQueries(id); setQueries(qs) }}
-        />
+      {/* ---- Employee Record Print / Download Modal ---- */}
+      {showRecord && (
+        <div className="fixed inset-0 z-50 bg-black/50 overflow-y-auto p-4">
+          <div className="max-w-[900px] mx-auto bg-white rounded-xl shadow-xl no-print sticky top-4 z-10">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+              <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                <FileText className="w-5 h-5 text-[#009944]" /> Employee Personnel Record
+              </h3>
+              <div className="flex items-center gap-2">
+                <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+                  <Printer className="w-4 h-4" /> Print
+                </button>
+                <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-50">
+                  <Download className="w-4 h-4" /> Download PDF
+                </button>
+                <button onClick={() => setShowRecord(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              </div>
+            </div>
+          </div>
+          <div className="max-w-[900px] mx-auto mt-0 bg-white border border-slate-200 rounded-b-xl print-area">
+            <EmployeeRecordPrint
+              employee={employee}
+              education={childrenData.employee_education || []}
+              workHistory={childrenData.employee_work_history || []}
+              guarantors={childrenData.employee_guarantors || []}
+              fidelityBonds={childrenData.employee_fidelity_bonds || []}
+              documents={docs}
+              verifications={verifications}
+              photoUrl={photoUrl}
+            />
+          </div>
+        </div>
       )}
     </div>
   )

@@ -6,6 +6,7 @@ import OnboardingFlow from './components/OnboardingFlow'
 import AttendanceTerminal from './pages/AttendanceTerminal'
 import Layout from './components/Layout'
 import { AccessDenied } from './components/PageStates'
+import ErrorBoundary from './components/ErrorBoundary'
 import { canAccessRoute, protectedRoutes } from './config/navigation'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -33,6 +34,7 @@ import GuarantorVerificationForm from './pages/GuarantorVerificationForm'
 import Attendance from './pages/Attendance'
 import AttendanceManagement from './pages/AttendanceManagement'
 import EmployeeProfile from './pages/EmployeeProfile'
+import Profile from './pages/Profile'
 import DataImport from './pages/DataImport'
 import HRQueries from './pages/HRQueries'
 import Appraisals from './pages/Appraisals'
@@ -61,6 +63,8 @@ const pageComponents = {
   OnboardingLinks,
   Attendance,
   AttendanceManagement,
+  EmployeeProfile,
+  Profile,
   DataImport,
   HRQueries,
   Appraisals,
@@ -181,21 +185,30 @@ export default function App() {
   return (
     <AuthProvider>
       <HashRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/attendance-terminal" element={<AttendanceTerminal />} />
-          <Route path="/" element={<Protected><Home /></Protected>} />
-          <Route path="/onboarding/:token" element={<OnboardingForm />} />
-          <Route path="/guarantor-verification/:token" element={<GuarantorVerificationForm />} />
-          {protectedRoutes.filter((route) => route.path !== '/').map((route) => (
-            <Route key={route.path} path={route.path} element={<Protected><ProtectedModule route={route} /></Protected>} />
-          ))}
-          <Route path="/customers/:id" element={<Protected><ProtectedModule route={{ path: '/customers', element: 'Customers', permissions: ['customers.read'] }} /></Protected>} />
-          <Route path="/employees/:id" element={<Protected><ProtectedModule route={{ path: '/employees', element: 'EmployeeProfile', permissions: ['hr.employee.read'] }} /></Protected>} />
-          <Route path="/onboarding-review/:id" element={<Protected><ProtectedModule route={{ path: '/onboarding-links', element: 'OnboardingReview', permissions: ['hr.onboarding.read'] }} /></Protected>} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <ErrorBoundary>
+          <AppRoutes />
+        </ErrorBoundary>
       </HashRouter>
     </AuthProvider>
+  )
+}
+
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/attendance-terminal" element={<AttendanceTerminal />} />
+      <Route path="/" element={<Protected><Home /></Protected>} />
+      <Route path="/onboarding/:token" element={<OnboardingForm />} />
+      <Route path="/guarantor-verification/:token" element={<GuarantorVerificationForm />} />
+      {protectedRoutes.filter((route) => route.path !== '/').map((route) => (
+        <Route key={route.path} path={route.path} element={<Protected><ProtectedModule route={route} /></Protected>} />
+      ))}
+      <Route path="/customers/:id" element={<Protected><ProtectedModule route={{ path: '/customers', element: 'Customers', permissions: ['customers.read'] }} /></Protected>} />
+      <Route path="/employees/:id" element={<Protected><ProtectedModule route={{ path: '/employees', element: 'EmployeeProfile', permissions: ['hr.employee.read'] }} /></Protected>} />
+      <Route path="/profile" element={<Protected><ProtectedModule route={{ path: '/profile', element: 'Profile', permissions: [] }} /></Protected>} />
+      <Route path="/onboarding-review/:id" element={<Protected><ProtectedModule route={{ path: '/onboarding-links', element: 'OnboardingReview', permissions: ['hr.onboarding.read'] }} /></Protected>} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
 }
