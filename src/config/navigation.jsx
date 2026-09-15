@@ -45,6 +45,7 @@ export const routeConfig = [
       { label: 'Leave Balances', path: '/leave-balances', icon: ListChecks, element: 'LeaveBalances', permissions: [PERMISSIONS.HR_LEAVE_MANAGE] },
       { label: 'Attendance', path: '/attendance', icon: Clock3, element: 'Attendance', permissions: [PERMISSIONS.HR_ATTENDANCE_SELF] },
       { label: 'Attendance Mgmt', path: '/attendance-management', icon: ClipboardList, element: 'AttendanceManagement', permissions: [PERMISSIONS.HR_ATTENDANCE_MANAGE] },
+      { label: 'Attendance Terminal', path: '/attendance-terminal', icon: Monitor, element: 'AttendanceTerminal', permissions: [] },
     ],
   },
   {
@@ -82,7 +83,6 @@ export const routeConfig = [
       { label: 'Audit Logs', path: '/audit-logs', icon: ScrollText, element: 'AuditLogs', permissions: [PERMISSIONS.ADMIN_VIEW_AUDIT] },
       { label: 'Settings', path: '/settings', icon: Settings, element: 'Settings', permissions: [PERMISSIONS.HR_CONFIG_MANAGE] },
       { label: 'User Management', path: '/users', icon: UserCog, element: 'Users', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
-      { label: 'Attendance Terminal', path: '/attendance-terminal', icon: Monitor, element: 'AttendanceTerminal', permissions: [] },
     ],
   },
   {
