@@ -47,46 +47,115 @@ end; $$;
 -- ============================================================
 -- 1. INTEGRATION CONNECTIONS (per provider + environment)
 -- ============================================================
-create table if not exists public.integration_connections (
-  id uuid primary key default gen_random_uuid(),
-  provider text not null default 'bankone'
-    check (provider in ('bankone')),
-  environment text not null check (environment in ('sandbox', 'live')),
-  base_url text,
-  client_id text,
-  -- AES-256-GCM payload: base64(iv):base64(ciphertext) written by the
-  -- edge function. Never readable by client code.
-  encrypted_secret text,
-  secret_hint text,
-  authentication_type text default 'oauth2_client_credentials',
-  token_endpoint text,
-  -- Webhook verification secret, encrypted the same way.
-  webhook_secret_encrypted text,
-  webhook_secret_hint text,
-  -- Connection state (mirrors the UI status chip).
-  status text default 'not_connected'
-    check (status in ('connected', 'not_connected', 'auth_failed', 'configuration_error', 'degraded', 'disabled')),
-  enabled boolean default false,
-  read_enabled boolean default false,
-  write_enabled boolean default false,
-  webhook_enabled boolean default false,
-  auto_sync_enabled boolean default false,
-  sync_interval_min int default 0 check (sync_interval_min in (0, 5, 15, 30, 60, 1440)),
-  last_connected_at timestamptz,
-  last_success_at timestamptz,
-  last_fail_at timestamptz,
-  last_error text,
-  last_successful_sync_at timestamptz,
-  last_failed_sync_at timestamptz,
-  synced_records int default 0,
-  failed_records int default 0,
-  queue_depth int default 0,
-  created_by uuid references auth.users(id) on delete set null,
-  updated_by uuid references auth.users(id) on delete set null,
-  created_at timestamptz default now(),
-  updated_at timestamptz default now(),
-  unique (provider, environment)
-);
+-- NOTE: schema_phase8e_interview_scheduling.sql already creates
+-- public.integration_connections with an OAuth schema (provider in
+-- ('google_calendar','zoom'), user_id, tokens) used by the Meet/Zoom
+-- edge functions. We must reconcile instead of re-creating: keep that
+-- table (and its data), widen the provider check to include 'bankone',
+-- and ADD the BankOne-only columns. On a fresh DB the full schema is
+-- created instead.
+DO $$
+DECLARE
+  v_exists boolean := to_regclass('public.integration_connections') IS NOT NULL;
+  v_env_col boolean;
+BEGIN
+  IF NOT v_exists THEN
+    CREATE TABLE public.integration_connections (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      provider text NOT NULL DEFAULT 'bankone'
+        CHECK (provider IN ('bankone', 'google_calendar', 'zoom')),
+      environment text NOT NULL DEFAULT 'sandbox' CHECK (environment IN ('sandbox', 'live')),
+      base_url text,
+      client_id text,
+      -- AES-256-GCM payload: base64(iv):base64(ciphertext) written by the
+      -- edge function. Never readable by client code.
+      encrypted_secret text,
+      secret_hint text,
+      authentication_type text DEFAULT 'oauth2_client_credentials',
+      token_endpoint text,
+      -- Webhook verification secret, encrypted the same way.
+      webhook_secret_encrypted text,
+      webhook_secret_hint text,
+      -- Connection state (mirrors the UI status chip).
+      status text DEFAULT 'not_connected'
+        CHECK (status IN ('connected', 'not_connected', 'auth_failed', 'configuration_error', 'degraded', 'disabled')),
+      enabled boolean DEFAULT false,
+      read_enabled boolean DEFAULT false,
+      write_enabled boolean DEFAULT false,
+      webhook_enabled boolean DEFAULT false,
+      auto_sync_enabled boolean DEFAULT false,
+      sync_interval_min int DEFAULT 0 CHECK (sync_interval_min IN (0, 5, 15, 30, 60, 1440)),
+      last_connected_at timestamptz,
+      last_success_at timestamptz,
+      last_fail_at timestamptz,
+      last_error text,
+      last_successful_sync_at timestamptz,
+      last_failed_sync_at timestamptz,
+      synced_records int DEFAULT 0,
+      failed_records int DEFAULT 0,
+      queue_depth int DEFAULT 0,
+      created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+      updated_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (provider, environment)
+    );
+  ELSE
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'integration_connections' AND column_name = 'environment'
+    ) INTO v_env_col;
+    IF NOT v_env_col THEN
+      ALTER TABLE public.integration_connections
+        ADD COLUMN environment text NOT NULL DEFAULT 'sandbox' CHECK (environment IN ('sandbox', 'live'));
+    END IF;
+    ALTER TABLE public.integration_connections
+      ADD COLUMN IF NOT EXISTS base_url text,
+      ADD COLUMN IF NOT EXISTS client_id text,
+      ADD COLUMN IF NOT EXISTS encrypted_secret text,
+      ADD COLUMN IF NOT EXISTS secret_hint text,
+      ADD COLUMN IF NOT EXISTS authentication_type text DEFAULT 'oauth2_client_credentials',
+      ADD COLUMN IF NOT EXISTS token_endpoint text,
+      ADD COLUMN IF NOT EXISTS webhook_secret_encrypted text,
+      ADD COLUMN IF NOT EXISTS webhook_secret_hint text,
+      ADD COLUMN IF NOT EXISTS status text DEFAULT 'not_connected'
+        CHECK (status IN ('connected', 'not_connected', 'auth_failed', 'configuration_error', 'degraded', 'disabled')),
+      ADD COLUMN IF NOT EXISTS enabled boolean DEFAULT false,
+      ADD COLUMN IF NOT EXISTS read_enabled boolean DEFAULT false,
+      ADD COLUMN IF NOT EXISTS write_enabled boolean DEFAULT false,
+      ADD COLUMN IF NOT EXISTS webhook_enabled boolean DEFAULT false,
+      ADD COLUMN IF NOT EXISTS auto_sync_enabled boolean DEFAULT false,
+      ADD COLUMN IF NOT EXISTS sync_interval_min int DEFAULT 0 CHECK (sync_interval_min IN (0, 5, 15, 30, 60, 1440)),
+      ADD COLUMN IF NOT EXISTS last_connected_at timestamptz,
+      ADD COLUMN IF NOT EXISTS last_success_at timestamptz,
+      ADD COLUMN IF NOT EXISTS last_fail_at timestamptz,
+      ADD COLUMN IF NOT EXISTS last_error text,
+      ADD COLUMN IF NOT EXISTS last_successful_sync_at timestamptz,
+      ADD COLUMN IF NOT EXISTS last_failed_sync_at timestamptz,
+      ADD COLUMN IF NOT EXISTS synced_records int DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS failed_records int DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS queue_depth int DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS updated_by uuid REFERENCES auth.users(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- Reconcile the provider CHECK so 'bankone' rows are allowed regardless
+-- of which migration created the table (name is auto-generated by PG).
+ALTER TABLE public.integration_connections DROP CONSTRAINT IF EXISTS integration_connections_provider_check;
+ALTER TABLE public.integration_connections ADD CONSTRAINT integration_connections_provider_check
+  CHECK (provider IN ('bankone', 'google_calendar', 'zoom'));
+
+-- Guarantee uniqueness of (provider, environment) on the merge path too.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'integration_connections_provider_environment_key'
+      AND conrelid = 'public.integration_connections'::regclass
+  ) THEN
+    ALTER TABLE public.integration_connections ADD CONSTRAINT integration_connections_provider_environment_key UNIQUE (provider, environment);
+  END IF;
+END $$;
 
 drop trigger if exists trg_integration_connections_updated on public.integration_connections;
 create trigger trg_integration_connections_updated
@@ -206,7 +275,7 @@ create policy "integration_field_mappings_super_admin" on public.integration_fie
 -- the Data Mapping tab and MUST be confirmed against the official
 -- BankOne API specification before any live sync runs.
 insert into public.integration_field_mappings (provider, environment, source_field, bankone_field, direction, transformation, enabled)
-select 'bankone', e, s.source_field, s.bankone_field, s.direction, s.transformation, true
+select 'bankone', e.environment, s.source_field, s.bankone_field, s.direction, s.transformation, true
 from (values
   ('employee_id',   'staff_reference', 'BIDIRECTIONAL', 'identity'),
   ('full_name',     'full_name',       'BIDIRECTIONAL', 'upper'),
@@ -649,7 +718,8 @@ begin
     perform public.integration_write_audit(v_action, p_environment);
   end if;
 
-  select * into v_out from public.v_integration_config where id = v_row.id;
+  select * into v_out from public.v_integration_config
+    where provider = 'bankone' and environment = p_environment;
   return v_out;
 end; $$;
 
@@ -907,12 +977,16 @@ create or replace function public.integration_get_logs(
   p_limit int default 100
 )
 returns setof public.integration_logs
-language sql stable security definer set search_path = public as $$
-  select * from public.integration_logs
-  where environment = p_environment
-  order by created_at desc
-  limit greatest(1, least(p_limit, 500))
-$$;
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if public.current_role() <> 'super_admin' then
+    raise exception 'Only a super admin can query integration logs.';
+  end if;
+  return query select * from public.integration_logs
+    where environment = p_environment
+    order by created_at desc
+    limit greatest(1, least(p_limit, 500));
+end; $$;
 
 create or replace function public.integration_health(p_environment text)
 returns jsonb
@@ -1102,7 +1176,8 @@ begin
           case when p_success then 'ok' else 'error' end,
           case when p_success then 'Connectivity verified' else 'Connectivity failed' end);
 
-  select * into v_out from public.v_integration_config where id = v_row.id;
+  select * into v_out from public.v_integration_config
+    where provider = 'bankone' and environment = p_environment;
   return v_out;
 end; $$;
 

@@ -27,6 +27,13 @@ CREATE TABLE IF NOT EXISTS public.attendance_geofences (
   updated_at timestamptz DEFAULT now()
 );
 
+-- Defensive: table may pre-exist without these columns (earlier partial migration)
+ALTER TABLE public.attendance_geofences ADD COLUMN IF NOT EXISTS branch_id text;
+ALTER TABLE public.attendance_geofences ADD COLUMN IF NOT EXISTS location_name text;
+ALTER TABLE public.attendance_geofences ADD COLUMN IF NOT EXISTS clock_in_allowed boolean DEFAULT true;
+ALTER TABLE public.attendance_geofences ADD COLUMN IF NOT EXISTS clock_out_allowed boolean DEFAULT true;
+ALTER TABLE public.attendance_geofences ADD COLUMN IF NOT EXISTS department text;
+
 CREATE INDEX IF NOT EXISTS idx_geofence_active ON public.attendance_geofences(active);
 CREATE INDEX IF NOT EXISTS idx_geofence_branch ON public.attendance_geofences(branch_id);
 
@@ -64,6 +71,11 @@ CREATE TABLE IF NOT EXISTS public.attendance_devices (
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+
+-- Defensive: table may pre-exist without these columns (earlier partial migration)
+ALTER TABLE public.attendance_devices ADD COLUMN IF NOT EXISTS branch_id text;
+ALTER TABLE public.attendance_devices ADD COLUMN IF NOT EXISTS location_id uuid REFERENCES public.attendance_geofences(id) ON DELETE SET NULL;
+ALTER TABLE public.attendance_devices ADD COLUMN IF NOT EXISTS device_token text;
 
 CREATE INDEX IF NOT EXISTS idx_device_status ON public.attendance_devices(status);
 CREATE INDEX IF NOT EXISTS idx_device_branch ON public.attendance_devices(branch_id);
@@ -250,31 +262,56 @@ CREATE POLICY "query_manage" ON public.employee_queries
 
 -- ============================================================
 -- 7. EMPLOYEE APPRAISALS (extends existing appraisal_results)
--- Adds a richer appraisal record linked to employee digital file
+-- Adds a richer appraisal record linked to employee digital file.
+-- NOTE: schema_phase8c_hr_queries_appraisals.sql already creates
+-- public.employee_appraisals with a DIFFERENT column set that the
+-- app actively writes (work_period, overall_rating, status='completed').
+-- So we must be additive: create only if absent, otherwise add the
+-- phase-11 columns onto the existing table. Do NOT re-add a status
+-- CHECK that rejects 'completed'.
 -- ============================================================
-CREATE TABLE IF NOT EXISTS public.employee_appraisals (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  employee_id uuid NOT NULL REFERENCES public.employees(id) ON DELETE CASCADE,
-  user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
-  period_name text NOT NULL,
-  period_start date,
-  period_end date,
-  overall_score numeric(5, 2),
-  kpi_score numeric(5, 2),
-  behavioral_score numeric(5, 2),
-  rating text DEFAULT 'pending'
-    CHECK (rating IN ('pending', 'submitted', 'reviewed', 'approved', 'rejected')),
-  strengths text,
-  areas_for_improvement text,
-  goals text,
-  reviewer_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
-  reviewer_name text,
-  comments text,
-  status text DEFAULT 'draft'
-    CHECK (status IN ('draft', 'submitted', 'reviewed', 'approved', 'rejected')),
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
-);
+DO $$
+BEGIN
+  IF to_regclass('public.employee_appraisals') IS NULL THEN
+    CREATE TABLE public.employee_appraisals (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      employee_id uuid NOT NULL REFERENCES public.employees(id) ON DELETE CASCADE,
+      user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+      period_name text NOT NULL,
+      period_start date,
+      period_end date,
+      overall_score numeric(5, 2),
+      kpi_score numeric(5, 2),
+      behavioral_score numeric(5, 2),
+      rating text DEFAULT 'pending'
+        CHECK (rating IN ('pending', 'submitted', 'reviewed', 'approved', 'rejected')),
+      strengths text,
+      areas_for_improvement text,
+      goals text,
+      reviewer_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+      reviewer_name text,
+      comments text,
+      status text DEFAULT 'draft'
+        CHECK (status IN ('draft', 'submitted', 'reviewed', 'approved', 'rejected')),
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+  ELSE
+    ALTER TABLE public.employee_appraisals
+      ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS period_name text,
+      ADD COLUMN IF NOT EXISTS period_start date,
+      ADD COLUMN IF NOT EXISTS period_end date,
+      ADD COLUMN IF NOT EXISTS overall_score numeric(5, 2),
+      ADD COLUMN IF NOT EXISTS kpi_score numeric(5, 2),
+      ADD COLUMN IF NOT EXISTS behavioral_score numeric(5, 2),
+      ADD COLUMN IF NOT EXISTS rating text DEFAULT 'pending'
+        CHECK (rating IN ('pending', 'submitted', 'reviewed', 'approved', 'rejected')),
+      ADD COLUMN IF NOT EXISTS goals text,
+      ADD COLUMN IF NOT EXISTS reviewer_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS reviewer_name text;
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_appraisal_emp ON public.employee_appraisals(employee_id);
 CREATE INDEX IF NOT EXISTS idx_appraisal_status ON public.employee_appraisals(status);

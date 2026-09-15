@@ -22,6 +22,7 @@
 --    Requesters:      their own
 -- ------------------------------------------------------------
 drop policy if exists "leave read" on public.leave_requests;
+drop policy if exists "leave read scoped" on public.leave_requests;
 create policy "leave read scoped" on public.leave_requests
   for select using (
     created_by = auth.uid()
@@ -38,6 +39,7 @@ create policy "leave read scoped" on public.leave_requests
   );
 
 drop policy if exists "leave update" on public.leave_requests;
+drop policy if exists "leave update scoped" on public.leave_requests;
 create policy "leave update scoped" on public.leave_requests
   for update using (
     created_by = auth.uid()

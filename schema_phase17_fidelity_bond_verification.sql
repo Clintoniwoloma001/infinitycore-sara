@@ -114,6 +114,13 @@ begin
   if v_verif.id is null then
     raise exception 'Invalid verification link.';
   end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'id', d.id, 'document_type', d.document_type, 'file_name', d.file_name,
+    'file_path', d.file_path, 'mime_type', d.mime_type, 'status', d.status
+  )), '[]'::jsonb) into v_docs
+  from public.fidelity_bond_documents d where d.fidelity_verification_id = v_verif.id;
+
   if v_verif.status in ('approved', 'rejected') then
     return jsonb_build_object(
       'id', v_verif.id, 'status', v_verif.status,
@@ -134,12 +141,6 @@ begin
 
   select full_name, "position", department into v_employee
   from public.employees where id = v_verif.employee_id;
-
-  select coalesce(jsonb_agg(jsonb_build_object(
-    'id', d.id, 'document_type', d.document_type, 'file_name', d.file_name,
-    'file_path', d.file_path, 'mime_type', d.mime_type, 'status', d.status
-  )), '[]'::jsonb) into v_docs
-  from public.fidelity_bond_documents d where d.fidelity_verification_id = v_verif.id;
 
   return jsonb_build_object(
     'id', v_verif.id, 'status', v_verif.status,

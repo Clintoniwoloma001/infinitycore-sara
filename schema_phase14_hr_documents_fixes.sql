@@ -191,17 +191,26 @@ begin
     end if;
   end loop;
 
-  if jsonb_object_length(v_patch) = 0 then
+  if v_patch = '{}'::jsonb then
     raise exception 'No valid fields provided.';
   end if;
 
   v_patch := v_patch || jsonb_build_object('updated_at', now()::text);
 
   -- Execute the update (nullif converts empty strings to NULL so date/numeric
-  -- columns never see an invalid cast like ''::date or ''::numeric).
+  -- columns never see an invalid cast like ''::date or ''::numeric, and each
+  -- value is cast to the target column's type so text input works for
+  -- timestamps/dates/numerics alike).
   execute format(
     'UPDATE public.employees SET %s WHERE id = $1 RETURNING id',
-    (select string_agg(format('%I = nullif(($2->>''%s'')::text, '''')', key, key), ', ')
+    (select string_agg(
+       format('%I = nullif(($2->>''%s'')::text, '''')::%s', key, key,
+         coalesce((select quote_ident(t.typname)
+                    from pg_catalog.pg_attribute a
+                    join pg_catalog.pg_type t on t.oid = a.atttypid
+                    where a.attrelid = 'public.employees'::regclass
+                      and a.attname = key and not a.attisdropped), 'text')),
+       ', ')
      from jsonb_object_keys(v_patch) key)
   )
   using p_employee_id, v_patch;
