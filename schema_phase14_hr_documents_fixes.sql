@@ -191,6 +191,14 @@ begin
     end if;
   end loop;
 
+  -- Keep the printed staff identity in sync with the employee code so the
+  -- ID card always shows the latest code (the card reads employee_number first).
+  if v_patch ? 'employee_code' and nullif(v_patch ->> 'employee_code', '') is not null then
+    v_patch := v_patch
+      || jsonb_build_object('staff_id', v_patch ->> 'employee_code')
+      || jsonb_build_object('employee_number', v_patch ->> 'employee_code');
+  end if;
+
   if v_patch = '{}'::jsonb then
     raise exception 'No valid fields provided.';
   end if;
