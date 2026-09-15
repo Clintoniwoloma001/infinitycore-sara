@@ -7,6 +7,7 @@ import { useAuth } from '../../hooks/useAuth'
 import { supabase } from '../../supabaseClient'
 import { onboardingService } from '../../services/onboardingService'
 import { guarantorVerificationService } from '../../services/guarantorVerificationService'
+import { fidelityBondVerificationService } from '../../services/fidelityBondVerificationService'
 import { payrollService } from '../../services/payrollService'
 import { LoadingState, ErrorState } from '../PageStates'
 import { REVIEW_SECTIONS, ALL_TABS, GUARANTOR_CORRECTABLE_FIELDS } from './sectionConfig'
@@ -14,6 +15,7 @@ import SectionPanel from './SectionPanel'
 import CorrectionRequestModal from './CorrectionRequestModal'
 import CorrectionsTab from './CorrectionsTab'
 import GuarantorTab from './GuarantorTab'
+import FidelityBondTab from './FidelityBondTab'
 import DocumentsTab from './DocumentsTab'
 import TimelineTab from './TimelineTab'
 import SaraPreReview from './SaraPreReview'
@@ -56,10 +58,12 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
 
   // Data
   const [verification, setVerification] = useState(null)
+  const [fidelityVerification, setFidelityVerification] = useState(null)
   const [onboardingCorrections, setOnboardingCorrections] = useState([])
   const [guarantorCorrections, setGuarantorCorrections] = useState([])
   const [events, setEvents] = useState([])
   const [guarantorDocuments, setGuarantorDocuments] = useState([])
+  const [fidelityDocuments, setFidelityDocuments] = useState([])
 
   // Action state
   const [action, setAction] = useState(null) // null | 'approve' | 'reject' | 'payroll'
@@ -80,13 +84,17 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
     setLoading(true)
     setError('')
     try {
-      const [verifs, onbCorrs] = await Promise.all([
+      const [verifs, onbCorrs, fidVerifs] = await Promise.all([
         guarantorVerificationService.listVerifications().catch(() => []),
         onboardingService.listOnboardingCorrections(submission?.id).catch(() => []),
+        fidelityBondVerificationService.listVerificationsForSubmission(submission?.id).catch(() => []),
       ])
       const subVerifs = verifs.filter((v) => v.submission_id === submission?.id)
       const verif = subVerifs[0] || null
       setVerification(verif)
+
+      const fidVerif = fidVerifs[0] || null
+      setFidelityVerification(fidVerif)
 
       let gCorrs = []
       let evts = []
@@ -101,6 +109,14 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
         evts = e
         gDocs = d
       }
+
+      let fidDocs = []
+      if (fidVerif) {
+        try {
+          fidDocs = await fidelityBondVerificationService.listDocuments(fidVerif.id)
+        } catch { fidDocs = [] }
+      }
+      setFidelityDocuments(fidDocs)
 
       // Also load events for the onboarding link
       if (submission?.link_id) {
@@ -145,6 +161,57 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
       await load()
     } catch (e) {
       setError(e?.message || 'Failed to create verification link')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const sendFidelityLink = async () => {
+    setBusy(true); setError(''); setSuccessMsg('')
+    try {
+      // Prefer linking to the fidelity bond record created for this employee
+      let bondId = null
+      if (submission?.employee_id) {
+        try {
+          const { data: bond } = await supabase
+            .from('employee_fidelity_bonds')
+            .select('id')
+            .eq('employee_id', submission.employee_id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single()
+          if (bond?.id) bondId = bond.id
+        } catch { bondId = null }
+      }
+      const result = await fidelityBondVerificationService.createVerification({
+        onboardingLinkId: submission?.link_id,
+        employeeId: submission?.employee_id,
+        submissionId: submission?.id,
+        bondId,
+        suretyName: payload.fidelity_surety_name,
+        suretyEmail: payload.fidelity_email,
+        suretyRelationship: payload.fidelity_relationship,
+      })
+      setGeneratedLink(result)
+      setSuccessMsg('Fidelity bond verification link generated.')
+      await load()
+    } catch (e) {
+      setError(e?.message || 'Failed to create fidelity verification link')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const approveFidelityVerification = async () => {
+    if (!fidelityVerification) return
+    setBusy(true); setError(''); setSuccessMsg('')
+    try {
+      await fidelityBondVerificationService.approveVerification(fidelityVerification.id)
+      setSuccessMsg('Fidelity bond verification approved.')
+      await load()
+      onRefresh?.()
+    } catch (e) {
+      setError(e?.message || 'Failed to approve fidelity verification')
     } finally {
       setBusy(false)
     }
@@ -304,6 +371,7 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
   const totalCorrections = onboardingCorrections.length + guarantorCorrections.length
   const pendingCorrections = [...onboardingCorrections, ...guarantorCorrections].filter((c) => c.status === 'pending' || c.status === 'submitted').length
   const guarantorStatus = verification?.status || 'pending_link'
+  const fidelityStatus = fidelityVerification?.status || 'pending_link'
 
   // Check if approval is blocked
   const hasUnresolvedCorrections = pendingCorrections > 0
@@ -390,6 +458,12 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
                 <span className="text-slate-500">Guarantor</span>
                 <span className={`text-xs font-medium capitalize ${guarantorStatus === 'approved' ? 'text-emerald-600' : guarantorStatus === 'rejected' ? 'text-rose-600' : 'text-amber-600'}`}>
                   {guarantorStatus.replace(/_/g, ' ')}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500">Fidelity</span>
+                <span className={`text-xs font-medium capitalize ${fidelityStatus === 'approved' ? 'text-emerald-600' : fidelityStatus === 'rejected' ? 'text-rose-600' : 'text-amber-600'}`}>
+                  {fidelityStatus.replace(/_/g, ' ')}
                 </span>
               </div>
             </div>
@@ -499,6 +573,15 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
                         {payload.guarantor_full_name && <span className="text-sm text-slate-600">{payload.guarantor_full_name}</span>}
                       </div>
                     </div>
+                    <div className="rounded-lg border border-slate-200 p-4">
+                      <h4 className="text-sm font-semibold text-slate-700 mb-3">Fidelity Bond Status</h4>
+                      <div className="flex items-center gap-3">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${STATUS_BADGE_CLASSES[fidelityStatus] || 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                          {fidelityStatus.replace(/_/g, ' ')}
+                        </span>
+                        {payload.fidelity_surety_name && <span className="text-sm text-slate-600">{payload.fidelity_surety_name}</span>}
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -523,6 +606,23 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
                     busy={busy}
                     onSendLink={sendGuarantorLink}
                     onApproveVerification={approveVerification}
+                    onGetSignedUrl={handleGetSignedUrl}
+                    generatedLink={generatedLink}
+                    copied={copied}
+                    onCopyLink={copyLink}
+                  />
+                )}
+
+                {/* Fidelity bond tab */}
+                {activeTab === 'fidelity' && (
+                  <FidelityBondTab
+                    payload={payload}
+                    verification={fidelityVerification}
+                    documents={fidelityDocuments}
+                    canManage={canManage}
+                    busy={busy}
+                    onSendLink={sendFidelityLink}
+                    onApproveVerification={approveFidelityVerification}
                     onGetSignedUrl={handleGetSignedUrl}
                     generatedLink={generatedLink}
                     copied={copied}

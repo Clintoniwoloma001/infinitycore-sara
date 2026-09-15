@@ -4,6 +4,7 @@ import { date, ModuleTable, status, useTable } from './hrShared'
 import { appraisalService } from '../services/appraisalService'
 import { employeeService } from '../services/employeeService'
 import { useAuth } from '../hooks/useAuth'
+import { supabase } from '../supabaseClient'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -28,6 +29,19 @@ export default function Appraisals() {
   }, [])
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+
+  const onEmployeeChange = async (e) => {
+    const employeeId = e.target.value
+    const emp = employees.find((x) => x.id === employeeId)
+    setForm((f) => ({ ...f, employee_id: employeeId }))
+    // Auto-fill reviewer from the employee's reporting_manager_id
+    if (emp?.reporting_manager_id) {
+      try {
+        const { data: mgr } = await supabase.from('profiles').select('full_name').eq('id', emp.reporting_manager_id).single()
+        if (mgr?.full_name) setForm((f) => ({ ...f, employee_id: employeeId, reviewer: f.reviewer || mgr.full_name }))
+      } catch { /* manager not found — leave reviewer blank for manual entry */ }
+    }
+  }
 
   const create = async () => {
     if (!form.employee_id) { setFormError('Please select an employee.'); return }
@@ -118,7 +132,7 @@ export default function Appraisals() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className={labelCls}>Employee *</label>
-                  <select className={inputCls} value={form.employee_id || ''} onChange={set('employee_id')}>
+                  <select className={inputCls} value={form.employee_id || ''} onChange={onEmployeeChange}>
                     <option value="">Select employee…</option>
                     {employees.map((e) => <option key={e.id} value={e.id}>{e.full_name} — {e.department || 'N/A'}</option>)}
                   </select>

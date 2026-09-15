@@ -65,6 +65,26 @@ export const PERMISSIONS = {
 
   // HR platform settings
   HR_SETTINGS_MANAGE: 'hr.settings.manage',
+
+  // BankOne intelligence
+  BANKONE_READ: 'bankone.read',
+  BANKONE_IMPORT: 'bankone.import',
+
+  // Reconciliation
+  RECONCILIATION_READ: 'reconciliation.read',
+  RECONCILIATION_MANAGE: 'reconciliation.manage',
+
+  // Performance & appraisals
+  PERFORMANCE_READ: 'performance.read',
+  PERFORMANCE_MANAGE: 'performance.manage',
+  APPRAISAL_READ: 'appraisal.read',
+  APPRAISAL_MANAGE: 'appraisal.manage',
+
+  // HR configuration
+  HR_CONFIG_MANAGE: 'hr_config.manage',
+
+  // Team chat
+  CHAT_READ: 'chat.read',
 }
 
 // Permission categories for organization

@@ -57,6 +57,8 @@ export default function Interviews() {
   const [googleConnected, setGoogleConnected] = useState(null)
   const [zoomConnected, setZoomConnected] = useState(null)
   const [resending, setResending] = useState(false)
+  const [feedback, setFeedback] = useState({ rating: 0, text: '' })
+  const [submittingFeedback, setSubmittingFeedback] = useState(false)
 
   useEffect(() => {
     hrService.listCandidates().then(setCandidates).catch(() => {})
@@ -210,6 +212,21 @@ export default function Interviews() {
 
   const copyLink = (url) => {
     if (url) navigator.clipboard.writeText(url).catch(() => {})
+  }
+
+  const submitFeedback = async () => {
+    if (!showDetails || feedback.rating === 0) return
+    setSubmittingFeedback(true)
+    try {
+      await hrService.submitInterviewFeedback(showDetails.id, feedback.text, feedback.rating)
+      setShowDetails({ ...showDetails, feedback: feedback.text, rating: feedback.rating, status: 'completed' })
+      setFeedback({ rating: 0, text: '' })
+      reload()
+    } catch (e) {
+      setFormError(e?.message || 'Failed to submit feedback')
+    } finally {
+      setSubmittingFeedback(false)
+    }
   }
 
   return (
@@ -464,6 +481,37 @@ export default function Interviews() {
 
               {showDetails.notification_error && (
                 <div className="rounded-lg bg-rose-50 border border-rose-200 p-3"><p className="text-xs text-rose-600">{showDetails.notification_error}</p></div>
+              )}
+
+              {/* Existing feedback (if completed) */}
+              {showDetails.status === 'completed' && showDetails.feedback && (
+                <div className="rounded-lg bg-blue-50 border border-blue-200 p-3">
+                  <p className="text-xs font-semibold text-blue-400 uppercase mb-1">Interview Feedback</p>
+                  <div className="flex items-center gap-1 mb-1">
+                    {[1,2,3,4,5].map((s) => <span key={s} className={`text-sm ${s <= (showDetails.rating || 0) ? 'text-amber-500' : 'text-slate-300'}`}>{s <= (showDetails.rating || 0) ? '\u2605' : '\u2606'}</span>)}
+                  </div>
+                  <p className="text-sm text-slate-700">{showDetails.feedback}</p>
+                </div>
+              )}
+
+              {/* Feedback form (when not yet completed) */}
+              {showDetails.status !== 'completed' && (
+                <div className="rounded-lg border border-slate-200 p-3 mt-2">
+                  <p className="text-xs font-semibold text-slate-400 uppercase mb-2">Submit Feedback</p>
+                  <div className="flex items-center gap-1 mb-2">
+                    {[1,2,3,4,5].map((s) => (
+                      <button key={s} type="button" onClick={() => setFeedback((f) => ({ ...f, rating: s }))}
+                        className={`text-xl transition-colors ${s <= feedback.rating ? 'text-amber-500 hover:text-amber-600' : 'text-slate-300 hover:text-slate-400'}`}>
+                        {s <= feedback.rating ? '\u2605' : '\u2606'}
+                      </button>
+                    ))}
+                    <span className="text-xs text-slate-500 ml-2">{feedback.rating > 0 ? `${feedback.rating}/5` : 'Click to rate'}</span>
+                  </div>
+                  <textarea className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" rows={3} value={feedback.text} onChange={(e) => setFeedback((f) => ({ ...f, text: e.target.value }))} placeholder="Interview notes, strengths, concerns..." />
+                  <button onClick={submitFeedback} disabled={submittingFeedback || feedback.rating === 0} className="mt-2 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+                    {submittingFeedback ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Submit Feedback
+                  </button>
+                </div>
               )}
             </div>
 

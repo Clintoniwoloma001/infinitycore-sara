@@ -154,9 +154,9 @@ export default function StaffIdCard({
 
           <div className="mt-5 pt-4 border-t border-slate-100">
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              This card remains the property of InfinityCore Bank Ltd. If found, please return to the nearest branch or HR office.
+              This card remains the property of Infinity Microfinance Bank. If found, please return to the nearest branch or HR office.
             </p>
-            <p className="text-[10px] text-slate-300 mt-2">This card is issued by Human Resources of Infinity Bank and is valid for identification purposes only. {expiryMode === 'date' && expiryDate ? `Expires ${expiryLabel}.` : 'This card has no expiry.'}</p>
+            <p className="text-[10px] text-slate-300 mt-2">This card is issued by Human Resources of Infinity Microfinance Bank and is valid for identification purposes only. {expiryMode === 'date' && expiryDate ? `Expires ${expiryLabel}.` : 'This card has no expiry.'}</p>
           </div>
         </div>
       </div>

@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { CalendarPlus, CheckCircle2, Copy, Link2, Loader2, Video, MapPin, X } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { CalendarPlus, CheckCircle2, Copy, Link2, Loader2, Plus, Video, MapPin, X } from 'lucide-react'
 import HRJobs from './HRJobs'
 import { date, ModuleTable, status, useTable } from './hrShared'
 import { ErrorState } from '../components/PageStates'
@@ -11,6 +11,25 @@ const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm fo
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 const PLATFORMS = ['Google Meet', 'Zoom', 'Microsoft Teams', 'Other']
 
+const PIPELINE = ['received', 'screening', 'shortlisted', 'interview', 'offer', 'hired']
+
+function PipelineStepper({ current }) {
+  const idx = PIPELINE.indexOf(current)
+  if (idx < 0) return null
+  return (
+    <div className="flex items-center gap-0.5">
+      {PIPELINE.map((stage, i) => (
+        <React.Fragment key={stage}>
+          {i > 0 && <span className={`w-1 h-1 rounded-full flex-shrink-0 ${i <= idx ? 'bg-[#009944]' : 'bg-slate-300'}`} />}
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium whitespace-nowrap ${i === idx ? 'bg-[#009944] text-white' : i < idx ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-50 text-slate-400'}`}>
+            {stage}
+          </span>
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text) } catch {
     const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta)
@@ -20,6 +39,7 @@ async function copyText(text) {
 export default function Recruitment() {
   const { user } = useAuth()
   const candidates = useTable('hr_candidates')
+  const [jobs, setJobs] = useState([])
   const [scheduleTarget, setScheduleTarget] = useState(null)
   const [form, setForm] = useState({ interview_type: 'PHYSICAL' })
   const [creating, setCreating] = useState(false)
@@ -28,8 +48,42 @@ export default function Recruitment() {
   const [generatedLink, setGeneratedLink] = useState(null)
   const [onboardBusy, setOnboardBusy] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [showAddCandidate, setShowAddCandidate] = useState(false)
+  const [addCandidateForm, setAddCandidateForm] = useState({ full_name: '', email: '', phone: '', current_company: '', years_experience: '', applied_role: '', cover_letter: '', job_id: '' })
+  const [addCandidateLoading, setAddCandidateLoading] = useState(false)
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+  const setAdd = (k) => (e) => setAddCandidateForm((f) => ({ ...f, [k]: e.target.value }))
+
+  useEffect(() => {
+    hrService.listJobs().then(setJobs).catch(() => {})
+  }, [])
+
+  const addCandidate = async () => {
+    if (!addCandidateForm.full_name.trim()) { setFormError('Candidate name is required.'); return }
+    setFormError('')
+    setAddCandidateLoading(true)
+    try {
+      await hrService.createCandidate({
+        full_name: addCandidateForm.full_name.trim(),
+        email: addCandidateForm.email || null,
+        phone: addCandidateForm.phone || null,
+        current_company: addCandidateForm.current_company || null,
+        years_experience: addCandidateForm.years_experience ? parseInt(addCandidateForm.years_experience) : null,
+        applied_role: addCandidateForm.applied_role || null,
+        cover_letter: addCandidateForm.cover_letter || null,
+        job_id: addCandidateForm.job_id || null,
+        application_status: 'received',
+      })
+      setShowAddCandidate(false)
+      setAddCandidateForm({ full_name: '', email: '', phone: '', current_company: '', years_experience: '', applied_role: '', cover_letter: '', job_id: '' })
+      candidates.reload()
+    } catch (e) {
+      setFormError(e?.message || 'Failed to add candidate')
+    } finally {
+      setAddCandidateLoading(false)
+    }
+  }
 
   const openScheduler = (candidate) => {
     setScheduleTarget(candidate)
@@ -101,8 +155,14 @@ export default function Recruitment() {
   return (
     <div className="space-y-8">
       <HRJobs />
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-slate-900">Applicants</h2>
+        <button onClick={() => { setShowAddCandidate(true); setFormError(''); setAddCandidateForm({ full_name: '', email: '', phone: '', current_company: '', years_experience: '', applied_role: '', cover_letter: '', job_id: '' }) }} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+          <Plus className="w-4 h-4" /> Add Candidate
+        </button>
+      </div>
       <ModuleTable
-        title="Applicants"
+        title=""
         subtitle="Candidate profiles and recruitment pipeline"
         rows={candidates.rows}
         loading={candidates.loading}
@@ -112,7 +172,7 @@ export default function Recruitment() {
           { key: 'full_name', label: 'Candidate', render: (r) => <div><div className="font-medium text-slate-900">{r.full_name}</div><div className="text-xs text-slate-400">{r.email || r.phone || '-'}</div></div> },
           { key: 'current_company', label: 'Current Company' },
           { key: 'years_experience', label: 'Experience', render: (r) => `${r.years_experience || 0} yrs` },
-          { key: 'application_status', label: 'Status', render: (r) => status(r.application_status, ['shortlisted', 'interview', 'offer', 'hired']) },
+          { key: 'application_status', label: 'Pipeline', render: (r) => <PipelineStepper current={r.application_status} /> },
           { key: 'screening_score', label: 'Screening', render: (r) => r.screening_score ?? '-' },
           { key: 'created_at', label: 'Applied', render: (r) => date(r.created_at) },
           { key: 'actions', label: 'Actions', render: (r) => (
@@ -229,6 +289,51 @@ export default function Recruitment() {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ---- Add Candidate Modal ---- */}
+      {showAddCandidate && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Add Candidate</h3>
+                <p className="text-sm text-slate-500 mt-0.5">Enter candidate details to add them to the recruitment pipeline</p>
+              </div>
+              <button onClick={() => setShowAddCandidate(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            {formError && <p className="text-sm text-rose-600 mb-3">{formError}</p>}
+            <div className="space-y-4">
+              <div><label className={labelCls}>Full Name *</label><input className={inputCls} value={addCandidateForm.full_name} onChange={setAdd('full_name')} placeholder="John Doe" /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className={labelCls}>Email</label><input type="email" className={inputCls} value={addCandidateForm.email} onChange={setAdd('email')} placeholder="john@example.com" /></div>
+                <div><label className={labelCls}>Phone</label><input className={inputCls} value={addCandidateForm.phone} onChange={setAdd('phone')} placeholder="+234 800 000 0000" /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className={labelCls}>Current Company</label><input className={inputCls} value={addCandidateForm.current_company} onChange={setAdd('current_company')} placeholder="Acme Corp" /></div>
+                <div><label className={labelCls}>Years of Experience</label><input type="number" className={inputCls} value={addCandidateForm.years_experience} onChange={setAdd('years_experience')} placeholder="3" min="0" /></div>
+              </div>
+              <div>
+                <label className={labelCls}>Apply for Role</label>
+                <select className={inputCls} value={addCandidateForm.job_id} onChange={(e) => {
+                  const job = jobs.find((j) => j.id === e.target.value)
+                  setAddCandidateForm((f) => ({ ...f, job_id: e.target.value, applied_role: job?.job_title || f.applied_role }))
+                }}>
+                  <option value="">Select a job (optional)</option>
+                  {jobs.filter((j) => j.status === 'published').map((j) => <option key={j.id} value={j.id}>{j.job_title} — {j.department || j.location || ''}</option>)}
+                </select>
+              </div>
+              {!addCandidateForm.job_id && <div><label className={labelCls}>Applied Role</label><input className={inputCls} value={addCandidateForm.applied_role} onChange={setAdd('applied_role')} placeholder="Software Engineer" /></div>}
+              <div><label className={labelCls}>Cover Letter / Notes</label><textarea className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" rows={3} value={addCandidateForm.cover_letter} onChange={setAdd('cover_letter')} placeholder="Brief cover letter or HR notes..." /></div>
+            </div>
+            <div className="flex justify-end gap-2 pt-4">
+              <button onClick={() => setShowAddCandidate(false)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+              <button onClick={addCandidate} disabled={addCandidateLoading} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+                {addCandidateLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Add Candidate
+              </button>
+            </div>
           </div>
         </div>
       )}

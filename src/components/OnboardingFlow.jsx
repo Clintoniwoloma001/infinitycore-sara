@@ -170,6 +170,18 @@ export default function OnboardingFlow({ onComplete, onDismiss }) {
         setup_steps: setupSteps,
       }, { onConflict: 'employee_id' })
 
+      // Record the completion server-side so the Back Office review centre
+      // reflects the finished profile (single source of truth). Best-effort:
+      // never block completion if the migration isn't present yet.
+      try {
+        await supabase.rpc('complete_self_onboarding', {
+          p_employee_id: employeeId,
+          p_payload: payload,
+        })
+      } catch {
+        // fall back to the local digital-file mark already written above
+      }
+
       setDone({ employeeId, employeeNumber, full_name: form.full_name, department: form.department, position: form.position })
     } catch (e) {
       console.error('Onboarding save error:', e)

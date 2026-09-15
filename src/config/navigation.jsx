@@ -25,6 +25,7 @@ import {
   Wallet,
   Monitor,
   UserCircle,
+  MessageSquare,
 } from 'lucide-react'
 import { PERMISSIONS } from '../constants/permissions'
 
@@ -34,6 +35,7 @@ export const routeConfig = [
     items: [
       { label: 'Dashboard', path: '/', icon: LayoutDashboard, element: 'Dashboard', permissions: [] },
       { label: 'My Profile', path: '/profile', icon: UserCircle, element: 'Profile', permissions: [] },
+      { label: 'Messages', path: '/chat', icon: MessageSquare, element: 'Chat', permissions: [] },
       { label: 'BankOne Imports', path: '/bankone-imports', icon: Database, element: 'BankOneImportCenter', permissions: [PERMISSIONS.BANKONE_READ] },
     ],
   },
@@ -64,8 +66,6 @@ export const routeConfig = [
       { label: 'Onboarding', path: '/onboarding-links', icon: Link2, element: 'OnboardingLinks', permissions: [PERMISSIONS.HR_ONBOARDING_READ] },
       { label: 'HR Queries', path: '/hr-queries', icon: ClipboardList, element: 'HRQueries', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'Appraisals', path: '/appraisals', icon: Star, element: 'Appraisals', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
-      { label: 'Attendance', path: '/attendance', icon: Clock3, element: 'Attendance', permissions: [PERMISSIONS.HR_ATTENDANCE_SELF] },
-      { label: 'Attendance Mgmt', path: '/attendance-management', icon: ClipboardList, element: 'AttendanceManagement', permissions: [PERMISSIONS.HR_ATTENDANCE_MANAGE] },
       { label: 'Platform Settings', path: '/platform-settings', icon: Settings, element: 'PlatformSettings', permissions: [PERMISSIONS.HR_SETTINGS_MANAGE] },
       { label: 'Data Import', path: '/data-import', icon: Database, element: 'DataImport', permissions: [PERMISSIONS.DATA_IMPORT_VIEW] },
     ],

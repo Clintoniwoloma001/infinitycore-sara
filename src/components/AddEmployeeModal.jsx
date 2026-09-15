@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
-import { Loader2, X, User, UserPlus, AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react'
+import { Loader2, X, User, UserPlus, AlertCircle, CheckCircle2, RefreshCw, Mail } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { ROLES, ROLE_METADATA, assignableRoles } from '../constants/roles'
+import { generateCompanyEmail } from '../utils/companyEmail'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -27,6 +28,8 @@ export default function AddEmployeeModal({ onClose, onCreated }) {
   const [duplicate, setDuplicate] = useState(null)
   const [createAccount, setCreateAccount] = useState(false)
   const [empCode, setEmpCode] = useState('')
+  const [generatedEmail, setGeneratedEmail] = useState('')
+  const [branches, setBranches] = useState([])
 
   const set = (k) => (e) => {
     const val = e.target.type === 'checkbox' ? e.target.checked : e.target.value
@@ -39,6 +42,21 @@ export default function AddEmployeeModal({ onClose, onCreated }) {
       if (data) { setEmpCode(data); setForm((f) => ({ ...f, employee_code: data })) }
     }).catch(() => {})
   }, [])
+
+  // Load branches for the hierarchy picker
+  useEffect(() => {
+    supabase.from('branches').select('id, branch_name, branch_code, status').eq('status', 'active').order('branch_name')
+      .then(({ data }) => { if (data) setBranches(data) }).catch(() => {})
+  }, [])
+
+  // Auto-fill a company email once the name is known, unless overridden
+  useEffect(() => {
+    if (!form.full_name || (form.account_email && form.account_email !== generatedEmail)) return
+    const email = generateCompanyEmail(form.full_name)
+    setGeneratedEmail(email)
+    if (email) setForm((f) => ({ ...f, account_email: f.account_email || email }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.full_name])
 
   // Duplicate check on email/phone change
   const checkDuplicate = async (field, value) => {
@@ -73,6 +91,7 @@ export default function AddEmployeeModal({ onClose, onCreated }) {
         p_department: form.department || null,
         p_position: form.position || null,
         p_branch: form.branch || null,
+        p_branch_id: form.branch_id || null,
         p_area: form.area || null,
         p_employment_type: form.employment_type || null,
         p_employment_status: form.employment_status || 'active',
@@ -238,7 +257,21 @@ export default function AddEmployeeModal({ onClose, onCreated }) {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={labelCls}>Department</label><input className={inputCls} value={form.department || ''} onChange={set('department')} placeholder="IT" /></div>
-                <div><label className={labelCls}>Branch</label><input className={inputCls} value={form.branch || ''} onChange={set('branch')} placeholder="HQ" /></div>
+                <div>
+                  <label className={labelCls}>Branch</label>
+                  <select
+                    className={inputCls}
+                    value={form.branch_id || ''}
+                    onChange={(e) => {
+                      const id = e.target.value
+                      const b = branches.find((x) => x.id === id)
+                      setForm((f) => ({ ...f, branch_id: id, branch: b?.branch_name || f.branch }))
+                    }}
+                  >
+                    <option value="">Select branch…</option>
+                    {branches.map((b) => <option key={b.id} value={b.id}>{b.branch_name}{b.branch_code ? ` (${b.branch_code})` : ''}</option>)}
+                  </select>
+                </div>
               </div>
               <div><label className={labelCls}>Area</label><input className={inputCls} value={form.area || ''} onChange={set('area')} placeholder="Lagos Mainland" /></div>
               <div className="grid grid-cols-2 gap-3">
@@ -305,7 +338,16 @@ export default function AddEmployeeModal({ onClose, onCreated }) {
               </div>
               {createAccount && (
                 <>
-                  <div><label className={labelCls}>Account Email *</label><input className={inputCls} value={form.account_email || ''} onChange={set('account_email')} placeholder="john@company.com" /></div>
+                  <div>
+                    <label className={labelCls}>Account Email *</label>
+                    <input className={inputCls} value={form.account_email || ''} onChange={set('account_email')} placeholder="john@company.com" />
+                    {generatedEmail && (
+                      <p className="mt-1 flex items-center gap-1 text-xs text-slate-400">
+                        <Mail className="w-3.5 h-3.5" />
+                        Suggested: <span className="text-[#009944] font-medium">{generatedEmail}</span>
+                      </p>
+                    )}
+                  </div>
                   <div>
                     <label className={labelCls}>Account Role</label>
                     <select className={inputCls} value={form.account_role || 'staff'} onChange={set('account_role')}>

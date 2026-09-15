@@ -220,6 +220,45 @@ export const attendanceService = {
     if (error) throw error
     return data || []
   },
+
+  // ---- Self-reporting (late arrival exception, attendance issue) ----
+  // Both inserts are RLS-guarded to the caller's own employee record.
+  async submitException({ attendanceId, employeeId, exceptionType, reason, customExplanation, expectedTime, actualTime }) {
+    const { data, error } = await supabase
+      .from('attendance_exceptions')
+      .insert({
+        attendance_id: attendanceId || null,
+        employee_id: employeeId,
+        exception_type: exceptionType || 'late_arrival',
+        reason: reason || 'other',
+        custom_explanation: customExplanation || null,
+        expected_time: expectedTime || null,
+        actual_time: actualTime || null,
+        status: 'pending',
+      })
+      .select()
+      .single()
+    if (error) throw error
+    logAction({ action: 'ATTENDANCE_EXCEPTION_SUBMIT', entityType: 'AttendanceException', entityId: data.id, details: `${exceptionType} reported by ${employeeId}` })
+    return data
+  },
+
+  async submitIssue({ employeeId, issueDate, issueType, explanation }) {
+    const { data, error } = await supabase
+      .from('attendance_issues')
+      .insert({
+        employee_id: employeeId,
+        issue_date: issueDate,
+        issue_type: issueType,
+        explanation: explanation || null,
+        status: 'pending',
+      })
+      .select()
+      .single()
+    if (error) throw error
+    logAction({ action: 'ATTENDANCE_ISSUE_SUBMIT', entityType: 'AttendanceIssue', entityId: data.id, details: `${issueType} reported by ${employeeId}` })
+    return data
+  },
 }
 
 export default attendanceService

@@ -18,6 +18,18 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Respect users who prefer reduced motion (global polish pass). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* -----------------------------------------------------------
    Personnel Record document (A4) + ID card styling.
    Used inside the print portal; these classes also style the

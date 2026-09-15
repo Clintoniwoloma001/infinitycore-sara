@@ -540,12 +540,18 @@ end; $$;
 -- 13. CONFIGURATION RPCs
 -- ============================================================
 -- Single environment configuration (masked) for the UI.
+-- SECURITY DEFINER requires an explicit super_admin gate like every
+-- other integration RPC (otherwise the definer bypasses RLS).
 create or replace function public.integration_get_config(p_environment text default null)
 returns setof public.v_integration_config
-language sql stable security definer set search_path = public as $$
-  select * from public.v_integration_config
-  where (p_environment is null or environment = p_environment)
-$$;
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if public.current_role() <> 'super_admin' then
+    raise exception 'Only a super admin can query integration configuration.';
+  end if;
+  return query select * from public.v_integration_config
+    where (p_environment is null or environment = p_environment);
+end; $$;
 
 -- Persist NON-SECRET connection fields. Secrets (client_secret,
 -- api_key, webhook secret) are never passed through this path — they
@@ -559,6 +565,8 @@ create or replace function public.integration_save_config(
 )
 returns public.v_integration_config
 language plpgsql security definer set search_path = public as $$
+declare
+  v_out public.v_integration_config;
 begin
   if public.current_role() <> 'super_admin' then
     raise exception 'Only a super admin can update BankOne configuration.';
@@ -585,7 +593,9 @@ begin
     ))
   );
 
-  return query select * from public.v_integration_config where environment = p_environment and provider = 'bankone';
+  select * into v_out from public.v_integration_config
+  where environment = p_environment and provider = 'bankone';
+  return v_out;
 end; $$;
 
 -- Per-toggle permission writes. Each toggled flag produces its own
@@ -598,6 +608,7 @@ returns public.v_integration_config
 language plpgsql security definer set search_path = public as $$
 declare
   v_row public.integration_connections;
+  v_out public.v_integration_config;
   v_action text;
 begin
   if public.current_role() <> 'super_admin' then
@@ -638,7 +649,8 @@ begin
     perform public.integration_write_audit(v_action, p_environment);
   end if;
 
-  return query select * from public.v_integration_config where id = v_row.id;
+  select * into v_out from public.v_integration_config where id = v_row.id;
+  return v_out;
 end; $$;
 
 -- Emergency control: instantly disables every flag in BOTH environments
@@ -1064,6 +1076,7 @@ returns public.v_integration_config
 language plpgsql security definer set search_path = public as $$
 declare
   v_row public.integration_connections;
+  v_out public.v_integration_config;
 begin
   select * into v_row from public.integration_connections
   where provider = 'bankone' and environment = p_environment;
@@ -1089,7 +1102,8 @@ begin
           case when p_success then 'ok' else 'error' end,
           case when p_success then 'Connectivity verified' else 'Connectivity failed' end);
 
-  return query select * from public.v_integration_config where id = v_row.id;
+  select * into v_out from public.v_integration_config where id = v_row.id;
+  return v_out;
 end; $$;
 
 -- ============================================================

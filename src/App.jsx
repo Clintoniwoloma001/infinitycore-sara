@@ -32,6 +32,7 @@ import Reports from './pages/Reports'
 import OnboardingLinks from './pages/OnboardingLinks'
 import OnboardingForm from './pages/OnboardingForm'
 import GuarantorVerificationForm from './pages/GuarantorVerificationForm'
+import FidelityBondVerificationForm from './pages/FidelityBondVerificationForm'
 import Attendance from './pages/Attendance'
 import AttendanceManagement from './pages/AttendanceManagement'
 import EmployeeProfile from './pages/EmployeeProfile'
@@ -41,6 +42,12 @@ import HRQueries from './pages/HRQueries'
 import Appraisals from './pages/Appraisals'
 import WorkManagement from './pages/WorkManagement'
 import PlatformSettings from './pages/PlatformSettings'
+import Chat from './pages/Chat'
+import BankOneImportCenter from './pages/BankOneImportCenter'
+import Performance from './pages/Performance'
+import Reconciliation from './pages/Reconciliation'
+import Settings from './pages/Settings'
+import OnboardingReview from './pages/OnboardingReview'
 
 const pageComponents = {
   Dashboard,
@@ -71,6 +78,12 @@ const pageComponents = {
   Appraisals,
   WorkManagement,
   PlatformSettings,
+  Chat,
+  BankOneImportCenter,
+  Performance,
+  Reconciliation,
+  Settings,
+  OnboardingReview,
 }
 
 function Protected({ children }) {
@@ -214,6 +227,7 @@ function AppRoutes() {
       <Route path="/" element={<Protected><Home /></Protected>} />
       <Route path="/onboarding/:token" element={<OnboardingForm />} />
       <Route path="/guarantor-verification/:token" element={<GuarantorVerificationForm />} />
+      <Route path="/fidelity-verification/:token" element={<FidelityBondVerificationForm />} />
       {protectedRoutes.filter((route) => route.path !== '/').map((route) => (
         <Route key={route.path} path={route.path} element={<Protected><ProtectedModule route={route} /></Protected>} />
       ))}

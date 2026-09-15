@@ -59,7 +59,7 @@ export default function LeaveRequests() {
   const [balancesLoading, setBalancesLoading] = useState(true)
   const escalationLoggedRef = useRef(new Set())
 
-  const { name: userName, user, isAdmin, canManageLeave, role } = useAuth()
+  const { name: userName, user, profile, isAdmin, canManageLeave, role } = useAuth()
   const isApproverRole = isAdmin || canManageLeave || APPROVER_ROLES.includes(role)
 
   const load = async () => {

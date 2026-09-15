@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Calendar, TrendingUp, Clock, CheckCircle2, AlertTriangle, XCircle, Activity } from 'lucide-react'
+import { Calendar, TrendingUp, Clock, Clock3, CheckCircle2, AlertTriangle, AlertCircle, XCircle, Activity, X, Loader2, Send } from 'lucide-react'
 import { attendanceService } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { useAuth } from '../hooks/useAuth'
@@ -78,6 +78,10 @@ export default function Attendance() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState({ kind: '', text: '' })
   const [filter, setFilter] = useState('month')
+  const [lateModal, setLateModal] = useState(null)
+  const [issueModal, setIssueModal] = useState(false)
+  const [clockAnim, setClockAnim] = useState(false)
+  const [geofenceBlocked, setGeofenceBlocked] = useState(null)
 
   const load = async () => {
     setLoading(true)
@@ -116,6 +120,14 @@ export default function Attendance() {
     try {
       const r = await attendanceService.clockIn(geo)
       setMessage({ kind: 'ok', text: `Clocked in at ${new Date(r.clock_in_at).toLocaleTimeString()}.${r.late_minutes > 0 ? ` You are ${r.late_minutes} minutes late.` : ''}` })
+      if (r.late_minutes > 0) {
+        setLateModal({
+          attendanceId: r.attendance_id,
+          employeeId: employee.id,
+          expectedTime: config?.expected_start_time || '08:00',
+          actualTime: new Date(r.clock_in_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+        })
+      }
       await load()
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Clock in failed' })
@@ -268,16 +280,24 @@ export default function Attendance() {
       {/* Filter + History table */}
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-slate-900">Attendance History</h3>
-        <div className="flex gap-1.5">
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              onClick={() => setFilter(f.key)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${filter === f.key ? 'bg-[#009944] text-white' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}
-            >
-              {f.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setIssueModal(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium hover:bg-slate-50"
+          >
+            <AlertCircle className="w-3.5 h-3.5" /> Report Attendance Issue
+          </button>
+          <div className="flex gap-1.5">
+            {FILTERS.map((f) => (
+              <button
+                key={f.key}
+                onClick={() => setFilter(f.key)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${filter === f.key ? 'bg-[#009944] text-white' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -439,5 +459,66 @@ function StatusPill({ status }) {
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border capitalize ${styles[status] || styles.incomplete}`}>
       {status.replace(/_/g, ' ')}
     </span>
+  )
+}
+
+// ============================================================
+// ATTENDANCE ISSUE MODAL
+// ============================================================
+function IssueModal({ onSubmit, onClose, busy }) {
+  const [issueType, setIssueType] = useState('')
+  const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10))
+  const [explanation, setExplanation] = useState('')
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 animate-[fadeIn_0.15s_ease]">
+      <div className="bg-white rounded-xl w-full max-w-md p-6 shadow-xl">
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2">
+            <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center">
+              <AlertCircle className="w-5 h-5 text-rose-600" />
+            </div>
+            <h3 className="text-lg font-semibold text-slate-900">Report Attendance Issue</h3>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Date</label>
+            <input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Issue Type</label>
+            <select value={issueType} onChange={(e) => setIssueType(e.target.value)} className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]">
+              <option value="">Select issue type...</option>
+              {ISSUE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Explanation</label>
+            <textarea
+              className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+              rows={3}
+              value={explanation}
+              onChange={(e) => setExplanation(e.target.value)}
+              placeholder="Describe what happened..."
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 mt-5">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+          <button
+            onClick={() => onSubmit({ date: issueDate, type: issueType, explanation })}
+            disabled={busy || !issueType}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            Submit Issue
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
