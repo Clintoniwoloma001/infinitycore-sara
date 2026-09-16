@@ -70,7 +70,6 @@ export default function Recruitment() {
         phone: addCandidateForm.phone || null,
         current_company: addCandidateForm.current_company || null,
         years_experience: addCandidateForm.years_experience ? parseInt(addCandidateForm.years_experience) : null,
-        applied_role: addCandidateForm.applied_role || null,
         cover_letter: addCandidateForm.cover_letter || null,
         job_id: addCandidateForm.job_id || null,
         application_status: 'received',

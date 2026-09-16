@@ -191,7 +191,7 @@ export default function WorkManagement() {
         actual_value: parseFloat(form.actual_value) || 0,
         unit: form.unit || '',
         weight: parseFloat(form.weight) || 100,
-        review_period: form.review_period || 'quarterly',
+        review_period: form.review_period || 'q1',
         quarter: form.quarter || null,
         appraisal_year: form.appraisal_year ? parseInt(form.appraisal_year) : null,
         status: 'active',
@@ -221,13 +221,21 @@ export default function WorkManagement() {
   }
 
   const updateTargetProgress = async (targetId, newValue) => {
-    await targetService.updateProgress(targetId, parseFloat(newValue) || 0)
-    load()
+    try {
+      await targetService.updateProgress(targetId, parseFloat(newValue) || 0)
+      await load()
+    } catch (e) {
+      setFormError(e?.message || 'Failed to update target progress')
+    }
   }
 
   const updateKpiActual = async (kpiId, newActual) => {
-    await kpiService.update(kpiId, { actual_value: parseFloat(newActual) || 0 })
-    load()
+    try {
+      await kpiService.update(kpiId, { actual_value: parseFloat(newActual) || 0 })
+      await load()
+    } catch (e) {
+      setFormError(e?.message || 'Failed to update KPI actual')
+    }
   }
 
   if (loading) return <LoadingState label="Loading work management..." />
@@ -489,7 +497,7 @@ export default function WorkManagement() {
             <div><label className={labelCls}>Unit</label><input className={inputCls} value={form.unit || ''} onChange={set('unit')} placeholder="%, count, ₦" /></div>
           </div>
           <div className="grid grid-cols-3 gap-4">
-            <div><label className={labelCls}>Review Period</label><select className={inputCls} value={form.review_period || 'quarterly'} onChange={set('review_period')}>{['q1', 'q2', 'q3', 'q4', 'annual', 'mid_year'].map((p) => <option key={p} value={p}>{p.toUpperCase()}</option>)}</select></div>
+            <div><label className={labelCls}>Review Period</label><select className={inputCls} value={form.review_period || 'q1'} onChange={set('review_period')}>{['q1', 'q2', 'q3', 'q4', 'annual', 'mid_year'].map((p) => <option key={p} value={p}>{p.toUpperCase()}</option>)}</select></div>
             <div><label className={labelCls}>Quarter</label><select className={inputCls} value={form.quarter || ''} onChange={set('quarter')}><option value="">—</option>{['Q1', 'Q2', 'Q3', 'Q4'].map((q) => <option key={q} value={q}>{q}</option>)}</select></div>
             <div><label className={labelCls}>Year</label><input type="number" className={inputCls} value={form.appraisal_year || ''} onChange={set('appraisal_year')} placeholder="2026" /></div>
           </div>

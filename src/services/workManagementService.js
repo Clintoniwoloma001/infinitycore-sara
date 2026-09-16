@@ -258,10 +258,10 @@ export const workManagementService = {
   async listBranches() {
     const { data, error } = await supabase
       .from('branches')
-      .select('name')
-      .order('name')
+      .select('branch_name')
+      .order('branch_name')
     if (error) throw error
-    return (data || []).map((b) => b.name)
+    return (data || []).map((b) => b.branch_name).filter(Boolean)
   },
 
   async listUsersForAssignment() {

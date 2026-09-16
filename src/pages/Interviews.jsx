@@ -118,7 +118,6 @@ export default function Interviews() {
         full_name: newCandidate.full_name.trim(),
         email: newCandidate.email.trim(),
         phone: newCandidate.phone?.trim() || null,
-        applied_role: newCandidate.position?.trim() || null,
         application_status: 'new',
       })
       setCandidates((prev) => [candidate, ...prev])
@@ -128,7 +127,7 @@ export default function Interviews() {
         candidate_name: candidate.full_name,
         candidate_email: candidate.email,
         original_candidate_email: candidate.email,
-        position: candidate.applied_role || f.position || '',
+        position: newCandidate.position?.trim() || f.position || '',
         email_override: false,
       }))
       setNewCandidate({})
@@ -186,7 +185,7 @@ export default function Interviews() {
         interviewData.external_provider = null
       }
 
-      const { steps, errors } = await scheduleInterviewWithMeeting({
+      const { steps, errors = [] } = await scheduleInterviewWithMeeting({
         hrService,
         interviewData,
         user,
@@ -347,7 +346,10 @@ export default function Interviews() {
                   <p className="text-sm font-medium text-slate-900">{createResult.errors.length === 0 ? 'Interview scheduled successfully!' : 'Interview created with warnings'}</p>
                 </div>
                 <div className="space-y-1 text-xs text-slate-600">
-                  <p>✓ Interview record created</p>
+                  {createResult.steps.interview && <p>✓ Interview record created</p>}
+                  {createResult.errors.map((err, i) => (
+                    <p key={i} className="text-rose-600">✕ {err}</p>
+                  ))}
                   {createResult.steps.meeting?.status === 'created' && <p>✓ {form.platform} meeting created — {createResult.steps.meeting.meetingUrl?.slice(0, 50)}...</p>}
                   {createResult.steps.meeting?.status === 'not_connected' && <p>⚠ {form.platform} not connected — manual link needed</p>}
                   {createResult.steps.meeting?.status === 'not_configured' && <p>⚠ {form.platform} not configured — manual link needed</p>}

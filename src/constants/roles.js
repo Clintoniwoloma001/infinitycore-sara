@@ -156,6 +156,7 @@ export const ROLE_PERMISSIONS = {
     'hr.assessments.create',
     'hr.interviews.schedule',
     'hr.hire',
+    'hr.leave.manage',
     'hr.payroll.read',
     'hr.offer_letters.read',
     'hr.onboarding.read',

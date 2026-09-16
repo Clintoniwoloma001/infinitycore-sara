@@ -36,8 +36,10 @@ export default function Reconciliation() {
       setCases(data)
       const m = await reconciliationService.getDashboardMetrics()
       setMetrics(m)
+      return data
     } catch (e) {
       setError(e?.message || 'Failed to load reconciliation cases')
+      return []
     } finally {
       setLoading(false)
     }
@@ -77,10 +79,9 @@ export default function Reconciliation() {
 
       setActionMode(null)
       setActionText('')
-      await loadCases()
-      const updated = cases.find((c) => c.id === selectedCase.id)
-      if (updated) openCase({ ...selectedCase, ...updated })
-      else openCase(selectedCase)
+      const fresh = await loadCases()
+      const updated = (fresh || []).find((c) => c.id === selectedCase.id)
+      openCase({ ...selectedCase, ...(updated || {}) })
     } catch (e) {
       setError(e?.message || 'Action failed')
     } finally {

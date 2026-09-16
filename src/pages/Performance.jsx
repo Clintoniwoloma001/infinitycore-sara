@@ -27,6 +27,9 @@ const STATUS_COLORS = {
 
 const STATUS_ORDER = ['exceeds_target', 'meets_target', 'below_target']
 
+const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
+const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
+
 function countByStatus(rows) {
   const map = {}
   rows.forEach((r) => {
@@ -93,7 +96,8 @@ function periodRange(preset, custom) {
     year: [begin(y, 0), endOf(y, 11)],
   }
   if (preset === 'custom' && custom && custom.from && custom.to) {
-    return [startOfDay(new Date(custom.from)), endOf(new Date(custom.to))]
+    const to = new Date(custom.to)
+    return [startOfDay(new Date(custom.from)), endOf(to.getFullYear(), to.getMonth())]
   }
   return maps[preset] || maps.month
 }
@@ -113,7 +117,7 @@ function rowInRange(r, range) {
   return true
 }
 
-function DashboardView({ results, metrics, employees, config, caseMetrics, onRefresh, onCalculate }) {
+function DashboardView({ results, metrics, employees, config, caseMetrics, onRefresh, onCalculate, onImport }) {
   const [preset, setPreset] = useState(localStorage.getItem('perf_preset') || 'month')
   const [customRange, setCustomRange] = useState({ from: '', to: '' })
   const [branchF, setBranchF] = useState('')

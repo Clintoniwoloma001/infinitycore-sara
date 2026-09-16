@@ -30,6 +30,7 @@ export default function Settings() {
     { id: 'biometric', label: 'Biometric Mapping' },
     { id: 'bankone-mapping', label: 'BankOne Mapping' },
     { id: 'transport-allowance', label: 'Transport Allowance' },
+    { id: 'platform', label: 'Platform Settings' },
   ]
 
   return (
@@ -52,6 +53,7 @@ export default function Settings() {
       {tab === 'biometric' && <BiometricTab canManage={canManage} />}
       {tab === 'bankone-mapping' && <BankOneMappingTab canManage={canManage} />}
       {tab === 'transport-allowance' && <TransportAllowanceTab canManage={canManage} />}
+      {tab === 'platform' && <PlatformSettings />}
     </div>
   )
 }
@@ -805,8 +807,6 @@ function TransportAllowanceTab({ canManage }) {
           </div>
         </div>
       )}
-    <PlatformSettings />
-
     </div>
   )
 }

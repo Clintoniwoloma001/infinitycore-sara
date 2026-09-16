@@ -77,9 +77,10 @@ export default function Chat() {
     }
   }, [me])
 
-  // Load members for the "new chat" picker (everyone except me)
+  // Load member directory (everyone except me). Needed for both the new
+  // chat picker and for displaying names on existing conversations.
   useEffect(() => {
-    if (!showNew || !me) return
+    if (!me) return
     supabase
       .from('profiles')
       .select('id, full_name, email, role, department, status')
@@ -87,7 +88,7 @@ export default function Chat() {
       .order('full_name', { ascending: true })
       .then(({ data }) => setPeople(data || []))
       .catch(() => setPeople([]))
-  }, [showNew, me])
+  }, [me])
 
   // Load messages for the active thread
   useEffect(() => {
@@ -106,7 +107,18 @@ export default function Chat() {
           setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
         }
         if (msg?.sender_id === me) {
-          setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, status: 'sent' } : m)))
+          // The optimistic copy has a client-side id, so reconcile by matching
+          // the pending message body before falling back to the server id.
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === msg.id)) return prev
+            const idx = prev.findIndex((m) => m.sender_id === me && m.body === msg.body && m.status !== 'sent')
+            if (idx >= 0) {
+              const next = [...prev]
+              next[idx] = { ...msg, status: 'sent' }
+              return next
+            }
+            return [...prev, { ...msg, status: 'sent' }]
+          })
         }
         setThreads((prev) =>
           prev.map((t) =>
@@ -135,21 +147,11 @@ export default function Chat() {
     return t.member_a === me ? t.member_b : t.member_a
   }
 
-  const nameOf = (id) => {
-    if (id === me) return myName
-    const t = threads.find((x) => otherMember(x) === id)
-    return t?.other_name || t?.other_email || id?.slice(0, 8) || 'User'
-  }
-
-  // Peek at the people picker for display names
+  // Resolve a member id from the loaded directory (populated on mount).
   const personName = (id) => {
+    if (id === me) return myName
     const p = people.find((x) => x.id === id)
     return p?.full_name || p?.email || id?.slice(0, 8) || 'User'
-  }
-
-  const about = (t) => {
-    if (!t) return ''
-    return t.member_a === me ? (t.member_b_name || t.member_b_email || t.member_b?.slice(0, 8)) : (t.member_a_name || t.member_a_email || t.member_a?.slice(0, 8))
   }
 
   const openNewChat = async (personId) => {

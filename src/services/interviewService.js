@@ -123,7 +123,8 @@ export async function scheduleInterviewWithMeeting({
     steps.interview = interview
     logAction({ action: 'INTERVIEW_SCHEDULED', entityType: 'Interview', entityId: interview.id, details: `Interview scheduled for ${interviewData.candidate_name}` })
   } catch (e) {
-    return { steps, error: e?.message || 'Failed to create interview' }
+    errors.push(e?.message || 'Failed to create interview')
+    return { steps, errors }
   }
 
   // Step 2: Create meeting if virtual with Google Meet or Zoom

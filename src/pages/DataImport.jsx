@@ -327,7 +327,10 @@ export default function DataImport() {
                     <div className="flex justify-end gap-2">
                       <button onClick={() => viewJob(j)} className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-slate-300 text-slate-600 text-xs hover:bg-slate-100">{selectedJob?.id === j.id ? 'Hide' : 'Details'}</button>
                       {j.error_rows > 0 && (
-                        <button onClick={() => downloadErrorReport(j, selectedJob?.id === j.id ? selectedRecords : [])} className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-slate-300 text-slate-600 text-xs hover:bg-slate-100">
+                        <button onClick={async () => {
+                          const records = selectedJob?.id === j.id ? selectedRecords : await importService.listRecords(j.id).catch(() => [])
+                          downloadErrorReport(j, records)
+                        }} className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-slate-300 text-slate-600 text-xs hover:bg-slate-100">
                           <Download className="w-3.5 h-3.5" /> Errors
                         </button>
                       )}

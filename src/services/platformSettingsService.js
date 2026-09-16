@@ -30,11 +30,21 @@ export const platformSettingsService = {
   async getAuditTrail(limit = 50) {
     const { data, error } = await supabase
       .from('hr_settings_audit')
-      .select('*, profiles!changed_by(full_name)')
+      .select('*')
       .order('changed_at', { ascending: false })
       .limit(limit)
     if (error) throw error
-    return data || []
+    const rows = data || []
+    // hr_settings_audit.changed_by references auth.users, not profiles, so the
+    // actor name is resolved with a second lookup rather than an embed.
+    const ids = [...new Set(rows.map((r) => r.changed_by).filter(Boolean))]
+    if (ids.length === 0) return rows
+    const { data: profs } = await supabase
+      .from('profiles')
+      .select('id, full_name, email')
+      .in('id', ids)
+    const byId = new Map((profs || []).map((p) => [p.id, p]))
+    return rows.map((r) => ({ ...r, profiles: byId.get(r.changed_by) || null }))
   },
 }
 

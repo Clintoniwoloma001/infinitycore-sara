@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2 } from 'lucide-react'
-import { attendanceService } from '../services/attendanceService'
+import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon } from 'lucide-react'
+import { attendanceService, platformDateKey } from '../services/attendanceService'
+import { workManagementService } from '../services/workManagementService'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import SaraBriefing from '../components/attendance/SaraBriefing'
 import TrendChart from '../components/attendance/TrendChart'
@@ -103,7 +104,7 @@ function RecordsTab({ setNotice }) {
 
   // KPIs
   const kpis = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10)
+    const today = platformDateKey()
     const todayRows = rows.filter((r) => String(r.attendance_date) === today)
     const totalEmps = employees.length
     const present = todayRows.filter((r) => r.clock_in).length
@@ -119,13 +120,12 @@ function RecordsTab({ setNotice }) {
   const trendData = useMemo(() => {
     const last7 = []
     for (let i = 6; i >= 0; i--) {
-      const d = new Date()
-      d.setDate(d.getDate() - i)
-      const ds = d.toISOString().slice(0, 10)
+      const ds = platformDateKey(new Date(Date.now() - i * 86400000))
+      const [y, m, dd] = ds.split('-').map(Number)
       const dayRows = rows.filter((r) => String(r.attendance_date) === ds)
       const present = dayRows.filter((r) => r.clock_in).length
       last7.push({
-        label: d.toLocaleDateString('en-US', { weekday: 'short' }).charAt(0),
+        label: new Date(Date.UTC(y, m - 1, dd)).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }).charAt(0),
         value: present,
         color: '#009944',
       })
@@ -163,17 +163,6 @@ function RecordsTab({ setNotice }) {
     } finally {
       setBusy(false)
     }
-  }
-
-  const today = new Date().toISOString().slice(0, 10)
-  const todayRecords = rows.filter((r) => String(r.attendance_date) === today)
-  const summary = {
-    present: todayRecords.filter((r) => r.status === 'present' || (r.clock_in && !r.clock_out)).length,
-    late: todayRecords.filter((r) => r.status === 'late').length,
-    absent: todayRecords.filter((r) => r.status === 'absent').length,
-    onLeave: todayRecords.filter((r) => r.status === 'on_leave').length,
-    notClockedIn: 0, // Would need total employee count
-    total: todayRecords.length,
   }
 
   return (
@@ -371,5 +360,306 @@ function StatusPill({ status }) {
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border capitalize ${styles[status] || styles.incomplete}`}>
       {status.replace(/_/g, ' ')}
     </span>
+  )
+}
+
+function ReviewPill({ status, positive }) {
+  const tone = positive.includes(status)
+    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+    : status === 'rejected'
+      ? 'bg-rose-50 text-rose-700 border-rose-200'
+      : 'bg-amber-50 text-amber-700 border-amber-200'
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border capitalize ${tone}`}>{(status || 'pending').replace(/_/g, ' ')}</span>
+}
+
+// ============================================================
+// EXCEPTIONS TAB — late-arrival reasons awaiting review
+// ============================================================
+function ExceptionsTab({ setNotice }) {
+  const [exceptions, setExceptions] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      setExceptions(await attendanceService.listAllExceptions())
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Failed to load exceptions' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const review = async (id, status, comment) => {
+    setBusy(true)
+    try {
+      await attendanceService.reviewException(id, { status, comment })
+      setNotice({ kind: 'ok', text: `Exception ${status}.` })
+      await load()
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Review failed' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (loading) return <LoadingState label="Loading exceptions..." />
+
+  return (
+    <div className="max-w-4xl">
+      <p className="text-sm text-slate-500 mb-4">Late arrival reasons submitted by employees. Review and accept or reject each exception.</p>
+      {exceptions.length === 0 ? (
+        <EmptyState title="No attendance exceptions" description="Late arrival reasons will appear here when submitted." />
+      ) : (
+        <div className="space-y-3">
+          {exceptions.map((e) => (
+            <div key={e.id} className="bg-white rounded-xl border border-slate-200 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Clock3 className="w-4 h-4 text-amber-500" />
+                    <h4 className="font-medium text-slate-900">{e.employees?.full_name || 'Unknown'}</h4>
+                    <ReviewPill status={e.status} positive={['accepted']} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mt-2 text-xs text-slate-500">
+                    <div>Expected: <span className="font-medium text-slate-700">{e.expected_time || '—'}</span></div>
+                    <div>Actual: <span className="font-medium text-amber-700">{e.actual_time || '—'}</span></div>
+                    <div>Reason: <span className="font-medium text-slate-700 capitalize">{e.reason?.replace(/_/g, ' ') || '—'}</span></div>
+                    <div>Date: <span className="font-medium text-slate-700">{e.created_at ? new Date(e.created_at).toLocaleDateString() : '—'}</span></div>
+                  </div>
+                  {e.custom_explanation && <p className="text-sm text-slate-600 mt-2 italic">"{e.custom_explanation}"</p>}
+                  {e.review_comment && <p className="text-xs text-slate-400 mt-1">Review: {e.review_comment}</p>}
+                </div>
+                {e.status === 'pending' && (
+                  <div className="flex gap-1.5 shrink-0">
+                    <button onClick={() => review(e.id, 'accepted', '')} disabled={busy} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 disabled:opacity-50"><Check className="w-3.5 h-3.5" /> Accept</button>
+                    <button onClick={() => review(e.id, 'rejected', 'Not accepted')} disabled={busy} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-rose-50 text-rose-700 text-xs font-medium hover:bg-rose-100 disabled:opacity-50"><Ban className="w-3.5 h-3.5" /> Reject</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+// ISSUES TAB — employee-reported attendance issues
+// ============================================================
+function IssuesTab({ setNotice }) {
+  const [issues, setIssues] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      setIssues(await attendanceService.listAllIssues())
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Failed to load issues' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const review = async (id, status, comment) => {
+    setBusy(true)
+    try {
+      await attendanceService.reviewIssue(id, { status, comment })
+      setNotice({ kind: 'ok', text: `Issue ${status}.` })
+      await load()
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Review failed' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (loading) return <LoadingState label="Loading issues..." />
+
+  return (
+    <div className="max-w-4xl">
+      <p className="text-sm text-slate-500 mb-4">Attendance issues reported by employees (forgot clock-in, incorrect time, etc.). Review and approve or reject each issue.</p>
+      {issues.length === 0 ? (
+        <EmptyState title="No attendance issues" description="Employee-reported issues will appear here." />
+      ) : (
+        <div className="space-y-3">
+          {issues.map((i) => (
+            <div key={i.id} className="bg-white rounded-xl border border-slate-200 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-500" />
+                    <h4 className="font-medium text-slate-900">{i.employees?.full_name || 'Unknown'}</h4>
+                    <ReviewPill status={i.status} positive={['approved', 'resolved']} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mt-2 text-xs text-slate-500">
+                    <div>Issue: <span className="font-medium text-slate-700 capitalize">{i.issue_type?.replace(/_/g, ' ') || '—'}</span></div>
+                    <div>Date: <span className="font-medium text-slate-700">{i.issue_date ? new Date(i.issue_date).toLocaleDateString() : '—'}</span></div>
+                  </div>
+                  {i.explanation && <p className="text-sm text-slate-600 mt-2 italic">"{i.explanation}"</p>}
+                  {i.review_comment && <p className="text-xs text-slate-400 mt-1">Review: {i.review_comment}</p>}
+                </div>
+                {i.status === 'pending' && (
+                  <div className="flex gap-1.5 shrink-0">
+                    <button onClick={() => review(i.id, 'approved', '')} disabled={busy} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 disabled:opacity-50"><Check className="w-3.5 h-3.5" /> Approve</button>
+                    <button onClick={() => review(i.id, 'rejected', 'Rejected')} disabled={busy} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-rose-50 text-rose-700 text-xs font-medium hover:bg-rose-100 disabled:opacity-50"><Ban className="w-3.5 h-3.5" /> Reject</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+// CONFIG TAB — attendance schedule & policy configuration
+// ============================================================
+function ConfigTab({ setNotice }) {
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [form, setForm] = useState({})
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const cfg = await workManagementService.getAttendanceConfig()
+      if (cfg) {
+        setForm({
+          expected_start_time: cfg.expected_start_time || '08:00',
+          expected_end_time: cfg.expected_end_time || '17:00',
+          grace_period_minutes: cfg.grace_period_minutes ?? 15,
+          late_threshold_time: cfg.late_threshold_time || '08:16',
+          early_departure_threshold_minutes: cfg.early_departure_threshold_minutes ?? 0,
+          overtime_threshold_hours: cfg.overtime_threshold_hours ?? 0,
+          break_allowed: cfg.break_allowed ?? false,
+          break_duration_minutes: cfg.break_duration_minutes ?? 0,
+          geofence_enabled: cfg.geofence_enabled ?? false,
+          manual_correction_requires_reason: cfg.manual_correction_requires_reason ?? true,
+          working_days: cfg.working_days || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+        })
+      }
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Failed to load configuration' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const save = async () => {
+    setBusy(true)
+    try {
+      await workManagementService.updateAttendanceConfig(form)
+      setNotice({ kind: 'ok', text: 'Attendance configuration updated.' })
+      await load()
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Update failed' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (loading) return <LoadingState label="Loading configuration..." />
+
+  const ALL_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+
+  return (
+    <div className="max-w-2xl">
+      <p className="text-sm text-slate-500 mb-4">Configure the expected work schedule. These values determine late detection and attendance status — nothing here is hard-coded.</p>
+      <div className="bg-white rounded-xl border border-slate-200 p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <SettingsIcon className="w-5 h-5 text-slate-400" />
+          <h3 className="font-semibold text-slate-900">Attendance Configuration</h3>
+        </div>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Expected Start Time</label>
+              <input type="time" className={inputCls} value={form.expected_start_time || ''} onChange={(e) => setForm({ ...form, expected_start_time: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>Expected End Time</label>
+              <input type="time" className={inputCls} value={form.expected_end_time || ''} onChange={(e) => setForm({ ...form, expected_end_time: e.target.value })} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Grace Period (minutes)</label>
+              <input type="number" min="0" className={inputCls} value={form.grace_period_minutes ?? ''} onChange={(e) => setForm({ ...form, grace_period_minutes: Number(e.target.value) })} />
+            </div>
+            <div>
+              <label className={labelCls}>Late Threshold Time</label>
+              <input type="time" className={inputCls} value={form.late_threshold_time || ''} onChange={(e) => setForm({ ...form, late_threshold_time: e.target.value })} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Early Departure Threshold (minutes)</label>
+              <input type="number" min="0" className={inputCls} value={form.early_departure_threshold_minutes ?? ''} onChange={(e) => setForm({ ...form, early_departure_threshold_minutes: Number(e.target.value) })} />
+            </div>
+            <div>
+              <label className={labelCls}>Overtime Threshold (hours)</label>
+              <input type="number" min="0" step="0.5" className={inputCls} value={form.overtime_threshold_hours ?? ''} onChange={(e) => setForm({ ...form, overtime_threshold_hours: Number(e.target.value) })} />
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>Working Days</label>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {ALL_DAYS.map((d) => {
+                const active = (form.working_days || []).includes(d)
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => {
+                      const days = active ? (form.working_days || []).filter((w) => w !== d) : [...(form.working_days || []), d]
+                      setForm({ ...form, working_days: days })
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition ${active ? 'bg-[#009944] text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                  >
+                    {d}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <div className="space-y-2 pt-1">
+            {[
+              { key: 'geofence_enabled', label: 'Require geofence for clock in/out' },
+              { key: 'break_allowed', label: 'Allow breaks during shift' },
+              { key: 'manual_correction_requires_reason', label: 'Require reason for manual corrections' },
+            ].map(({ key, label }) => (
+              <label key={key} className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={!!form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.checked })} className="rounded border-slate-300 text-[#009944] focus:ring-[#009944]" />
+                {label}
+              </label>
+            ))}
+            {form.break_allowed && (
+              <div>
+                <label className={labelCls}>Break Duration (minutes)</label>
+                <input type="number" min="0" className={inputCls} value={form.break_duration_minutes ?? ''} onChange={(e) => setForm({ ...form, break_duration_minutes: Number(e.target.value) })} />
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end pt-2">
+            <button onClick={save} disabled={busy} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Save Configuration
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }

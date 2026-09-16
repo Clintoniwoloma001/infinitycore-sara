@@ -443,13 +443,14 @@ export const bankoneImportService = {
   },
 
   // ---- Import Batches ----
-  async createBatch({ filename, sourceFormat, reportingPeriod, mappingConfig, uploadedByName, uploadedById }) {
+  async createBatch({ filename, sourceFormat, reportingPeriod, operationType, mappingConfig, uploadedByName, uploadedById }) {
     const { data, error } = await supabase
       .from('bankone_import_batches')
       .insert({
         filename,
         source_format: sourceFormat || 'csv',
         reporting_period: reportingPeriod || null,
+        operation_type: operationType || 'generic',
         mapping_config: mappingConfig,
         uploaded_by_name: uploadedByName,
         uploaded_by: uploadedById,

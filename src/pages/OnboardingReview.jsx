@@ -127,21 +127,32 @@ export default function OnboardingReview() {
         setCorrections(corrs)
       } catch { setCorrections([]) }
 
-      // Fetch events
-      if (verif) {
+      // Fetch events. onboarding_events links to a submission through its
+      // onboarding link (submission.link_id -> onboarding_events.onboarding_link_id)
+      // and optionally to the guarantor verification.
+      if (verif?.id && sub?.link_id) {
         const { data: evts } = await supabase
           .from('onboarding_events')
           .select('*')
-          .or(`guarantor_verification_id.eq.${verif.id},submission_id.eq.${id}`)
+          .or(`guarantor_verification_id.eq.${verif.id},onboarding_link_id.eq.${sub.link_id}`)
+          .order('created_at', { ascending: false })
+        setEvents(evts || [])
+      } else if (sub?.link_id) {
+        const { data: evts } = await supabase
+          .from('onboarding_events')
+          .select('*')
+          .eq('onboarding_link_id', sub.link_id)
+          .order('created_at', { ascending: false })
+        setEvents(evts || [])
+      } else if (verif?.id) {
+        const { data: evts } = await supabase
+          .from('onboarding_events')
+          .select('*')
+          .eq('guarantor_verification_id', verif.id)
           .order('created_at', { ascending: false })
         setEvents(evts || [])
       } else {
-        const { data: evts } = await supabase
-          .from('onboarding_events')
-          .select('*')
-          .eq('submission_id', id)
-          .order('created_at', { ascending: false })
-        setEvents(evts || [])
+        setEvents([])
       }
 
       // Fetch child records (education, work history, guarantors, bonds)

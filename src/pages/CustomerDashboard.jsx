@@ -25,12 +25,28 @@ export default function CustomerDashboard() {
       if (!user?.id) return
 
       try {
-        // Get customer record created by this user (or linked by customer_id)
-        const { data: cust } = await supabase
-          .from('customers')
-          .select('*')
-          .eq('created_by', user.id)
-          .single()
+        // Match the signed-in user to their customer record. Customers are
+        // created by staff (created_by), so an email match is the reliable
+        // link; fall back to created_by only when no email match exists.
+        let cust = null
+        if (user?.email) {
+          const { data } = await supabase
+            .from('customers')
+            .select('*')
+            .ilike('email', user.email)
+            .limit(1)
+            .maybeSingle()
+          cust = data
+        }
+        if (!cust) {
+          const { data } = await supabase
+            .from('customers')
+            .select('*')
+            .eq('created_by', user.id)
+            .limit(1)
+            .maybeSingle()
+          cust = data
+        }
 
         if (cust) {
           setCustomer(cust)
@@ -108,11 +124,12 @@ export default function CustomerDashboard() {
         <p className="text-slate-500 mt-2">Your Infinity Bank Digital Account</p>
       </div>
 
-      {/* Account Balance Card */}
+      {/* Account Card — no balance column exists in the data model, so
+          this shows the account identity rather than a fabricated figure. */}
       <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl p-8 text-white mb-8 shadow-lg">
-        <p className="text-sm opacity-90 mb-2">Available Balance</p>
-        <h3 className="text-4xl font-bold mb-2">₦{formatCurrency(customer.account_balance || 0)}</h3>
-        <p className="text-xs opacity-75">Account No: {customer.account_number || 'N/A'}</p>
+        <p className="text-sm opacity-90 mb-2">Account Number</p>
+        <h3 className="text-4xl font-bold mb-2 tracking-wide">{customer.account_number || 'Not assigned'}</h3>
+        <p className="text-xs opacity-75 capitalize">Account status: {customer.status || 'pending'}</p>
       </div>
 
       {/* Quick Stats */}

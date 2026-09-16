@@ -3,6 +3,7 @@ import { useAuth } from '../hooks/useAuth'
 import { workTaskService } from '../services/workTaskService'
 import { targetService } from '../services/targetService'
 import { kpiService } from '../services/kpiService'
+import { attendanceService } from '../services/attendanceService'
 import { LoadingState, EmptyState } from '../components/PageStates'
 import { formatDate } from '../lib/utils'
 import { AlertCircle, CheckCircle2, Clock, Loader2, Upload, X, FileText, Zap } from 'lucide-react'
@@ -74,19 +75,18 @@ export default function MyWork() {
     if (!user?.id) return
     setLoading(true)
     try {
+      // Resolve this user's own employee record so targets/KPIs are scoped
+      // to the employee, never the whole organisation.
+      const emp = await attendanceService.getMyEmployee().catch(() => null)
+      const empId = emp?.id || null
       const [taskList, targetList, kpiList, statData] = await Promise.all([
         workTaskService.list({ assignedTo: user.id }).catch(() => []),
-        targetService.list({ employeeId: null }).catch(() => []),
-        kpiService.list({ employeeId: null }).catch(() => []),
+        empId ? targetService.list({ employeeId: empId }).catch(() => []) : Promise.resolve([]),
+        empId ? kpiService.list({ employeeId: empId }).catch(() => []) : Promise.resolve([]),
         workTaskService.getEmployeeStats(user.id).catch(() => ({})),
       ])
       setTasks(taskList)
-      // Filter targets and KPIs for this user's employee record
-      const myTargets = targetList.filter((t) => {
-        // If the target has no employee_id, or the employee's user_id matches
-        return true // RLS handles filtering
-      })
-      setTargets(myTargets)
+      setTargets(targetList)
       setKpis(kpiList)
       setStats(statData)
     } finally {

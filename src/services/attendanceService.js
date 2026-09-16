@@ -59,6 +59,15 @@ function timeZoneDateKey(date, timeZone) {
 }
 
 /**
+ * Returns a YYYY-MM-DD date key for a moment as observed in the platform
+ * timezone. Use this instead of `new Date().toISOString().slice(0, 10)`
+ * for attendance so "today" always matches the server's day boundary.
+ */
+export function platformDateKey(date = new Date(), timeZone = DEFAULT_ATTENDANCE_TIMEZONE) {
+  return timeZoneDateKey(date, timeZone)
+}
+
+/**
  * Canonical attendance interpretation. Server-stored values win when
  * present (late_minutes / early_departure_minutes / status), otherwise
  * the state is derived from the record times against the DB schedule.
@@ -429,6 +438,63 @@ export const attendanceService = {
       .single()
     if (error) throw error
     logAction({ action: 'ATTENDANCE_ISSUE_SUBMIT', entityType: 'AttendanceIssue', entityId: data.id, details: `${issueType} reported by ${employeeId}` })
+    return data
+  },
+
+  // ---- HR review queues (RLS restricts review to HR/management roles) ----
+  async listAllExceptions() {
+    const { data, error } = await supabase
+      .from('attendance_exceptions')
+      .select('*, employees(full_name, staff_id)')
+      .order('created_at', { ascending: false })
+      .limit(500)
+    if (error) throw error
+    return data || []
+  },
+
+  async reviewException(id, { status, comment } = {}) {
+    const { data: authData } = await supabase.auth.getUser()
+    const { data, error } = await supabase
+      .from('attendance_exceptions')
+      .update({
+        status,
+        review_comment: comment || null,
+        reviewed_by: authData?.user?.id || null,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    logAction({ action: 'ATTENDANCE_EXCEPTION_REVIEW', entityType: 'AttendanceException', entityId: id, details: `Exception ${status}` })
+    return data
+  },
+
+  async listAllIssues() {
+    const { data, error } = await supabase
+      .from('attendance_issues')
+      .select('*, employees(full_name, staff_id)')
+      .order('created_at', { ascending: false })
+      .limit(500)
+    if (error) throw error
+    return data || []
+  },
+
+  async reviewIssue(id, { status, comment } = {}) {
+    const { data: authData } = await supabase.auth.getUser()
+    const { data, error } = await supabase
+      .from('attendance_issues')
+      .update({
+        status,
+        review_comment: comment || null,
+        reviewed_by: authData?.user?.id || null,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    logAction({ action: 'ATTENDANCE_ISSUE_REVIEW', entityType: 'AttendanceIssue', entityId: id, details: `Issue ${status}` })
     return data
   },
 }

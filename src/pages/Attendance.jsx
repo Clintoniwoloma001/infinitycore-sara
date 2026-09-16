@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { Calendar, TrendingUp, Clock, Clock3, CheckCircle2, AlertTriangle, AlertCircle, XCircle, Activity, X, Loader2, Send } from 'lucide-react'
-import { attendanceService } from '../services/attendanceService'
+import { attendanceService, platformDateKey } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState } from '../components/PageStates'
@@ -16,29 +16,44 @@ const FILTERS = [
   { key: 'quarter', label: 'Quarter' },
 ]
 
+// Date-range math on YYYY-MM-DD keys (pure UTC arithmetic) so period
+// boundaries stay correct regardless of the browser's timezone.
+function keyParts(key) {
+  const [y, m, d] = key.split('-').map(Number)
+  return { y, m, d }
+}
+
+function addDays(key, delta) {
+  const { y, m, d } = keyParts(key)
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10)
+}
+
+function monthKey(key, deltaMonths, day) {
+  const { y, m } = keyParts(key)
+  const dt = new Date(Date.UTC(y, m - 1 + deltaMonths, day))
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
+}
+
 function dateRange(filter) {
-  const now = new Date()
-  const today = now.toISOString().slice(0, 10)
+  const today = platformDateKey()
   switch (filter) {
     case 'today':
       return { start: today, end: today }
     case 'week': {
-      const day = now.getDay() || 7
-      const monday = new Date(now)
-      monday.setDate(now.getDate() - day + 1)
-      const sunday = new Date(monday)
-      sunday.setDate(monday.getDate() + 6)
-      return { start: monday.toISOString().slice(0, 10), end: sunday.toISOString().slice(0, 10) }
+      const { y, m, d } = keyParts(today)
+      const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay() || 7
+      const monday = addDays(today, -(dow - 1))
+      return { start: monday, end: addDays(monday, 6) }
     }
     case 'month':
-      return { start: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10), end: new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10) }
-    case 'prev_month': {
-      const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-      return { start: prev.toISOString().slice(0, 10), end: new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10) }
-    }
+      return { start: monthKey(today, 0, 1), end: monthKey(today, 1, 0) }
+    case 'prev_month':
+      return { start: monthKey(today, -1, 1), end: monthKey(today, 0, 0) }
     case 'quarter': {
-      const q = Math.floor(now.getMonth() / 3)
-      return { start: new Date(now.getFullYear(), q * 3, 1).toISOString().slice(0, 10), end: new Date(now.getFullYear(), q * 3 + 3, 0).toISOString().slice(0, 10) }
+      const { y, m } = keyParts(today)
+      const qStart = Math.floor((m - 1) / 3) * 3 + 1
+      const first = `${y}-${String(qStart).padStart(2, '0')}-01`
+      return { start: first, end: monthKey(first, 2, 0) }
     }
     default:
       return { start: today, end: today }
@@ -93,7 +108,7 @@ export default function Attendance() {
         const today = await attendanceService.getToday(emp.id)
         setRecord(today)
         const range = dateRange(filter)
-        const hist = await attendanceService.getHistory(emp.id, range)
+        const hist = await attendanceService.getHistory(emp.id, { startDate: range.start, endDate: range.end })
         setHistory(hist)
       }
       try {
@@ -477,7 +492,7 @@ function StatusPill({ status }) {
 // ============================================================
 function IssueModal({ onSubmit, onClose, busy }) {
   const [issueType, setIssueType] = useState('')
-  const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10))
+  const [issueDate, setIssueDate] = useState(platformDateKey())
   const [explanation, setExplanation] = useState('')
 
   return (

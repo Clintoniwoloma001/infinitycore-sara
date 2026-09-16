@@ -173,6 +173,7 @@ export default function BankOneImportCenter() {
         filename: file?.name || 'unknown.csv',
         sourceFormat: file?.name?.toLowerCase().endsWith('.json') ? 'json' : 'csv',
         reportingPeriod,
+        operationType: selectedOp?.value,
         mappingConfig: mapping,
         uploadedByName: profile?.full_name || user?.email,
         uploadedById: user?.id,
