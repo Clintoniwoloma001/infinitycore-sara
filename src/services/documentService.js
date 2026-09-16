@@ -50,6 +50,59 @@ export const documentService = {
   },
 
   /**
+   * Upload a platform profile picture for an employee. Stored under the
+   * dedicated `profile-photo/<employeeId>/...` path (separate from the
+   * onboarding passport) so the Staff ID card photo is never affected.
+   */
+  async uploadProfilePicture(file, employeeId) {
+    const maxSizeMB = 8
+    const maxSizeBytes = maxSizeMB * 1024 * 1024
+    if (file.size > maxSizeBytes) {
+      throw new Error(`Image size exceeds ${maxSizeMB}MB limit`)
+    }
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase()
+    const fileName = `profile-photo/${employeeId}/${Date.now()}-photo.${ext}`
+
+    const { data: storageData, error: uploadError } = await supabase.storage
+      .from('documents')
+      .upload(fileName, file, { upsert: false, contentType: file.type })
+
+    if (uploadError) throw uploadError
+
+    const { user } = await supabase.auth.getUser()
+    const { data: doc, error: dbError } = await supabase
+      .from('documents')
+      .insert([
+        {
+          entity_type: 'employee',
+          entity_id: employeeId,
+          document_type: 'profile_picture',
+          file_name: 'profile-photo.' + ext,
+          file_path: fileName,
+          file_size: file.size,
+          mime_type: file.type,
+          uploaded_by: user.id,
+          verification_status: 'verified',
+        },
+      ])
+      .select()
+      .single()
+
+    if (dbError) throw dbError
+
+    // Remove any previous profile picture so there is exactly ONE active.
+    const previous = await this.list('employee', employeeId)
+    const old = previous.filter((d) => d.document_type === 'profile_picture' && d.id !== doc.id)
+    for (const o of old) {
+      if (o.file_path) {
+        await supabase.storage.from('documents').remove([o.file_path]).catch(() => {})
+      }
+      await supabase.from('documents').delete().eq('id', o.id).catch(() => {})
+    }
+    return doc
+  },
+
+  /**
    * List documents for an entity
    */
   async list(entityType, entityId) {

@@ -691,6 +691,18 @@ export default function OnboardingReviewCenter({ submission, onClose, onRefresh 
         </div>
       )}
 
+      {/* ---- Sticky action bar (completed) ---- */}
+      {canManage && onboardingStatus === 'completed' && !loading && (
+        <div className="bg-white border-t border-slate-200 px-4 sm:px-6 py-3 flex items-center justify-end gap-2 flex-shrink-0">
+          <button
+            onClick={() => setAction('payroll')}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700"
+          >
+            <Briefcase className="w-4 h-4" /> Add to Payroll
+          </button>
+        </div>
+      )}
+
       {/* ---- Approval confirmation ---- */}
       {action === 'approve' && (
         <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">

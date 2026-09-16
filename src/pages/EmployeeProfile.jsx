@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Briefcase, CalendarDays, CheckCircle2, Clock, CreditCard, Download, FileText, GraduationCap, Loader2, Pencil, Plus, Printer, RefreshCw, Save, ShieldCheck, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Briefcase, CalendarDays, Camera, CheckCircle2, Clock, CreditCard, Download, FileText, GraduationCap, Loader2, Pencil, Plus, Printer, RefreshCw, Save, ShieldCheck, Trash2, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import { date, money, status } from './hrShared'
@@ -12,6 +12,7 @@ import { payrollService } from '../services/payrollService'
 import { supabase } from '../supabaseClient'
 import EmployeeHRActions from '../components/EmployeeHRActions'
 import StaffIdCard from '../components/StaffIdCard'
+import ProfilePhotoModal from '../components/ProfilePhotoModal'
 import EmployeeRecordPrint, { RECORD_SECTIONS, ALL_RECORD_SECTIONS } from '../components/EmployeeRecordPrint'
 import PrintPortal from '../components/PrintPortal'
 
@@ -147,7 +148,9 @@ export default function EmployeeProfile() {
 
   const [showCard, setShowCard] = useState(false)
   const [showRecord, setShowRecord] = useState(false)
+  const [showPhotos, setShowPhotos] = useState(false)
   const [photoUrl, setPhotoUrl] = useState(null)
+  const [passportUrl, setPassportUrl] = useState(null)
   const [recordBusy, setRecordBusy] = useState(false)
   const [recordError, setRecordError] = useState('')
 
@@ -179,7 +182,17 @@ export default function EmployeeProfile() {
       const passportDoc = docList.find((d) => /passport/i.test(d.document_type))
       if (passportDoc?.file_path) {
         const url = await documentService.getSignedUrl(passportDoc.file_path).catch(() => null)
+        if (url) setPassportUrl(url)
+      }
+      const profPicDoc = docList.find((d) => d.document_type === 'profile_picture')
+      if (profPicDoc?.file_path) {
+        const url = await documentService.getSignedUrl(profPicDoc.file_path).catch(() => null)
         if (url) setPhotoUrl(url)
+      } else if (passportDoc?.file_path) {
+        const url = await documentService.getSignedUrl(passportDoc.file_path).catch(() => null)
+        if (url) setPhotoUrl(url)
+      } else {
+        setPhotoUrl(null)
       }
       const att = await attendanceService.getHistory(id, { limit: 90 }).catch(() => [])
       setAttendance(att)
@@ -460,6 +473,10 @@ export default function EmployeeProfile() {
             <button onClick={openCard} disabled={recordBusy}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-[#009944] text-[#009944] text-sm font-medium hover:bg-emerald-50 disabled:opacity-60 whitespace-nowrap">
               {recordBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />} Staff ID Card
+            </button>
+            <button onClick={() => setShowPhotos(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-50 whitespace-nowrap">
+              <Camera className="w-4 h-4" /> Photos
             </button>
             <button onClick={openRecord}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 whitespace-nowrap">
@@ -1041,6 +1058,32 @@ export default function EmployeeProfile() {
         </div>
       )}
 
+      {/* ---- Photos Modal ---- */}
+      {showPhotos && (
+        <ProfilePhotoModal
+          employee={employee}
+          photoUrl={passportUrl}
+          onClose={() => setShowPhotos(false)}
+          onSaved={async () => {
+            const docList = await documentService.list('employee', id).catch(() => [])
+            setDocs(docList)
+            const passportDoc = docList.find((d) => /passport/i.test(d.document_type))
+            if (passportDoc?.file_path) {
+              const url = await documentService.getSignedUrl(passportDoc.file_path).catch(() => null)
+              if (url) setPassportUrl(url)
+            }
+            const profPicDoc = docList.find((d) => d.document_type === 'profile_picture')
+            if (profPicDoc?.file_path) {
+              const url = await documentService.getSignedUrl(profPicDoc.file_path).catch(() => null)
+              if (url) setPhotoUrl(url)
+            } else {
+              setPhotoUrl(passportDoc?.file_path ? passportUrl : null)
+            }
+            load()
+          }}
+        />
+      )}
+
       {/* ---- Staff ID Card Modal ---- */}
       {showCard && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
@@ -1104,7 +1147,7 @@ export default function EmployeeProfile() {
             <div className="bg-white rounded-xl p-5 flex justify-center">
               <StaffIdCard
                 employee={employee}
-                photoUrl={photoUrl}
+                photoUrl={passportUrl}
                 expiryMode={cardExpiryMode}
                 expiryDate={cardExpiryDate}
                 issueDate={cardIssueDate}
@@ -1116,7 +1159,7 @@ export default function EmployeeProfile() {
             <PrintPortal className="print-idcard">
               <StaffIdCard
                 employee={employee}
-                photoUrl={photoUrl}
+                photoUrl={passportUrl}
                 expiryMode={cardExpiryMode}
                 expiryDate={cardExpiryDate}
                 issueDate={cardIssueDate}

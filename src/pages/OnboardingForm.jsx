@@ -31,6 +31,15 @@ const STEPS = [
   { id: 10, title: 'Documents & Signature', short: 'Sign' },
 ]
 
+const UPLOAD_SLOTS = [
+  { key: 'passport', label: 'Passport Photograph', required: true, max: 1 },
+  { key: 'utility_bill', label: 'Utility Bill', required: false, max: 1 },
+  { key: 'nin', label: 'National ID (NIN)', required: false, max: 1 },
+  { key: 'degree_certificate', label: 'Degree Certificate', required: false, max: 1 },
+  { key: 'birth_certificate', label: 'Birth Certificate', required: false, max: 1 },
+  { key: 'other_certification', label: 'Other Certifications', required: false, max: 5 },
+]
+
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 
@@ -158,13 +167,13 @@ export default function OnboardingForm() {
     }
   }, [step, status, token])
 
-  const addDoc = async (files) => {
+  const addDoc = async (files, category = 'onboarding') => {
     setFileError('')
     for (const file of Array.from(files || [])) {
       if (file.size > 10 * 1024 * 1024) { setFileError('One of the selected files exceeds the 10MB limit.'); continue }
       try {
-        const meta = await onboardingService.uploadDocument({ token, file, category: 'onboarding' })
-        setDocuments((d) => [...d, { ...meta, label: file.name }])
+        const meta = await onboardingService.uploadDocument({ token, file, category })
+        setDocuments((d) => [...d, { ...meta, label: file.name, category }])
       } catch (e) {
         setFileError(e?.message || 'Upload failed — try again.')
       }
@@ -175,6 +184,8 @@ export default function OnboardingForm() {
     setErrorMsg('')
     if (!declaration) { setErrorMsg('Please accept the declaration before submitting.'); return }
     if (!signature) { setErrorMsg('Please sign before submitting.'); return }
+    const hasPassport = documents.some((d) => d.category === 'passport')
+    if (!hasPassport) { setErrorMsg('Please upload your passport photograph before submitting — it is used to create your staff ID card.'); return }
     const payload = {
       ...form,
       education,
@@ -340,18 +351,47 @@ export default function OnboardingForm() {
             <FileText className="w-5 h-5 text-[#009944]" />
             <h3 className="text-sm font-semibold text-slate-800">Uploaded documents</h3>
           </div>
-          <input type="file" multiple onChange={(e) => addDoc(e.target.files)} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-[#009944] file:text-white hover:file:bg-[#007a36]" />
+          <p className="text-sm text-slate-500 mb-3">Your passport photograph is required — it is used for your staff ID card. Other documents speed up HR verification.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {UPLOAD_SLOTS.map((slot) => {
+              const slotDocs = documents.filter((d) => d.category === slot.key)
+              return (
+                <div key={slot.key} className={`rounded-lg border p-3 ${slot.required ? 'border-rose-200 bg-rose-50/40' : 'border-slate-200 bg-slate-50'}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className={`text-sm font-medium ${slot.required ? 'text-slate-800' : 'text-slate-700'}`}>
+                      {slot.label} {slot.required && <span className="text-rose-500">*</span>}
+                      {!slot.required && <span className="text-xs text-slate-400 ml-1">({slotDocs.length}/{slot.max})</span>}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => document.getElementById(`doc-${slot.key}`)?.click()}
+                      disabled={slotDocs.length >= slot.max}
+                      className="inline-flex items-center gap-1 text-xs font-medium text-[#009944] hover:underline disabled:opacity-40 disabled:pointer-events-none"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add
+                    </button>
+                  </div>
+                  <input id={`doc-${slot.key}`} type="file" className="hidden" onChange={(e) => addDoc(e.target.files, slot.key)} />
+                  {slotDocs.length === 0 ? (
+                    <p className="text-xs text-slate-400">No file attached</p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {slotDocs.map((d, i) => (
+                        <li key={i} className="flex items-center gap-2 text-xs text-slate-600">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                          <span className="truncate">{d.label}</span>
+                          <button type="button" onClick={() => setDocuments(documents.filter((x) => x !== d))} className="text-rose-500 ml-auto shrink-0 hover:text-rose-700">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )
+            })}
+          </div>
           {fileError && <p className="text-sm text-rose-600 mt-2"><AlertTriangle className="inline w-4 h-4" /> {fileError}</p>}
-          {documents.length > 0 && (
-            <ul className="mt-3 space-y-1.5">
-              {documents.map((d, i) => (
-                <li key={i} className="flex items-center gap-2 text-sm text-slate-600">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-500" /> {d.label}
-                  <button type="button" onClick={() => setDocuments(documents.filter((_, idx) => idx !== i))} className="text-rose-500 ml-auto"><Trash2 className="w-4 h-4" /></button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
           <p className="font-medium text-slate-800 mb-1">Declaration</p>

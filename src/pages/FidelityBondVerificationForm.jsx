@@ -21,6 +21,7 @@ const STEPS = [
 const DOC_TYPES = [
   { key: 'passport', label: 'Passport Photograph', required: true },
   { key: 'id_card', label: 'Valid Means of Identification', required: true },
+  { key: 'nin', label: 'NIN Slip', required: false },
   { key: 'work_id', label: 'Work ID', required: false },
   { key: 'utility_bill', label: 'Utility Bill', required: false },
 ]

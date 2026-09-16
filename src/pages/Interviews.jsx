@@ -59,6 +59,9 @@ export default function Interviews() {
   const [resending, setResending] = useState(false)
   const [feedback, setFeedback] = useState({ rating: 0, text: '' })
   const [submittingFeedback, setSubmittingFeedback] = useState(false)
+  const [showAddCandidate, setShowAddCandidate] = useState(false)
+  const [newCandidate, setNewCandidate] = useState({})
+  const [creatingCandidate, setCreatingCandidate] = useState(false)
 
   useEffect(() => {
     hrService.listCandidates().then(setCandidates).catch(() => {})
@@ -102,6 +105,39 @@ export default function Interviews() {
     const { url, error } = connectZoom(user?.id)
     if (error) { setFormError(error); return }
     if (url) window.open(url, '_blank', 'width=500,height=600')
+  }
+
+  // Create a manual candidate then auto-select it for the interview.
+  const saveNewCandidate = async () => {
+    if (!newCandidate.full_name?.trim()) { setFormError('Please enter the candidate name.'); return }
+    if (!newCandidate.email?.trim()) { setFormError('Please enter the candidate email.'); return }
+    setFormError('')
+    setCreatingCandidate(true)
+    try {
+      const candidate = await hrService.createCandidate({
+        full_name: newCandidate.full_name.trim(),
+        email: newCandidate.email.trim(),
+        phone: newCandidate.phone?.trim() || null,
+        applied_role: newCandidate.position?.trim() || null,
+        application_status: 'new',
+      })
+      setCandidates((prev) => [candidate, ...prev])
+      setForm((f) => ({
+        ...f,
+        candidate_id: candidate.id,
+        candidate_name: candidate.full_name,
+        candidate_email: candidate.email,
+        original_candidate_email: candidate.email,
+        position: candidate.applied_role || f.position || '',
+        email_override: false,
+      }))
+      setNewCandidate({})
+      setShowAddCandidate(false)
+    } catch (e) {
+      setFormError('Candidate creation failed.')
+    } finally {
+      setCreatingCandidate(false)
+    }
   }
 
   const create = async () => {
@@ -237,9 +273,16 @@ export default function Interviews() {
           <p className="text-sm text-slate-500 mt-1">Schedule and track candidate interviews with meeting integration.</p>
         </div>
         {canManage && (
-          <button onClick={() => { setShowCreate(true); setFormError(''); setCreateResult(null); setForm({ interview_type: 'PHYSICAL', platform: 'Google Meet', duration_minutes: 30 }) }} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
-            <CalendarPlus className="w-4 h-4" /> Schedule Interview
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => { setShowCreate(true); setShowAddCandidate(true); setFormError(''); setCreateResult(null); setForm({ interview_type: 'PHYSICAL', platform: 'Google Meet', duration_minutes: 30 }) }}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#FF8C00] text-white text-sm font-bold hover:bg-[#e67e00]">
+              <Plus className="w-4 h-4" /> Add Candidate
+            </button>
+            <button onClick={() => { setShowCreate(true); setShowAddCandidate(false); setFormError(''); setCreateResult(null); setForm({ interview_type: 'PHYSICAL', platform: 'Google Meet', duration_minutes: 30 }) }}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+              <CalendarPlus className="w-4 h-4" /> Schedule Interview
+            </button>
+          </div>
         )}
       </div>
 
@@ -320,13 +363,58 @@ export default function Interviews() {
 
             {!createResult && (
               <div className="space-y-4">
+                {/* Add New Candidate form (visible via the + Add Candidate CTA) */}
+                {showAddCandidate && (
+                  <div className="rounded-lg border-2 border-[#FF8C00]/40 bg-orange-50/60 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="block text-xs font-semibold text-slate-500 uppercase">Add New Candidate</label>
+                      <button onClick={() => setShowAddCandidate(false)} disabled={creatingCandidate} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className={labelCls}>Full Name *</label>
+                        <input className={inputCls} value={newCandidate.full_name || ''} onChange={(e) => setNewCandidate((c) => ({ ...c, full_name: e.target.value }))} placeholder="Candidate full name" disabled={creatingCandidate} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>Email *</label>
+                        <input className={inputCls} type="email" value={newCandidate.email || ''} onChange={(e) => setNewCandidate((c) => ({ ...c, email: e.target.value }))} placeholder="candidate@email.com" disabled={creatingCandidate} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>Phone</label>
+                        <input className={inputCls} value={newCandidate.phone || ''} onChange={(e) => setNewCandidate((c) => ({ ...c, phone: e.target.value }))} placeholder="+234..." disabled={creatingCandidate} />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className={labelCls}>Position / Job</label>
+                        <input className={inputCls} value={newCandidate.position || ''} onChange={(e) => setNewCandidate((c) => ({ ...c, position: e.target.value }))} placeholder="e.g. Loan Officer" disabled={creatingCandidate} />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 mt-3">
+                      <button type="button" onClick={() => setShowAddCandidate(false)} disabled={creatingCandidate} className="px-3 py-2 rounded-lg border border-slate-300 text-xs text-slate-600 hover:bg-white">Cancel</button>
+                      <button type="button" onClick={saveNewCandidate} disabled={creatingCandidate} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#FF8C00] text-white text-xs font-bold hover:bg-[#e67e00] disabled:opacity-60" style={{ minHeight: 40 }}>
+                        {creatingCandidate ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} {creatingCandidate ? 'Creating candidate...' : 'Save Candidate'}
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-2">Candidate will be saved and selected automatically — then finish the interview details below.</p>
+                  </div>
+                )}
+
                 {/* Step 1: Candidate */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 uppercase mb-2">Step 1 — Candidate</label>
-                  <select className={inputCls} value={form.candidate_id || ''} onChange={onCandidateChange} disabled={creating}>
-                    <option value="">Select candidate…</option>
-                    {candidates.map((c) => <option key={c.id} value={c.id}>{c.full_name} — {c.email || 'No email'}</option>)}
-                  </select>
+                  {!showAddCandidate && (
+                    <div className="flex items-center gap-2 mb-2">
+                      <select className={inputCls} value={form.candidate_id || ''} onChange={onCandidateChange} disabled={creating}>
+                        <option value="">Select candidate…</option>
+                        {candidates.map((c) => <option key={c.id} value={c.id}>{c.full_name} — {c.email || 'No email'}</option>)}
+                      </select>
+                      <button type="button" onClick={() => { setShowAddCandidate((v) => !v); setFormError('') }} disabled={creating} className="shrink-0 inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-[#FF8C00] text-[#FF8C00] text-xs font-semibold hover:bg-orange-50" style={{ minHeight: 40 }}>
+                        <Plus className="w-4 h-4" /> New
+                      </button>
+                    </div>
+                  )}
+                  {showAddCandidate && !form.candidate_id && (
+                    <p className="text-xs text-slate-400">Fill in the candidate details above, then save to continue.</p>
+                  )}
                 </div>
 
                 {form.candidate_id && (
