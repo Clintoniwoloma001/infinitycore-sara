@@ -53,7 +53,7 @@ export const supportCaseService = {
    * Create a new support case
    */
   async create(caseData) {
-    const { user } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     const { data, error } = await supabase
       .from('support_cases')
       .insert([

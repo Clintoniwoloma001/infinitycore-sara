@@ -495,10 +495,10 @@ export default function Profile() {
               <StaffIdCard
                 employee={employee}
                 photoUrl={passportUrl}
-                expiryMode="date"
-                expiryDate={employee?.staff_id_expiry || new Date(Date.now() + 3 * 365 * 24 * 3600 * 1000).toISOString()}
+                expiryMode={employee?.staff_id_expiry ? 'date' : 'none'}
+                expiryDate={employee?.staff_id_expiry || undefined}
                 issueDate={employee?.staff_id_issued_at}
-                issuedBy="Human Resources"
+                issuedBy={employee?.staff_id_issued_by || 'Human Resources'}
                 status={employee?.staff_id_status || 'active'}
               />
             </div>
@@ -506,10 +506,10 @@ export default function Profile() {
               <StaffIdCard
                 employee={employee}
                 photoUrl={passportUrl}
-                expiryMode="date"
-                expiryDate={employee?.staff_id_expiry || new Date(Date.now() + 3 * 365 * 24 * 3600 * 1000).toISOString()}
+                expiryMode={employee?.staff_id_expiry ? 'date' : 'none'}
+                expiryDate={employee?.staff_id_expiry || undefined}
                 issueDate={employee?.staff_id_issued_at}
-                issuedBy="Human Resources"
+                issuedBy={employee?.staff_id_issued_by || 'Human Resources'}
                 status={employee?.staff_id_status || 'active'}
               />
             </PrintPortal>

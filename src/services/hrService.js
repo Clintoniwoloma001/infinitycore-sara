@@ -10,10 +10,10 @@ export const hrService = {
    */
 
   async createJob(jobData) {
-    const { user } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     const { data, error } = await supabase
       .from('hr_jobs')
-      .insert([{ ...jobData, created_by: user.id }])
+      .insert([{ ...jobData, created_by: user?.id }])
       .select()
 
     if (error) throw error
@@ -102,12 +102,12 @@ export const hrService = {
   },
 
   async screenCandidate(candidateId, score, notes) {
-    const { user } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     return this.updateCandidate(candidateId, {
       application_status: 'screening',
       screening_score: score,
       screening_notes: notes,
-      screened_by: user.id,
+      screened_by: user?.id,
       screened_at: new Date().toISOString(),
     })
   },
@@ -195,7 +195,7 @@ export const hrService = {
   },
 
   async submitInterviewFeedback(interviewId, feedback, rating) {
-    const { user } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     const { data, error } = await supabase
       .from('hr_interviews')
       .update({

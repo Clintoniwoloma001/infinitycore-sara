@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Loader2, Plus, Trash2, MapPin, Edit, X, Check, Navigation, Fingerprint, Monitor, Cpu, Link2, Ban, RefreshCw, Wifi, WifiOff } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
+import { normalizeEmployeeId } from '../utils/employeeId'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -399,7 +400,7 @@ export function BiometricTab({ canManage }) {
       const [maps, devs, emps] = await Promise.all([
         attendanceEngineService.listBiometricMappings(),
         attendanceEngineService.listDevices(),
-        supabase.from('employees').select('id, full_name, department').eq('employment_status', 'active').order('full_name').then(({ data }) => data || []),
+        supabase.from('employees').select('id, full_name, department, employee_number, staff_id, employee_code').eq('employment_status', 'active').order('full_name').then(({ data }) => data || []),
       ])
       setMappings(maps)
       setDevices(devs)
@@ -420,7 +421,7 @@ export function BiometricTab({ canManage }) {
       await attendanceEngineService.createBiometricMapping({
         employee_id: form.employee_id,
         device_id: form.device_id,
-        external_user_id: form.external_user_id,
+        external_user_id: normalizeEmployeeId(form.external_user_id),
         enrollment_status: form.enrollment_status,
         active: true,
       })
@@ -455,6 +456,7 @@ export function BiometricTab({ canManage }) {
             <thead className="bg-slate-50 text-slate-500 text-left">
               <tr>
                 <th className="px-4 py-3 font-medium">Employee</th>
+                <th className="px-4 py-3 font-medium">Employee ID</th>
                 <th className="px-4 py-3 font-medium">Device</th>
                 <th className="px-4 py-3 font-medium">External ID</th>
                 <th className="px-4 py-3 font-medium">Status</th>
@@ -465,6 +467,7 @@ export function BiometricTab({ canManage }) {
               {mappings.map((m) => (
                 <tr key={m.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 font-medium text-slate-800">{m.employees?.full_name || 'Unknown'}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-600">{m.employees?.employee_number || m.employees?.staff_id || m.employees?.employee_code || '—'}</td>
                   <td className="px-4 py-3 text-slate-600">{m.attendance_devices?.device_name || '—'}</td>
                   <td className="px-4 py-3 text-slate-600 font-mono">{m.external_user_id}</td>
                   <td className="px-4 py-3">
@@ -497,7 +500,7 @@ export function BiometricTab({ canManage }) {
                 <label className={labelCls}>Employee</label>
                 <select className={inputCls} value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })}>
                   <option value="">Select employee...</option>
-                  {employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.full_name} ({emp.department || '—'})</option>)}
+                  {employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.full_name} ({emp.employee_number || emp.staff_id || emp.employee_code || emp.department || '—'})</option>)}
                 </select>
               </div>
               <div>
@@ -509,7 +512,7 @@ export function BiometricTab({ canManage }) {
               </div>
               <div>
                 <label className={labelCls}>External User ID</label>
-                <input className={inputCls} value={form.external_user_id} onChange={(e) => setForm({ ...form, external_user_id: e.target.value })} placeholder="e.g. 238 (fingerprint device user ID)" />
+                <input className={inputCls} value={form.external_user_id} onChange={(e) => setForm({ ...form, external_user_id: e.target.value })} placeholder="e.g. IMFB/26 or 238 (fingerprint device user ID)" />
               </div>
               <div>
                 <label className={labelCls}>Enrollment Status</label>

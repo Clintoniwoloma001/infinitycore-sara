@@ -13,6 +13,7 @@ import { supabase } from '../supabaseClient'
 import EmployeeHRActions from '../components/EmployeeHRActions'
 import StaffIdCard from '../components/StaffIdCard'
 import ProfilePhotoModal from '../components/ProfilePhotoModal'
+import BiometricModal from '../components/BiometricModal'
 import EmployeeRecordPrint, { RECORD_SECTIONS, ALL_RECORD_SECTIONS } from '../components/EmployeeRecordPrint'
 import PrintPortal from '../components/PrintPortal'
 
@@ -106,6 +107,7 @@ const TABS = [
   { id: 'queries', label: 'Queries / Disciplinary' },
   { id: 'training', label: 'Training' },
   { id: 'audit', label: 'Audit' },
+  { id: 'security', label: 'Security & Authentication' },
 ]
 
 const HR_CONTROLLED_FIELDS = [
@@ -149,6 +151,7 @@ export default function EmployeeProfile() {
   const [showCard, setShowCard] = useState(false)
   const [showRecord, setShowRecord] = useState(false)
   const [showPhotos, setShowPhotos] = useState(false)
+  const [showBiometric, setShowBiometric] = useState(false)
   const [photoUrl, setPhotoUrl] = useState(null)
   const [passportUrl, setPassportUrl] = useState(null)
   const [recordBusy, setRecordBusy] = useState(false)
@@ -390,10 +393,10 @@ export default function EmployeeProfile() {
           setDraft((prev) => ({ ...prev, ...res }))
         }
       }
-      setCardExpiryMode(employee?.staff_id_expiry ? 'date' : 'date')
-      setCardExpiryDate(employee?.staff_id_expiry ? employee.staff_id_expiry.slice(0, 10) : new Date(Date.now() + 3 * 365 * 24 * 3600 * 1000).toISOString().slice(0, 10))
+      setCardExpiryDate(employee?.staff_id_expiry ? employee.staff_id_expiry.slice(0, 10) : '')
+      setCardExpiryMode(employee?.staff_id_expiry ? 'date' : 'none')
       setCardIssueDate((employee?.staff_id_issued_at || new Date().toISOString()).slice(0, 10))
-      setCardIssuedBy(user?.full_name || user?.email || 'Human Resources')
+      setCardIssuedBy(employee?.staff_id_issued_by || 'Human Resources')
       setCardStatus(employee?.staff_id_status || 'active')
       setShowCard(true)
     } catch (e) {
@@ -429,10 +432,18 @@ export default function EmployeeProfile() {
       const payload = {
         staff_id_expiry: cardExpiryMode === 'date' && cardExpiryDate ? cardExpiryDate : null,
         staff_id_status: cardStatus,
+        staff_id_issued_by: cardIssuedBy || null,
+        staff_id_issued_at: cardIssueDate ? `${cardIssueDate}T00:00:00` : null,
       }
       const res = await employeeService.updateHrFields(id, payload)
       if (res?.ok) {
-        setEmployee((prev) => ({ ...prev, staff_id_expiry: payload.staff_id_expiry, staff_id_status: cardStatus }))
+        setEmployee((prev) => ({
+          ...prev,
+          staff_id_expiry: payload.staff_id_expiry,
+          staff_id_status: cardStatus,
+          staff_id_issued_by: payload.staff_id_issued_by,
+          staff_id_issued_at: payload.staff_id_issued_at,
+        }))
         setMessage('ID card settings saved.')
       }
     } catch (e) {
@@ -1030,6 +1041,35 @@ export default function EmployeeProfile() {
         </Section>
       )}
 
+      {/* ---- Security & Authentication ---- */}
+      {tab === 'security' && (
+        <Section
+          title="Security & Authentication"
+          actions={isHR && <button onClick={() => setShowBiometric(true)} className="text-sm font-medium text-[#009944] hover:text-[#007a36] flex items-center gap-1"><ShieldCheck className="w-4 h-4" /> Manage Devices</button>}
+        >
+          <p className="text-sm text-slate-600 mb-4">
+            Manage biometric and security keys for this employee's attendance authentication.
+            Credentials are stored as digital keys; actual fingerprint/Face ID data is never saved by InfinityCore.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Employee ID</p>
+              <p className="text-sm font-medium text-slate-800">{employee?.employee_number || employee?.employee_code || '—'}</p>
+            </div>
+            <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Employment Status</p>
+              <p className="text-sm font-medium text-slate-800 capitalize">{employee?.employment_status || '—'}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setShowBiometric(true)}
+            className="mt-5 w-full sm:w-auto px-5 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] transition-all flex items-center justify-center gap-2"
+          >
+            <ShieldCheck className="w-4 h-4" /> View & Manage Security Devices
+          </button>
+        </Section>
+      )}
+
       {/* ---- Payroll Modal ---- */}
       {showAddPayroll && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
@@ -1083,6 +1123,14 @@ export default function EmployeeProfile() {
           }}
         />
       )}
+
+      {/* ---- Biometric Modal ---- */}
+      <BiometricModal
+        open={showBiometric}
+        onClose={() => setShowBiometric(false)}
+        employeeId={employee?.id}
+        employeeName={employee?.full_name}
+      />
 
       {/* ---- Staff ID Card Modal ---- */}
       {showCard && (

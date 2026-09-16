@@ -27,7 +27,7 @@ function PhotoSlot({ title, hint, src, initials, onFile, onRemove, canRemove }) 
     try {
       await onFile(file)
     } catch (ex) {
-      setErr(ex?.message || 'Upload failed.')
+      setErr(ex?.message || 'Upload failed. Please try again.')
     } finally {
       setBusy(false)
       if (fileInput.current) fileInput.current.value = ''
@@ -78,11 +78,17 @@ function PhotoSlot({ title, hint, src, initials, onFile, onRemove, canRemove }) 
 }
 
 export default function ProfilePhotoModal({ employee, photoUrl, onClose, onSaved }) {
-  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [profileSrc, setProfileSrc] = useState(null)
   const [passportDoc, setPassportDoc] = useState(null)
   const employeeId = employee?.id
+
+  // Do not attempt any upload without a resolvable employee record. This is the
+  // top of the "c.id" failure chain: a missing employee must never reach storage.
+  const missingEmployee = !employeeId
+  const blockedMsg = missingEmployee
+    ? 'Employee record could not be resolved. Photos are disabled — refresh the page and try again.'
+    : ''
 
   React.useEffect(() => {
     let active = true
@@ -119,64 +125,39 @@ export default function ProfilePhotoModal({ employee, photoUrl, onClose, onSaved
 
   // ----- profile picture (platform) -----
   const uploadProfile = async (file) => {
-    setBusy(true)
-    setErr('')
-    try {
-      const res = await documentService.uploadProfilePicture(file, employeeId)
-      const url = await documentService.getSignedUrl(res.file_path)
-      setProfileSrc(url)
-      await onSaved?.()
-    } catch (ex) {
-      throw ex
-    } finally {
-      setBusy(false)
-    }
+    if (!employeeId) throw new Error(blockedMsg)
+    const res = await documentService.uploadProfilePicture(file, employeeId)
+    if (!res?.file_path) throw new Error('Upload succeeded but the file record is missing. Please retry.')
+    const url = await documentService.getSignedUrl(res.file_path)
+    if (!url) throw new Error('Could not generate the photo link. Please retry.')
+    setProfileSrc(url)
+    await onSaved?.()
   }
 
   const removeProfile = async () => {
-    setBusy(true)
-    setErr('')
-    try {
-      const docList = await documentService.list('employee', employeeId)
-      const pic = docList.find((d) => d.document_type === 'profile_picture')
-      if (pic) await documentService.delete(pic.id)
-      setProfileSrc(null)
-      await onSaved?.()
-    } catch (ex) {
-      setErr(ex?.message || 'Unable to remove photo.')
-    } finally {
-      setBusy(false)
-    }
+    if (!employeeId) throw new Error(blockedMsg)
+    const docList = await documentService.list('employee', employeeId)
+    const pic = docList.find((d) => d.document_type === 'profile_picture')
+    if (pic) await documentService.delete(pic.id)
+    setProfileSrc(null)
+    await onSaved?.()
   }
 
   // ----- ID card photo (onboarding passport / attach when missing) -----
   const attachPassport = async (file) => {
-    setBusy(true)
-    setErr('')
-    try {
-      const res = await documentService.upload(file, 'employee', employeeId, 'passport')
-      const url = await documentService.getSignedUrl(res.file_path)
-      setPassportDoc({ ...res, url })
-      await onSaved?.()
-    } catch (ex) {
-      throw ex
-    } finally {
-      setBusy(false)
-    }
+    if (!employeeId) throw new Error(blockedMsg)
+    const res = await documentService.upload(file, 'employee', employeeId, 'passport')
+    if (!res?.file_path) throw new Error('Upload succeeded but the file record is missing. Please retry.')
+    const url = await documentService.getSignedUrl(res.file_path)
+    if (!url) throw new Error('Could not generate the photo link. Please retry.')
+    setPassportDoc({ ...res, url })
+    await onSaved?.()
   }
 
   const removePassport = async () => {
-    setBusy(true)
-    setErr('')
-    try {
-      if (passportDoc?.id) await documentService.delete(passportDoc.id)
-      setPassportDoc(null)
-      await onSaved?.()
-    } catch (ex) {
-      setErr(ex?.message || 'Unable to remove ID card photo.')
-    } finally {
-      setBusy(false)
-    }
+    if (passportDoc?.id) await documentService.delete(passportDoc.id)
+    setPassportDoc(null)
+    await onSaved?.()
   }
 
   return (
@@ -187,7 +168,11 @@ export default function ProfilePhotoModal({ employee, photoUrl, onClose, onSaved
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
         </div>
 
-        {err && <div className="mb-4 rounded-lg bg-rose-50 border border-rose-200 px-4 py-3 text-sm text-rose-800">{err}</div>}
+        {(err || missingEmployee) && (
+          <div className="mb-4 rounded-lg bg-rose-50 border border-rose-200 px-4 py-3 text-sm text-rose-800">
+            {missingEmployee ? blockedMsg : err}
+          </div>
+        )}
 
         <div className="space-y-4">
           <PhotoSlot

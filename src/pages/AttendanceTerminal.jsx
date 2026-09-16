@@ -1,21 +1,30 @@
 import React, { useState, useEffect } from 'react'
-import { Fingerprint, Loader2, Check, X, Clock, MapPin } from 'lucide-react'
+import { Fingerprint, Loader2, Check, X, Clock, MapPin, ShieldCheck } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
+import { biometricService } from '../services/biometricService'
+import { normalizeEmployeeId, canonicalEmployeeId } from '../utils/employeeId'
 
 // ============================================================
 // ATTENDANCE TERMINAL MODE
 // Simplified interface for dedicated attendance devices.
 // Does NOT expose the rest of InfinityCore.
+//
+// Employee lookup: the official employee number (IMFB/26) is
+// normalized and resolved through employees.employee_number /
+// staff_id / employee_code. The confirmed identity is shown
+// BEFORE recording attendance, then clock-in/out is recorded
+// against the employee's UUID (never a duplicate).
 // ============================================================
 export default function AttendanceTerminal() {
   const [devices, setDevices] = useState([])
   const [selectedDevice, setSelectedDevice] = useState(null)
-  const [mappings, setMappings] = useState([])
   const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const [currentTime, setCurrentTime] = useState(new Date())
+  // Confirmed identity — shown before recording attendance
+  const [confirmed, setConfirmed] = useState(null)
 
   useEffect(() => {
     const id = setInterval(() => setCurrentTime(new Date()), 1000)
@@ -29,8 +38,6 @@ export default function AttendanceTerminal() {
         const terminals = devs.filter((d) => d.device_type === 'attendance_terminal' && d.status === 'active')
         setDevices(terminals)
         if (terminals.length > 0) setSelectedDevice(terminals[0])
-        const maps = await attendanceEngineService.listBiometricMappings()
-        setMappings(maps.filter((m) => m.enrollment_status === 'enrolled' && m.active))
       } catch (e) {
         setError(e?.message || 'Failed to load terminal data')
       }
@@ -38,33 +45,49 @@ export default function AttendanceTerminal() {
     load()
   }, [])
 
+  const verifyEmployee = async () => {
+    if (!pin || !selectedDevice) return
+    setBusy(true)
+    setError('')
+    setResult(null)
+    setConfirmed(null)
+    try {
+      const lookup = await attendanceEngineService.lookupAttendanceEmployee(pin)
+      if (!lookup?.found) {
+        setError(lookup?.error || 'Employee ID not found. Please check the ID and try again.')
+        setBusy(false)
+        return
+      }
+      setConfirmed(lookup.employee)
+    } catch (e) {
+      setError(e?.message || 'Employee lookup failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const handleClock = async (eventType) => {
-    if (!selectedDevice || !pin) return
+    if (!selectedDevice || !confirmed) return
     setBusy(true)
     setError('')
     setResult(null)
     try {
-      // Find the biometric mapping for this PIN/external_user_id
-      const mapping = mappings.find((m) => m.external_user_id === pin && m.device_id === selectedDevice.id)
-      if (!mapping) {
-        setError('Unknown employee ID. Please check and try again.')
-        setBusy(false)
-        return
-      }
-
       const data = await attendanceEngineService.simulateDeviceEvent({
         deviceId: selectedDevice.id,
-        externalUserId: pin,
+        externalUserId: confirmed.employee_number || pin,
         eventType,
+        verificationMethod: 'DEVICE_AUTHENTICATION',
+        employeeId: confirmed.id,
       })
 
       if (data?.success) {
         setResult({
           success: true,
-          name: data.employee_name,
+          name: data.employee_name || confirmed.full_name,
           eventType,
           time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
         })
+        setConfirmed(null)
         setPin('')
         setTimeout(() => setResult(null), 5000)
       } else {
@@ -75,6 +98,50 @@ export default function AttendanceTerminal() {
     } finally {
       setBusy(false)
     }
+  }
+
+  // ---- WebAuthn / device authentication (option B) ----
+  const handleBiometric = async (eventType) => {
+    if (!selectedDevice) return
+    setBusy(true)
+    setError('')
+    setResult(null)
+    setConfirmed(null)
+    try {
+      const verified = await biometricService.authenticate()
+      if (!verified?.employee?.id) throw new Error('Biometric authentication could not identify an employee.')
+      const employee = verified.employee
+
+      const data = await attendanceEngineService.simulateDeviceEvent({
+        deviceId: selectedDevice.id,
+        externalUserId: employee.employee_number || '',
+        eventType,
+        verificationMethod: 'WEBAUTHN',
+        employeeId: employee.id,
+      })
+
+      if (data?.success) {
+        setResult({
+          success: true,
+          name: data.employee_name || employee.full_name,
+          eventType,
+          time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+        })
+        setTimeout(() => setResult(null), 5000)
+      } else {
+        setError(data?.error || 'Clock operation failed')
+      }
+    } catch (e) {
+      setError(e?.message || 'Biometric authentication failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const cancel = () => {
+    setConfirmed(null)
+    setError('')
+    setPin('')
   }
 
   const greeting = (() => {
@@ -130,33 +197,93 @@ export default function AttendanceTerminal() {
           </div>
         )}
 
-        {/* PIN input */}
-        {!result?.success && (
+        {/* Confirmed identity — shown before recording attendance */}
+        {confirmed && !result?.success && (
+          <div className="bg-white rounded-2xl p-6 mb-6 shadow-xl">
+            <div className="flex items-start justify-between mb-4">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Confirm your identity</p>
+              <button onClick={cancel} className="text-slate-400 hover:text-slate-600 text-sm">Cancel</button>
+            </div>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#009944] to-[#007a36] flex items-center justify-center text-white font-bold text-lg">
+                {(confirmed.full_name || '?').split(' ').filter(Boolean).slice(0, 2).map((n) => n[0]?.toUpperCase()).join('')}
+              </div>
+              <div>
+                <p className="font-semibold text-slate-900 text-lg leading-tight">{confirmed.full_name || 'Unknown'}</p>
+                <p className="font-mono text-sm text-[#009944] font-medium">{confirmed.employee_number || '—'}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="text-xs text-slate-500">Department</p>
+                <p className="font-medium text-slate-800">{confirmed.department || '—'}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="text-xs text-slate-500">Branch</p>
+                <p className="font-medium text-slate-800">{confirmed.branch || '—'}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              <button
+                onClick={() => handleClock('CLOCK_IN')}
+                disabled={busy}
+                className="h-12 rounded-xl bg-[#009944] text-white font-medium hover:bg-[#007a36] transition-all disabled:opacity-30 flex items-center justify-center gap-2"
+              >
+                {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock In</>}
+              </button>
+              <button
+                onClick={() => handleClock('CLOCK_OUT')}
+                disabled={busy}
+                className="h-12 rounded-xl bg-rose-500/80 text-white font-medium hover:bg-rose-600 transition-all disabled:opacity-30 flex items-center justify-center gap-2"
+              >
+                {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock Out</>}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ID entry */}
+        {!result?.success && !confirmed && (
           <div className="bg-white/5 backdrop-blur rounded-2xl border border-white/10 p-6">
             <p className="text-white/60 text-sm text-center mb-4">Enter your Employee ID or PIN</p>
             <input
               type="text"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && pin) handleClock('CLOCK_IN') }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && pin) verifyEmployee() }}
               placeholder="Enter ID..."
               className="w-full h-14 rounded-xl bg-white/10 border border-white/20 text-white text-center text-xl font-medium tracking-wider focus:outline-none focus:ring-2 focus:ring-[#009944] mb-4"
               autoFocus
             />
-            <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={verifyEmployee}
+              disabled={busy || !pin}
+              className="w-full h-14 rounded-xl bg-[#009944] text-white font-medium hover:bg-[#007a36] transition-all disabled:opacity-30 flex items-center justify-center gap-2"
+            >
+              {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShieldCheck className="w-5 h-5" /> Verify ID</>}
+            </button>
+
+            {biometricService.isWebAuthnSupported() && (
+              <div className="mt-4 flex items-center gap-3">
+                <div className="flex-1 h-px bg-white/10" />
+                <span className="text-xs text-white/40">or</span>
+                <div className="flex-1 h-px bg-white/10" />
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3 mt-4">
               <button
-                onClick={() => handleClock('CLOCK_IN')}
-                disabled={busy || !pin}
-                className="h-14 rounded-xl bg-[#009944] text-white font-medium hover:bg-[#007a36] transition-all disabled:opacity-30 flex items-center justify-center gap-2"
+                onClick={() => handleBiometric('CLOCK_IN')}
+                disabled={busy || !biometricService.isWebAuthnSupported()}
+                className="h-12 rounded-xl bg-white/10 border border-white/20 text-white text-sm font-medium hover:bg-white/20 transition-all disabled:opacity-30 flex items-center justify-center gap-2"
               >
-                {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock In</>}
+                <Fingerprint className="w-4 h-4" /> Biometric In
               </button>
               <button
-                onClick={() => handleClock('CLOCK_OUT')}
-                disabled={busy || !pin}
-                className="h-14 rounded-xl bg-rose-500/80 text-white font-medium hover:bg-rose-600 transition-all disabled:opacity-30 flex items-center justify-center gap-2"
+                onClick={() => handleBiometric('CLOCK_OUT')}
+                disabled={busy || !biometricService.isWebAuthnSupported()}
+                className="h-12 rounded-xl bg-white/10 border border-white/20 text-white text-sm font-medium hover:bg-white/20 transition-all disabled:opacity-30 flex items-center justify-center gap-2"
               >
-                {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock Out</>}
+                <Fingerprint className="w-4 h-4" /> Biometric Out
               </button>
             </div>
           </div>

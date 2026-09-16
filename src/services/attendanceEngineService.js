@@ -117,10 +117,19 @@ export const attendanceEngineService = {
   async listBiometricMappings() {
     const { data, error } = await supabase
       .from('employee_biometric_identifiers')
-      .select('*, employees(full_name, department, position), attendance_devices(device_name)')
+      .select('*, employees(full_name, department, position, employee_number, staff_id, employee_code), attendance_devices(device_name)')
       .order('created_at', { ascending: false })
     if (error) throw error
     return data || []
+  },
+
+  // Safely resolve an employee for the attendance terminal. Returns only
+  // identity fields (name / number / department / position / status).
+  async lookupAttendanceEmployee(identifier) {
+    if (!identifier) return null
+    const { data, error } = await supabase.rpc('lookup_employee_by_identifier', { p_identifier: identifier })
+    if (error) throw error
+    return data
   },
 
   async createBiometricMapping(payload) {
@@ -163,13 +172,16 @@ export const attendanceEngineService = {
     return data || []
   },
 
-  // Simulate a device clock-in event (for testing/terminal mode)
-  async simulateDeviceEvent({ deviceId, externalUserId, eventType }) {
+  // Simulate a device clock-in event (for testing/terminal mode).
+  // p_employeeId is optional; the RPC resolves by canonical employee number
+  // when omitted, or uses the pre-verified employee when provided (WebAuthn).
+  async simulateDeviceEvent({ deviceId, externalUserId, eventType, verificationMethod = 'FINGERPRINT', employeeId = null }) {
     const { data, error } = await supabase.rpc('ingest_attendance_event', {
       p_device_id: deviceId,
-      p_external_user_id: externalUserId,
+      p_external_user_id: externalUserId || '',
       p_event_type: eventType,
-      p_verification_method: 'FINGERPRINT',
+      p_verification_method: verificationMethod,
+      p_employee_id: employeeId,
     })
     if (error) throw error
     return data
