@@ -7,6 +7,7 @@ import { date, money, status } from './hrShared'
 import { employeeService } from '../services/employeeService'
 import { attendanceService } from '../services/attendanceService'
 import { documentService } from '../services/documentService'
+import { employmentLetterService } from '../services/employmentLetterService'
 import { guarantorVerificationService } from '../services/guarantorVerificationService'
 import { payrollService } from '../services/payrollService'
 import { supabase } from '../supabaseClient'
@@ -98,6 +99,7 @@ const TABS = [
   { id: 'personal', label: 'Personal' },
   { id: 'employment', label: 'Employment' },
   { id: 'documents', label: 'Documents' },
+  { id: 'employment_letter', label: 'Employment Letter' },
   { id: 'onboarding', label: 'Onboarding' },
   { id: 'guarantors', label: 'Guarantor' },
   { id: 'leave', label: 'Leave' },
@@ -134,6 +136,10 @@ export default function EmployeeProfile() {
   const [message, setMessage] = useState('')
   const [verifications, setVerifications] = useState([])
   const [guarantorDocs, setGuarantorDocs] = useState([])
+  const [letters, setLetters] = useState([])
+  const [letterBusy, setLetterBusy] = useState(false)
+  const [letterError, setLetterError] = useState('')
+  const [letterMsg, setLetterMsg] = useState('')
   const [payrollItems, setPayrollItems] = useState([])
   const [payrollPeriods, setPayrollPeriods] = useState([])
   const [events, setEvents] = useState([])
@@ -182,6 +188,8 @@ export default function EmployeeProfile() {
       setChildrenData(childs)
       const docList = await documentService.list('employee', id).catch(() => [])
       setDocs(docList)
+      const letterList = await employmentLetterService.listForEmployee(id).catch(() => [])
+      setLetters(letterList)
       const passportDoc = docList.find((d) => /passport/i.test(d.document_type))
       if (passportDoc?.file_path) {
         const url = await documentService.getSignedUrl(passportDoc.file_path).catch(() => null)
@@ -257,6 +265,56 @@ export default function EmployeeProfile() {
   }
 
   useEffect(() => { load() }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const canIssueLetter = isAdmin || isHR
+
+  const issueLetter = async () => {
+    setLetterBusy(true); setLetterError(''); setLetterMsg('')
+    try {
+      const allowances = {}
+      if (employee?.housing_allowance) allowances.housing = employee.housing_allowance
+      if (employee?.transport_allowance) allowances.transport = employee.transport_allowance
+      if (employee?.other_allowances) allowances.other = employee.other_allowances
+      const letter = await employmentLetterService.issue(employee, { allowances })
+      setLetters(await employmentLetterService.listForEmployee(id))
+      setLetterMsg(`Employment letter v${letter.version} generated.`)
+    } catch (e) {
+      setLetterError(e?.message || 'Could not generate the employment letter')
+    } finally {
+      setLetterBusy(false)
+    }
+  }
+
+  const viewLetter = async (letter) => {
+    setLetterError('')
+    try {
+      const url = await employmentLetterService.getViewUrl(letter)
+      window.open(url, '_blank', 'noopener')
+    } catch (e) {
+      setLetterError(e?.message || 'Could not open the letter')
+    }
+  }
+
+  const printLetter = (letter) => {
+    setLetterError('')
+    try {
+      const html = employmentLetterService.buildEmploymentLetterHtml(employee, {
+        salary: letter.salary,
+        allowances: letter.allowances,
+        conditions: letter.conditions,
+        hrName: letter.generated_by_name,
+        reference: `EL/${employee?.employee_code || employee?.employee_number || ''}/${letter.version}`,
+      })
+      const w = window.open('', '_blank')
+      if (!w) throw new Error('Allow pop-ups to print the letter.')
+      w.document.write(html)
+      w.document.close()
+      w.focus()
+      w.print()
+    } catch (e) {
+      setLetterError(e?.message || 'Could not print the letter')
+    }
+  }
 
   // HR saves employment fields via RPC
   const saveHrFields = async (fieldsToSave) => {
@@ -700,6 +758,45 @@ export default function EmployeeProfile() {
             </ul>
           </Section>
         </>
+      )}
+
+      {/* ---- EMPLOYMENT LETTER ---- */}
+      {tab === 'employment_letter' && (
+        <Section
+          title="Employment Letter"
+          actions={canIssueLetter ? (
+            <button onClick={issueLetter} disabled={letterBusy} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+              {letterBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Generate letter
+            </button>
+          ) : null}
+        >
+          {letterError && <div className="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{letterError}</div>}
+          {letterMsg && <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{letterMsg}</div>}
+          {letters.length === 0 ? (
+            <EmptyState title="No employment letter" description={canIssueLetter ? 'Generate a versioned employment letter from the employee’s current record.' : 'No letter has been issued for this employee.'} />
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {letters.map((l) => (
+                <li key={l.id} className="py-3 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-slate-800">Version {l.version} {status(l.status, ['issued'])}</div>
+                    <div className="text-xs text-slate-400">
+                      {l.position || '—'} · {date(l.generated_at)} · {l.generated_by_name || 'HR'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => viewLetter(l)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-slate-300 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                      <FileText className="w-3.5 h-3.5" /> View
+                    </button>
+                    <button onClick={() => printLetter(l)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-slate-300 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                      <Printer className="w-3.5 h-3.5" /> Print
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
       )}
 
       {/* ---- ONBOARDING ---- */}

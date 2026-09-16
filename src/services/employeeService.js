@@ -100,6 +100,13 @@ export const employeeService = {
     }
   },
 
+  // Soft-delete: mark the employee as terminated without removing the record
+  // or its history. Routed through the audited, server-authorized HR-fields RPC
+  // so the same role check and field allowlist apply.
+  async terminate(employeeId) {
+    return this.updateHrFields(employeeId, { employment_status: 'terminated' })
+  },
+
   // Phase 12: Self-service personal info update via server-side RPC.
   // Only allows personal contact fields; cannot change employment data.
   async updatePersonalInfo(fields) {

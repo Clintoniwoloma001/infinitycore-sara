@@ -45,6 +45,8 @@ export const PERMISSIONS = {
   HR_ATTENDANCE_SELF: 'hr.attendance.self',
   HR_ATTENDANCE_MANAGE: 'hr.attendance.manage',
   PAYROLL_MANAGE: 'payroll.manage',
+  PAYROLL_PUSH: 'payroll.push',
+  PAYROLL_APPROVE: 'payroll.approve',
 
   // Data import & migration centre
   DATA_IMPORT_VIEW: 'data.import.view',

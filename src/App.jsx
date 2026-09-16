@@ -26,6 +26,7 @@ import Recruitment from './pages/Recruitment'
 import Assessments from './pages/Assessments'
 import Interviews from './pages/Interviews'
 import Payroll from './pages/Payroll'
+import PayrollBankOne from './pages/PayrollBankOne'
 import OfferLetters from './pages/OfferLetters'
 import Branches from './pages/Branches'
 import Reports from './pages/Reports'
@@ -68,6 +69,7 @@ const pageComponents = {
   Assessments,
   Interviews,
   Payroll,
+  PayrollBankOne,
   OfferLetters,
   Branches,
   Reports,

@@ -1,15 +1,34 @@
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronRight, UserPlus } from 'lucide-react'
+import { ChevronRight, Loader2, Trash2, UserPlus } from 'lucide-react'
 import { date, ModuleTable, status, useTable } from './hrShared'
 import { useAuth } from '../hooks/useAuth'
+import { employeeService } from '../services/employeeService'
 import AddEmployeeModal from '../components/AddEmployeeModal'
 
 export default function Employees() {
   const { rows, loading, error, reload } = useTable('employees')
   const { hasPermission, isAdmin, isHR } = useAuth()
   const [showAdd, setShowAdd] = useState(false)
+  const [terminating, setTerminating] = useState(null)
+  const [actionError, setActionError] = useState('')
   const canAdd = isAdmin || isHR || hasPermission('hr.employee.update')
+  const canDelete = isAdmin || isHR
+
+  const terminate = async (employee) => {
+    const label = employee.employee_code || employee.employee_number || employee.staff_id || 'no code'
+    if (!confirm(`Terminate ${employee.full_name} (${label})?\n\nThis sets the employment status to "terminated". The record and its history are kept.`)) return
+    setActionError('')
+    setTerminating(employee.id)
+    try {
+      await employeeService.terminate(employee.id)
+      reload()
+    } catch (e) {
+      setActionError(e?.message || 'Unable to terminate employee')
+    } finally {
+      setTerminating(null)
+    }
+  }
 
   return (
     <div>
@@ -24,6 +43,10 @@ export default function Employees() {
           </button>
         )}
       </div>
+
+      {actionError && (
+        <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{actionError}</div>
+      )}
 
       <ModuleTable
         title=""
@@ -48,6 +71,26 @@ export default function Employees() {
           { key: 'branch', label: 'Branch', render: (r) => r.branch || '-' },
           { key: 'employment_status', label: 'Status', render: (r) => status(r.employment_status) },
           { key: 'hire_date', label: 'Date Joined', render: (r) => date(r.hire_date || r.created_at) },
+          ...(canDelete ? [{
+            key: 'actions',
+            label: '',
+            render: (r) => (
+              <div className="flex justify-end">
+                {r.employment_status === 'terminated'
+                  ? <span className="text-xs text-slate-400">Terminated</span>
+                  : (
+                    <button
+                      onClick={() => terminate(r)}
+                      disabled={terminating === r.id}
+                      className="p-2 rounded-lg hover:bg-rose-50 text-rose-500 disabled:opacity-50"
+                      title="Terminate employee"
+                    >
+                      {terminating === r.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    </button>
+                  )}
+              </div>
+            ),
+          }] : []),
         ]}
       />
 
