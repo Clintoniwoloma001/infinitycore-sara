@@ -50,6 +50,7 @@ import Settings from './pages/Settings'
 import OnboardingReview from './pages/OnboardingReview'
 import HROrganisation from './pages/HROrganisation'
 import PerformanceSettings from './pages/PerformanceSettings'
+import Biometrics from './pages/Biometrics'
 
 const pageComponents = {
   Dashboard,
@@ -88,6 +89,7 @@ const pageComponents = {
   OnboardingReview,
   HROrganisation,
   PerformanceSettings,
+  Biometrics,
 }
 
 function Protected({ children }) {
@@ -239,6 +241,7 @@ function AppRoutes() {
       <Route path="/employees/:id" element={<Protected><ProtectedModule route={{ path: '/employees', element: 'EmployeeProfile', permissions: ['hr.employee.read'] }} /></Protected>} />
       <Route path="/profile" element={<Protected><ProtectedModule route={{ path: '/profile', element: 'Profile', permissions: [] }} /></Protected>} />
       <Route path="/onboarding-review/:id" element={<Protected><ProtectedModule route={{ path: '/onboarding-links', element: 'OnboardingReview', permissions: ['hr.onboarding.read'] }} /></Protected>} />
+      <Route path="/biometrics/:employeeId" element={<Protected><ProtectedModule route={{ path: '/employees', element: 'Biometrics', permissions: ['hr.employee.read'] }} /></Protected>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
