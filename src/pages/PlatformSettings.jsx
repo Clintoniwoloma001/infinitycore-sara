@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Settings, Clock, Calendar, MapPin, Shield, Loader2, CheckCircle2, History, Save } from 'lucide-react'
+import { Settings, Clock, Calendar, MapPin, Shield, Loader2, CheckCircle2, History, Coins, Save } from 'lucide-react'
 import { platformSettingsService } from '../services/platformSettingsService'
 import { geofenceService } from '../services/geofenceService'
 import { LoadingState, ErrorState } from '../components/PageStates'
@@ -14,6 +14,8 @@ const TABS = [
   { id: 'hours', label: 'Working Hours', icon: Clock },
   { id: 'attendance', label: 'Attendance', icon: Shield },
   { id: 'geofence', label: 'Geofence', icon: MapPin },
+  { id: 'currency', label: 'Currency', icon: Coins },
+  { id: 'currency', label: 'Currency', icon: Coins },
   { id: 'audit', label: 'Audit Trail', icon: History },
 ]
 
@@ -107,8 +109,7 @@ export default function PlatformSettings() {
 
       {/* Tabs */}
       <div className="flex gap-1.5 overflow-x-auto pb-2 mb-4 border-b border-slate-200">
-        {TABS.map((t) => {
-          const Icon = t.icon
+        {TABS.map((t) => {          const Icon = t.icon
           return (
             <button
               key={t.id}

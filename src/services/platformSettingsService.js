@@ -19,6 +19,14 @@ export const platformSettingsService = {
     return data
   },
 
+  async updateCurrency(payload) {
+    const { data, error } = await supabase.rpc('update_platform_currency', {
+      p_currency: payload,
+    })
+    if (error) throw error
+    return data
+  },
+
   async getAuditTrail(limit = 50) {
     const { data, error } = await supabase
       .from('hr_settings_audit')

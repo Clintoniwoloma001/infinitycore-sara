@@ -1,5 +1,27 @@
-export const formatCurrency = (n) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n || 0)
+// Platform currency — Infinity MFB operates in Nigerian Naira (NGN) by default.
+// The default can be overridden at runtime from Platform Settings → Currency,
+// which persists to hr_platform_settings and calls setPlatformCurrency().
+let currencyCfg = { code: 'NGN', symbol: '₦', position: 'prefix', decimals: 2 }
+
+export const setPlatformCurrency = (cfg) => {
+  currencyCfg = {
+    code: 'NGN',
+    symbol: '₦',
+    position: 'prefix',
+    decimals: 2,
+    ...(cfg || {}),
+  }
+}
+
+export const formatCurrency = (n) => {
+  const v = Number(n || 0)
+  const { symbol, position, decimals } = currencyCfg
+  const formatted = new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(v)
+  return position === 'suffix' ? `${formatted} ${symbol}` : `${symbol}${formatted}`
+}
 
 export const formatDate = (d) => {
   if (!d) return '—'
