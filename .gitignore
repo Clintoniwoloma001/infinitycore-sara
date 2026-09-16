@@ -8,3 +8,5 @@ dist
 # Un-block the example file so it can be pushed
 !.env.example
 .env.local
+.vercel
+.env*
