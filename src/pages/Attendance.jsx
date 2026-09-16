@@ -73,6 +73,7 @@ export default function Attendance() {
   const [record, setRecord] = useState(null)
   const [history, setHistory] = useState([])
   const [config, setConfig] = useState(null)
+  const [requirements, setRequirements] = useState(null)
   const [geofences, setGeofences] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -95,6 +96,10 @@ export default function Attendance() {
         const hist = await attendanceService.getHistory(emp.id, range)
         setHistory(hist)
       }
+      try {
+        const req = await attendanceService.getAttendanceRequirements()
+        setRequirements(req)
+      } catch { /* requirements fall back to defaults */ }
       try {
         const cfg = await attendanceEngineService.getConfig()
         setConfig(cfg)
@@ -124,7 +129,7 @@ export default function Attendance() {
         setLateModal({
           attendanceId: r.attendance_id,
           employeeId: employee.id,
-          expectedTime: config?.expected_start_time || '08:00',
+          expectedTime: config?.expected_start_time || schedule?.workStartTime || '08:00',
           actualTime: new Date(r.clock_in_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
         })
       }
@@ -222,6 +227,11 @@ export default function Attendance() {
     }))
   }, [history])
 
+  const schedule = useMemo(
+    () => attendanceService.scheduleFor(employee, requirements),
+    [employee, requirements],
+  )
+
   if (loading) return <LoadingState label="Loading attendance..." />
 
   if (!employee) {
@@ -256,7 +266,7 @@ export default function Attendance() {
 
         {/* SARA briefing */}
         <div>
-          <SaraBriefing records={history} isManager={false} />
+          <SaraBriefing records={history} isManager={false} myRecord={record} schedule={schedule} />
         </div>
       </div>
 

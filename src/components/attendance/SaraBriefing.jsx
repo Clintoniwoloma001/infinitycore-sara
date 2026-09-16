@@ -1,49 +1,77 @@
 import React, { useEffect, useState } from 'react'
 import { Sparkles, TrendingUp, AlertTriangle, Users, Clock } from 'lucide-react'
-import { supabase } from '../../supabaseClient'
+import { calculateAttendanceState, DEFAULT_ATTENDANCE_TIMEZONE } from '../../services/attendanceService'
 
 /**
  * SARA Attendance Briefing — deterministic analytics based on actual
- * attendance records. No AI inference, just computed stats with
- * a human-sounding summary.
+ * attendance records. No AI inference, just computed stats with a
+ * human-sounding summary.
+ *
+ * The employee's own line uses the SAME canonical calculation as the
+ * clock card and the server (calculateAttendanceState) against the
+ * schedule stored in the DB, evaluated in the platform timezone. It
+ * never claims "on time" merely because a record exists.
  */
-export default function SaraBriefing({ records, employees, isManager }) {
+export default function SaraBriefing({ records, employees, isManager, myRecord = null, schedule = null }) {
   const [briefing, setBriefing] = useState(null)
 
   useEffect(() => {
     if (!records) return
     compute()
-  }, [records, employees]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [records, employees, myRecord, schedule]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function compute() {
-    const today = new Date().toISOString().slice(0, 10)
+    const timezone = schedule?.timezone || DEFAULT_ATTENDANCE_TIMEZONE
+    const today = timeZoneDateKey(new Date(), timezone)
     const todayRecords = records.filter((r) => String(r.attendance_date) === today)
     const totalEmployees = isManager ? (employees?.length || 0) : 0
     const presentToday = todayRecords.filter((r) => r.clock_in && (r.status === 'present' || r.status === 'late')).length
-    const lateToday = todayRecords.filter((r) => r.status === 'late').length
-    const notClockedIn = isManager ? totalEmployees - presentToday : 0
+    const lateToday = todayRecords.filter((r) => r.status === 'late' || (r.late_minutes || 0) > 0).length
+    const notClockedIn = isManager ? Math.max(0, totalEmployees - presentToday) : 0
     const attendancePct = totalEmployees > 0 ? Math.round((presentToday / totalEmployees) * 100) : 0
 
     // Department breakdown for late arrivals
     const lateByDept = {}
-    todayRecords.filter((r) => r.status === 'late').forEach((r) => {
+    todayRecords.filter((r) => r.status === 'late' || (r.late_minutes || 0) > 0).forEach((r) => {
       const dept = r.employees?.department || 'Unknown'
       lateByDept[dept] = (lateByDept[dept] || 0) + 1
     })
     const topLateDept = Object.entries(lateByDept).sort((a, b) => b[1] - a[1])[0]
 
-    const greeting = getGreeting()
+    const greeting = getGreeting(timezone)
     const parts = []
 
     if (isManager) {
       if (attendancePct > 0) parts.push(`${attendancePct}% of employees have clocked in today.`)
-      if (lateToday > 0) parts.push(`${lateToday} employee${lateToday > 1 ? 's are' : ' is'} currently late.`)
+      if (lateToday > 0) parts.push(`${lateToday} employee${lateToday > 1 ? 's are' : ' is'} late.`)
       if (topLateDept) parts.push(`The highest late-arrival concentration is in ${topLateDept[0]}.`)
       if (notClockedIn > 0) parts.push(`${notClockedIn} employee${notClockedIn > 1 ? 's have' : ' has'} not clocked in.`)
     } else {
-      const myLate = todayRecords.filter((r) => r.status === 'late').length
-      if (myLate > 0) parts.push(`You were ${todayRecords[0]?.late_minutes || 0} minutes late today.`)
-      else if (todayRecords.length > 0) parts.push('You clocked in on time today. Nice work!')
+      const mine = myRecord || todayRecords[0] || null
+      const state = calculateAttendanceState(mine, schedule || {})
+      const at = (d) => (d ? new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: timezone }) : '')
+      const scheduled = minutesToLabel(state.scheduledStartMinutes)
+      switch (state.state) {
+        case 'not_clocked_in':
+          parts.push(`You have not clocked in yet today (scheduled start ${scheduled}).`)
+          break
+        case 'working_on_time':
+          parts.push(`You clocked in on time at ${at(state.clockInAt)}. Nice work!`)
+          break
+        case 'working_late':
+          parts.push(`You clocked in late by ${state.lateMinutes} minute${state.lateMinutes === 1 ? '' : 's'} at ${at(state.clockInAt)} (scheduled start ${scheduled}).`)
+          break
+        case 'late':
+          parts.push(`You clocked out after arriving late by ${state.lateMinutes} minute${state.lateMinutes === 1 ? '' : 's'}.`)
+          break
+        case 'early_exit':
+          parts.push(`You clocked out early by ${state.earlyMinutes} minute${state.earlyMinutes === 1 ? '' : 's'}.`)
+          break
+        case 'on_time':
+        default:
+          parts.push(`You clocked in on time at ${at(state.clockInAt)} and clocked out on schedule.`)
+          break
+      }
     }
 
     if (parts.length === 0) parts.push('No attendance data available for today yet.')
@@ -90,9 +118,28 @@ function MiniStat({ icon: Icon, label, value, color }) {
   )
 }
 
-function getGreeting() {
-  const h = new Date().getHours()
-  if (h < 12) return 'Good morning.'
-  if (h < 17) return 'Good afternoon.'
+function timeZoneDateKey(date, timeZone) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
+  } catch {
+    return new Date(date).toISOString().slice(0, 10)
+  }
+}
+
+function minutesToLabel(minutes) {
+  const h = Math.floor((minutes || 0) / 60)
+  const m = (minutes || 0) % 60
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  const h12 = h % 12 === 0 ? 12 : h % 12
+  return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`
+}
+
+function getGreeting(timeZone = DEFAULT_ATTENDANCE_TIMEZONE) {
+  let hour = new Date().getHours()
+  try {
+    hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hour12: false }).format(new Date()))
+  } catch { /* fall back to local */ }
+  if (hour < 12) return 'Good morning.'
+  if (hour < 17) return 'Good afternoon.'
   return 'Good evening.'
 }

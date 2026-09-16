@@ -132,6 +132,21 @@ export const hrOrganisationService = {
     return data || []
   },
 
+  // Detail population for a single scorecard. The card predicate matches the
+  // summary exactly, so the drawer count always equals the card count.
+  async getPopulation(cardKey) {
+    const data = await orgRpc('list_org_population', { p_card: cardKey })
+    if (data?.error) throw new Error(data.error)
+    return data?.rows || []
+  },
+
+  // HR bulk confirmation with server-side authorisation + audit trail.
+  async confirmEmployees(employeeIds, reason) {
+    const ids = (employeeIds || []).filter(Boolean)
+    if (ids.length === 0) throw new Error('Select at least one employee to confirm.')
+    return orgRpc('confirm_employees', { p_employee_ids: ids, p_reason: reason || 'HR confirmation' })
+  },
+
   async listImportedBatches() {
     const { data, error } = await supabase
       .from('staff_import_batches')

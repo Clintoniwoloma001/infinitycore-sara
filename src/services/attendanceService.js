@@ -7,9 +7,139 @@ import { sendInAppNotification } from './notificationService'
 // and server-side geofence validation.
 //
 // The database RPCs (clock_in_secure / clock_out_secure) are the
-// authority. The client supplies GPS coordinates; the server stamps
-// the time and validates the geofence.
+// authority. The server stamps the time, applies the configured
+// branch/platform schedule, and validates the geofence.
+//
+// GPS is requested ONLY when the platform policy requires it
+// (get_attendance_requirements). When policy says GPS is optional,
+// the employee can clock in/out without location access — the client
+// no longer demands a location the server does not require.
+//
+// calculateAttendanceState() is the single source of truth for
+// late / early / on-time interpretation, used by the Attendance menu,
+// the clock card and SARA. It reads the schedule stored in the DB
+// (branch → work_start_time / work_end_time / grace_period_minutes)
+// and compares in the platform timezone (Africa/Lagos by default),
+// never UTC-stamped-as-local.
 // ------------------------------------------------------------------
+
+export const DEFAULT_ATTENDANCE_TIMEZONE = 'Africa/Lagos'
+
+let _requirementsCache = null
+
+function parseHHMM(value) {
+  if (!value) return null
+  const m = String(value).match(/^(\d{1,2}):(\d{2})/)
+  if (!m) return null
+  return Number(m[1]) * 60 + Number(m[2])
+}
+
+function timeZoneMinutes(date, timeZone) {
+  if (!date) return null
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone, hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(new Date(date))
+    const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0)
+    const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? 0)
+    return hour * 60 + minute
+  } catch {
+    const d = new Date(date)
+    return d.getHours() * 60 + d.getMinutes()
+  }
+}
+
+function timeZoneDateKey(date, timeZone) {
+  if (!date) return null
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date))
+  } catch {
+    return new Date(date).toISOString().slice(0, 10)
+  }
+}
+
+/**
+ * Canonical attendance interpretation. Server-stored values win when
+ * present (late_minutes / early_departure_minutes / status), otherwise
+ * the state is derived from the record times against the DB schedule.
+ *
+ * @param {object|null} record attendance_records row
+ * @param {{workStartTime?:string, workEndTime?:string, graceMinutes?:number, timezone?:string}} schedule
+ */
+export function calculateAttendanceState(record, schedule = {}) {
+  const timezone = schedule.timezone || DEFAULT_ATTENDANCE_TIMEZONE
+  const startMin = parseHHMM(schedule.workStartTime || '08:00') ?? 480
+  const endMin = parseHHMM(schedule.workEndTime || '17:00') ?? 1020
+  const grace = Number.isFinite(schedule.graceMinutes) ? schedule.graceMinutes : 15
+
+  const base = {
+    state: 'not_clocked_in',
+    label: 'Not clocked in',
+    tone: 'neutral',
+    isLate: false,
+    isEarlyExit: false,
+    lateMinutes: 0,
+    earlyMinutes: 0,
+    scheduledStartMinutes: startMin,
+    scheduledEndMinutes: endMin,
+    graceMinutes: grace,
+    timezone,
+    clockInAt: record?.clock_in || null,
+    clockOutAt: record?.clock_out || null,
+  }
+  if (!record || !record.clock_in) return base
+
+  const derivedLate = Math.max(0, (timeZoneMinutes(record.clock_in, timezone) ?? startMin) - (startMin + grace))
+  const lateMinutes = Number.isFinite(record.late_minutes) && record.late_minutes != null ? record.late_minutes : derivedLate
+
+  if (!record.clock_out) {
+    return {
+      ...base,
+      state: lateMinutes > 0 ? 'working_late' : 'working_on_time',
+      label: lateMinutes > 0 ? `Working — late by ${lateMinutes}m` : 'Working — on time',
+      tone: lateMinutes > 0 ? 'warn' : 'ok',
+      isLate: lateMinutes > 0,
+      lateMinutes,
+    }
+  }
+
+  const derivedEarly = Math.max(0, endMin - (timeZoneMinutes(record.clock_out, timezone) ?? endMin))
+  const earlyMinutes = Number.isFinite(record.early_departure_minutes) && record.early_departure_minutes != null
+    ? record.early_departure_minutes
+    : derivedEarly
+
+  if (lateMinutes > 0) {
+    return {
+      ...base,
+      state: 'late',
+      label: `Clocked out — late by ${lateMinutes}m`,
+      tone: 'warn',
+      isLate: true,
+      isEarlyExit: earlyMinutes > 0,
+      lateMinutes,
+      earlyMinutes,
+    }
+  }
+  if (earlyMinutes > 0) {
+    return {
+      ...base,
+      state: 'early_exit',
+      label: `Left early — ${earlyMinutes}m before close`,
+      tone: 'warn',
+      isEarlyExit: true,
+      lateMinutes,
+      earlyMinutes,
+    }
+  }
+  return {
+    ...base,
+    state: 'on_time',
+    label: 'Clocked out on time',
+    tone: 'ok',
+    lateMinutes,
+    earlyMinutes,
+  }
+}
 
 async function myEmployeeId() {
   const { data: { user } } = await supabase.auth.getUser()
@@ -51,6 +181,16 @@ export function getPosition() {
   })
 }
 
+/**
+ * Map server RPC error prefixes to clean, user-facing messages.
+ */
+export function normalizeAttendanceError(message) {
+  const msg = message || 'Attendance action failed. Please try again.'
+  if (msg.startsWith('OUTSIDE_GEOFENCE:')) return msg.replace('OUTSIDE_GEOFENCE:', '')
+  if (msg.startsWith('LOCATION_REQUIRED:')) return msg.replace('LOCATION_REQUIRED:', '')
+  return msg
+}
+
 export const attendanceService = {
   async getMyEmployee() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -64,8 +204,43 @@ export const attendanceService = {
     return data?.[0] || null
   },
 
+  /**
+   * Platform attendance policy + schedule. Distinguishes "policy requires
+   * GPS" from "GPS unavailable". Cached per session unless {force:true}.
+   */
+  async getAttendanceRequirements({ force = false } = {}) {
+    if (!force && _requirementsCache) return _requirementsCache
+    const { data, error } = await supabase.rpc('get_attendance_requirements')
+    if (error) throw error
+    const req = {
+      requireGpsClockIn: data?.require_gps_clock_in !== false,
+      requireGpsClockOut: data?.require_gps_clock_out !== false,
+      geofenceEnabled: data?.geofence_enabled !== false,
+      lateThresholdMinutes: data?.late_threshold_minutes ?? 15,
+      earlyDepartureThresholdMinutes: data?.early_departure_threshold_minutes ?? 30,
+      defaultWorkStartTime: data?.default_work_start_time || '08:00',
+      defaultWorkEndTime: data?.default_work_end_time || '17:00',
+      defaultGracePeriodMinutes: data?.default_grace_period_minutes ?? 15,
+      appTimezone: data?.app_timezone || DEFAULT_ATTENDANCE_TIMEZONE,
+    }
+    _requirementsCache = req
+    return req
+  },
+
+  /** Build the canonical schedule object for calculateAttendanceState(). */
+  scheduleFor(employee, requirements) {
+    const branch = employee?.branches
+    return {
+      workStartTime: branch?.work_start_time || requirements?.defaultWorkStartTime || '08:00',
+      workEndTime: branch?.work_end_time || requirements?.defaultWorkEndTime || '17:00',
+      graceMinutes: branch?.grace_period_minutes ?? requirements?.defaultGracePeriodMinutes ?? 15,
+      timezone: requirements?.appTimezone || DEFAULT_ATTENDANCE_TIMEZONE,
+    }
+  },
+
   async getToday(employeeId) {
-    const today = new Date().toISOString().slice(0, 10)
+    const { appTimezone } = await this.getAttendanceRequirements()
+    const today = timeZoneDateKey(new Date(), appTimezone)
     const { data, error } = await supabase
       .from('attendance_records')
       .select('*')
@@ -91,24 +266,22 @@ export const attendanceService = {
   },
 
   /**
-   * Clock in with server-side geofence validation.
-   * @param {{ lat: number, lng: number, accuracy: number }} geo
+   * Clock in. GPS is requested only when platform policy requires it; the
+   * server re-checks the policy and applies the branch schedule/timezone.
+   * @param {{ lat: number, lng: number, accuracy: number }=} geo optional
    */
   async clockIn(geo) {
-    if (!geo) throw new Error('Location is required to clock in. Please enable location access.')
-    const { data, error } = await supabase.rpc('clock_in_secure', {
-      p_lat: geo.lat,
-      p_lng: geo.lng,
-      p_accuracy: geo.accuracy || null,
-    })
-    if (error) {
-      // Check for geofence error with custom prefix
-      const msg = error.message || ''
-      if (msg.startsWith('OUTSIDE_GEOFENCE:')) {
-        throw new Error(msg.replace('OUTSIDE_GEOFENCE:', ''))
-      }
-      throw new Error(msg)
+    const req = await this.getAttendanceRequirements()
+    let coords = geo || null
+    if (req.requireGpsClockIn && !coords) {
+      coords = await getPosition()
     }
+    const { data, error } = await supabase.rpc('clock_in_secure', {
+      p_lat: coords?.lat ?? null,
+      p_lng: coords?.lng ?? null,
+      p_accuracy: coords?.accuracy ?? null,
+    })
+    if (error) throw new Error(normalizeAttendanceError(error.message))
     logAction({ action: 'ATTENDANCE_CLOCK_IN', entityType: 'AttendanceRecord', entityId: data.attendance_id, details: 'Clock in via geofence RPC' })
     // Send notification
     try {
@@ -128,25 +301,24 @@ export const attendanceService = {
   },
 
   /**
-   * Clock out with server-side geofence validation.
+   * Clock out — a server-side UPDATE of the open session (never an insert,
+   * so the status CHECK cannot fire and duplicates are impossible).
    * @param {string} attendanceId
-   * @param {{ lat: number, lng: number, accuracy: number }} geo
+   * @param {{ lat: number, lng: number, accuracy: number }=} geo optional
    */
   async clockOut(attendanceId, geo) {
-    if (!geo) throw new Error('Location is required to clock out. Please enable location access.')
+    const req = await this.getAttendanceRequirements()
+    let coords = geo || null
+    if (req.requireGpsClockOut && !coords) {
+      coords = await getPosition()
+    }
     const { data, error } = await supabase.rpc('clock_out_secure', {
       p_attendance_id: attendanceId,
-      p_lat: geo.lat,
-      p_lng: geo.lng,
-      p_accuracy: geo.accuracy || null,
+      p_lat: coords?.lat ?? null,
+      p_lng: coords?.lng ?? null,
+      p_accuracy: coords?.accuracy ?? null,
     })
-    if (error) {
-      const msg = error.message || ''
-      if (msg.startsWith('OUTSIDE_GEOFENCE:')) {
-        throw new Error(msg.replace('OUTSIDE_GEOFENCE:', ''))
-      }
-      throw new Error(msg)
-    }
+    if (error) throw new Error(normalizeAttendanceError(error.message))
     logAction({ action: 'ATTENDANCE_CLOCK_OUT', entityType: 'AttendanceRecord', entityId: attendanceId, details: 'Clock out via geofence RPC' })
     // Send notification
     try {
