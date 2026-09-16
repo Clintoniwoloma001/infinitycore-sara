@@ -4,7 +4,7 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  AlertTriangle, Award, BadgeCheck, BarChart3, Briefcase, Building2, Calculator,
+  AlertTriangle, Award, BadgeCheck, BarChart3, BrainCircuit, Briefcase, Building2, Calculator,
   ChevronDown, ChevronRight, Download, Filter, LayoutDashboard, Loader2,
   MapPin, Plus, Printer, RefreshCw, RotateCcw, Target, Trash2, TrendingUp, Users, X,
 } from 'lucide-react'

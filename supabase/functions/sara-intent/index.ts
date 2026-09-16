@@ -32,10 +32,16 @@ const ALL_INTENTS = [...new Set([...READ_INTENTS, ...WRITE_INTENTS, 'HELP', 'UNK
 const WRITE_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'hr_manager', 'hr_officer']
 const LOAN_READ_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'operations_manager', 'loan_officer', 'relationship_manager']
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
   })
 }
 
@@ -70,6 +76,10 @@ function sanitize(raw) {
 }
 
 Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: CORS_HEADERS })
+  }
+
   const authHeader = req.headers.get('Authorization') || ''
   if (!authHeader.startsWith('Bearer ')) return json({ error: 'unauthorized' }, 401)
 

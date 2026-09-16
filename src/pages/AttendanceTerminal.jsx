@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Fingerprint, Loader2, Check, X, Clock, MapPin, ShieldCheck } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { ArrowLeft, Fingerprint, Loader2, Check, X, Clock, MapPin, ShieldCheck } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { biometricService } from '../services/biometricService'
 import { normalizeEmployeeId, canonicalEmployeeId } from '../utils/employeeId'
@@ -16,8 +17,10 @@ import { normalizeEmployeeId, canonicalEmployeeId } from '../utils/employeeId'
 // against the employee's UUID (never a duplicate).
 // ============================================================
 export default function AttendanceTerminal() {
+  const navigate = useNavigate()
   const [devices, setDevices] = useState([])
   const [selectedDevice, setSelectedDevice] = useState(null)
+  const [geofences, setGeofences] = useState([])
   const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
@@ -34,10 +37,14 @@ export default function AttendanceTerminal() {
   useEffect(() => {
     const load = async () => {
       try {
-        const devs = await attendanceEngineService.listDevices()
+        const [devs, geos] = await Promise.all([
+          attendanceEngineService.listDevices(),
+          attendanceEngineService.listGeofences(),
+        ])
         const terminals = devs.filter((d) => d.device_type === 'attendance_terminal' && d.status === 'active')
         setDevices(terminals)
         if (terminals.length > 0) setSelectedDevice(terminals[0])
+        setGeofences(geos.filter((g) => g.active))
       } catch (e) {
         setError(e?.message || 'Failed to load terminal data')
       }
@@ -154,6 +161,14 @@ export default function AttendanceTerminal() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center p-4">
       <div className="max-w-md w-full">
+        {/* Back navigation */}
+        <button
+          onClick={() => navigate(-1)}
+          className="inline-flex items-center gap-1.5 text-sm text-white/50 hover:text-white transition-colors mb-4"
+        >
+          <ArrowLeft className="w-4 h-4" /> Back
+        </button>
+
         {/* Terminal Header */}
         <div className="text-center mb-8">
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#009944] to-[#007a36] flex items-center justify-center mx-auto mb-4 shadow-lg">
@@ -290,11 +305,18 @@ export default function AttendanceTerminal() {
         )}
 
         {/* Status */}
-        <div className="mt-6 text-center">
+        <div className="mt-6 text-center space-y-1">
           {selectedDevice ? (
-            <p className="text-xs text-white/40 flex items-center justify-center gap-1.5">
-              <MapPin className="w-3 h-3" /> {selectedDevice.device_name} · {selectedDevice.branch_id || 'No branch'}
-            </p>
+            <>
+              <p className="text-xs text-white/40 flex items-center justify-center gap-1.5">
+                <MapPin className="w-3 h-3" /> {selectedDevice.device_name} · {selectedDevice.branch_id || 'No branch'}
+              </p>
+              <p className="text-xs text-white/30 flex items-center justify-center gap-1.5">
+                {geofences.length > 0
+                  ? `${geofences.length} authorized attendance location${geofences.length > 1 ? 's' : ''}: ${geofences.slice(0, 3).map((g) => g.name).join(', ')}${geofences.length > 3 ? '…' : ''}`
+                  : 'No active attendance locations configured. Add them in Attendance Settings → Geofences.'}
+              </p>
+            </>
           ) : (
             <p className="text-xs text-amber-400/60">No active terminal device registered. Register a terminal in Settings → Devices.</p>
           )}

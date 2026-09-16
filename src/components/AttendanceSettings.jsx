@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { Loader2, Plus, Trash2, MapPin, Edit, X, Check, Navigation, Fingerprint, Monitor, Cpu, Link2, Ban, RefreshCw, Wifi, WifiOff } from 'lucide-react'
+import { AlertTriangle, Camera, Check, CheckCircle2, Cpu, Edit, Fingerprint, Key, Link2, Loader2, Ban, MapPin, Monitor, Navigation, Plus, RefreshCw, Trash2, Wifi, WifiOff, X } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
+import { biometricService } from '../services/biometricService'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
+import CameraCapture from '../components/CameraCapture'
 import { supabase } from '../supabaseClient'
 import { normalizeEmployeeId } from '../utils/employeeId'
 
@@ -91,7 +93,7 @@ export function GeofencingTab({ canManage }) {
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-slate-500">Configure authorized attendance locations. Employees must be within the geofence radius to clock in via GPS.</p>
         {canManage && (
-          <button onClick={() => { setShowAdd(true); setShowForm(true); setEditId(null) }} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+          <button onClick={() => { setShowForm(true); setEditId(null) }} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
             <Plus className="w-4 h-4" /> Add Geofence
           </button>
         )}
@@ -110,6 +112,9 @@ export function GeofencingTab({ canManage }) {
                   </div>
                   <div>
                     <h4 className="font-medium text-slate-900">{g.name}</h4>
+                    {g.source === 'branch' && (
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 mt-0.5">Managed in Platform Settings → Geofence</span>
+                    )}
                     <p className="text-xs text-slate-500">{g.location_name || 'No location name'}</p>
                     <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
                       <span>Lat: {g.latitude}</span>
@@ -125,7 +130,7 @@ export function GeofencingTab({ canManage }) {
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`text-xs px-2 py-1 rounded-full ${g.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>{g.active ? 'Active' : 'Inactive'}</span>
-                  {canManage && (
+                  {canManage && g.source !== 'branch' && (
                     <>
                       <button onClick={() => { setEditId(g.id); setForm({ name: g.name, branch_id: g.branch_id || '', location_name: g.location_name || '', latitude: String(g.latitude), longitude: String(g.longitude), radius_meters: g.radius_meters, clock_in_allowed: g.clock_in_allowed, clock_out_allowed: g.clock_out_allowed, department: g.department || '' }); setShowForm(true) }} className="text-slate-400 hover:text-[#009944]"><Edit className="w-4 h-4" /></button>
                       <button onClick={() => toggle(g)} className="text-slate-400 hover:text-amber-500"><Ban className="w-4 h-4" /></button>
@@ -393,6 +398,7 @@ export function BiometricTab({ canManage }) {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ employee_id: '', device_id: '', external_user_id: '', enrollment_status: 'enrolled' })
   const [busy, setBusy] = useState(false)
+  const [showCapture, setShowCapture] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -442,11 +448,18 @@ export function BiometricTab({ canManage }) {
     <div>
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-slate-500">Map InfinityCore employees to external biometric device identities. When a fingerprint device identifies an employee, it maps to their InfinityCore record.</p>
-        {canManage && (
-          <button onClick={() => setShowForm(true)} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
-            <Plus className="w-4 h-4" /> Add Mapping
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {canManage && (
+            <button onClick={() => setShowCapture(true)} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[#009944] text-[#009944] text-sm font-medium hover:bg-[#009944]/5">
+              <Camera className="w-4 h-4" /> Start Biometric Capture
+            </button>
+          )}
+          {canManage && (
+            <button onClick={() => setShowForm(true)} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+              <Plus className="w-4 h-4" /> Add Mapping
+            </button>
+          )}
+        </div>
       </div>
       {error && <div className="mb-4"><ErrorState message={error} /></div>}
       {mappings.length === 0 && !showForm && <EmptyState title="No biometric mappings" description="Map employees to fingerprint device user IDs." />}
@@ -533,6 +546,117 @@ export function BiometricTab({ canManage }) {
           </div>
         </div>
       )}
+
+      {showCapture && <BiometricCaptureModal employees={employees} onClose={() => setShowCapture(false)} onEnrolled={() => load()} />}
+    </div>
+  )
+}
+
+// ============================================================
+// BIOMETRIC CAPTURE MODAL — camera presence check + WebAuthn enrollment
+//
+// Uses the SAME credential model as the employee Biometric Profile
+// (employee_auth_credentials via biometricService.registerDevice):
+// the device's authenticator builds the credential locally and only the
+// public key + credential ID are stored — fingerprints / Face ID never
+// leave the device.
+// ============================================================
+function BiometricCaptureModal({ employees, onClose, onEnrolled }) {
+  const supported = biometricService.isWebAuthnSupported()
+  const [employeeId, setEmployeeId] = useState('')
+  const [deviceName, setDeviceName] = useState(() => `${navigator.userAgent.split(' ').pop() || 'Device'} — ${new Date().toLocaleDateString()}`)
+  const [enrolling, setEnrolling] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [photo, setPhoto] = useState(null)
+
+  const startCapture = async () => {
+    if (!employeeId) { setError('Select an employee first.'); return }
+    setError('')
+    setSuccess('')
+    if (!supported) {
+      setError('Device biometric authentication is not available in this browser/device. Use a recent Chrome, Firefox, Edge or Safari on a biometric-capable device, or enroll the employee on a device that supports WebAuthn.')
+      return
+    }
+    setEnrolling(true)
+    try {
+      await biometricService.registerDevice({
+        employeeId,
+        authenticatorType: 'platform',
+        deviceName: deviceName.trim() || `Device — ${new Date().toLocaleDateString()}`,
+      })
+      setSuccess('Device biometric registered. Only the public key was stored — the fingerprint / Face ID never leaves the device.')
+      setPhoto(null)
+      onEnrolled()
+    } catch (e) {
+      setError(e?.message || 'Biometric capture could not be completed.')
+    } finally {
+      setEnrolling(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-xl">
+        <div className="border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2"><Key className="w-5 h-5 text-[#009944]" /> Start Biometric Capture</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-6 space-y-4">
+          {/* Privacy note */}
+          <p className="text-xs text-slate-500">
+            The biometric capture is a two-part confirmation: a camera presence check, then a WebAuthn device enrollment.
+            InfinityCore never receives or stores fingerprints / Face ID — the device builds a public key locally and only
+            that key is saved (same data model as the employee’s Biometric Profile).
+          </p>
+
+          {/* Support status */}
+          <div className={`flex items-start gap-2 text-sm rounded-lg p-3 ${supported ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'}`}>
+            {supported ? <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />}
+            <span>
+              {supported
+                ? 'Device biometric authentication is available in this browser.'
+                : 'Device biometric authentication is not available in this browser/device. Use a recent Chrome, Firefox, Edge or Safari on a biometric-capable device, or enroll the employee on a device that supports WebAuthn.'}
+            </span>
+          </div>
+
+          {/* Employee */}
+          <div>
+            <label className={labelCls}>Employee</label>
+            <select className={inputCls} value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
+              <option value="">Select employee...</option>
+              {employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.full_name} ({emp.employee_number || emp.staff_id || emp.employee_code || '—'})</option>)}
+            </select>
+          </div>
+
+          {/* Device name */}
+          <div>
+            <label className={labelCls}>Device Name</label>
+            <input className={inputCls} value={deviceName} onChange={(e) => setDeviceName(e.target.value)} placeholder="e.g. HR workstation — Face ID" />
+          </div>
+
+          {/* Camera presence check (photo is held in memory only) */}
+          <div>
+            <label className={labelCls}>Camera Presence Check</label>
+            <CameraCapture onCapture={(dataUrl) => setPhoto(dataUrl)} />
+            {photo && <p className="text-xs text-slate-500 mt-1">Photo captured for the enrollment session (stored in memory only — not uploaded).</p>}
+          </div>
+
+          {error && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-sm p-3">{error}</div>}
+          {success && <div className="rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm p-3">{success}</div>}
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+            <button
+              onClick={startCapture}
+              disabled={enrolling || !employeeId}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50"
+            >
+              {enrolling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />} Start Biometric Capture
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

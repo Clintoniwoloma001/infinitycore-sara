@@ -19,13 +19,48 @@ function haversine(lat1, lng1, lat2, lng2) {
 
 export const attendanceEngineService = {
   // ---- GEOFENCES ----
+  // Returns attendance geofences PLUS branch-based geofences (configured in
+  // Platform Settings → Geofence / branches table). Branch geofences are
+  // surfaced read-only so a location saved there appears in every
+  // "configured attendance locations" list and in the Attendance Terminal.
   async listGeofences() {
-    const { data, error } = await supabase
+    const geoRes = await supabase
       .from('attendance_geofences')
       .select('*')
       .order('created_at', { ascending: false })
-    if (error) throw error
-    return data || []
+    if (geoRes.error) throw geoRes.error
+
+    let branchData = []
+    try {
+      const branchRes = await supabase
+        .from('branches')
+        .select('id, branch_name, branch_code, latitude, longitude, geofence_radius, geofence_active, location')
+        .order('branch_name', { ascending: true })
+      if (!branchRes.error) branchData = branchRes.data || []
+    } catch {
+      branchData = []
+    }
+
+    const attendanceGeofences = (geoRes.data || []).map((g) => ({ ...g, source: 'attendance' }))
+
+    const branchGeofences = branchData
+      .filter((b) => b.latitude != null && b.longitude != null)
+      .map((b) => ({
+        id: `branch-${b.id}`,
+        name: b.branch_name,
+        location_name: b.location || b.branch_name,
+        latitude: b.latitude,
+        longitude: b.longitude,
+        radius_meters: b.geofence_radius || 150,
+        active: b.geofence_active !== false,
+        clock_in_allowed: true,
+        clock_out_allowed: true,
+        source: 'branch',
+        branchId: b.id,
+        created_at: null,
+      }))
+
+    return [...attendanceGeofences, ...branchGeofences]
   },
 
   async createGeofence(payload) {

@@ -72,6 +72,25 @@ export default function HRDashboard() {
   const activeTargets = targets.filter((t) => t.status === 'active').length
   const achievedTargets = targets.filter((t) => t.status === 'achieved').length
 
+  // Workforce / hire-exit metrics — derived from the employees master and,
+  // as a fallback when the employees list is empty, from the server-side
+  // hr_metrics_view. No figures are fabricated.
+  const activeEmployees = employees.filter((e) => e.employment_status && e.employment_status !== 'terminated')
+  const terminatedEmployees = employees.filter((e) => e.employment_status === 'terminated')
+  const totalEmployees = employees.length || hrMetrics?.total_employees || 0
+  const monthKeyNow = new Date().toISOString().slice(0, 7)
+  const hiredThisMonth = employees.filter((e) => e.hire_date && String(e.hire_date).slice(0, 7) === monthKeyNow)
+  const terminatedThisMonth = employees.filter((e) => e.employment_status === 'terminated' && e.updated_at && String(e.updated_at).slice(0, 7) === monthKeyNow)
+  const activeCount = activeEmployees.length || hrMetrics?.active_employees || 0
+  const hiredCount = hiredThisMonth.length || hrMetrics?.hired_this_month || 0
+  const termThisCount = terminatedThisMonth.length || hrMetrics?.terminated_this_month || 0
+  const termTotalCount = terminatedEmployees.length || hrMetrics?.terminated_employees || 0
+  const hireRate = totalEmployees ? Math.round((hiredCount / totalEmployees) * 100) : 0
+  const fireRate = totalEmployees ? Math.round((termThisCount / totalEmployees) * 100) : 0
+  const turnoverRate = totalEmployees ? Math.round((termTotalCount / totalEmployees) * 100) : 0
+  // No recruitment-spend source feeds this dashboard — show an honest "—".
+  const costPerHire = null
+
   // SARA interview intelligence metrics
   const tomorrowStr = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
   const interviewsTomorrow = interviews.filter((i) => (i.scheduled_date || '').slice(0, 10) === tomorrowStr).length
@@ -126,17 +145,17 @@ export default function HRDashboard() {
       <div className="mb-6">
         <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-[#009944]" /> Key HR Metrics</h3>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard icon={UserPlus} label="Hire Rate" value={`${hireRate}%`} trend={`${hiredThisMonth.length} hired this month`} accent="#009944" />
-          <MetricCard icon={UserMinus} label="Fire / Exit Rate" value={`${fireRate}%`} trend={`${terminatedThisMonth.length} exits this month`} accent="#ef4444" />
-          <MetricCard icon={DollarSign} label="Cost Per Hire" value={`₦${costPerHire}`} trend="Estimated recruitment cost" accent="#f59e0b" />
-          <MetricCard icon={Activity} label="Turnover Rate" value={`${turnoverRate}%`} trend={`${terminatedEmployees.length} total exits`} accent="#6366f1" />
+          <MetricCard icon={UserPlus} label="Hire Rate" value={`${hireRate}%`} trend={`${hiredCount} hired this month`} accent="#009944" />
+          <MetricCard icon={UserMinus} label="Fire / Exit Rate" value={`${fireRate}%`} trend={`${termThisCount} exits this month`} accent="#ef4444" />
+          <MetricCard icon={DollarSign} label="Cost Per Hire" value={costPerHire == null ? '—' : `₦${Number(costPerHire).toLocaleString()}`} trend="No recruitment cost data" accent="#f59e0b" />
+          <MetricCard icon={Activity} label="Turnover Rate" value={`${turnoverRate}%`} trend={`${termTotalCount} total exits`} accent="#6366f1" />
         </div>
       </div>
 
       {/* WORKFORCE STATS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-        <Stat icon={Users} label="Total Employees" value={employees.length} accent="#009944" />
-        <Stat icon={Users} label="Active Employees" value={activeEmployees.length} accent="#0ea5e9" />
+        <Stat icon={Users} label="Total Employees" value={totalEmployees} accent="#009944" />
+        <Stat icon={Users} label="Active Employees" value={activeCount} accent="#0ea5e9" />
         <Stat icon={BriefcaseBusiness} label="Pending Recruitment" value={candidates.filter((c) => ['received', 'screening', 'shortlisted'].includes(c.application_status)).length} accent="#f59e0b" />
         <Stat icon={CalendarDays} label="Interviews" value={interviews.length} accent="#6366f1" />
         <Stat icon={CalendarDays} label="Pending Leave" value={leave.filter((l) => l.status === 'pending').length} accent="#f43f5e" />

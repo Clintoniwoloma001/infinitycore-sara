@@ -3,7 +3,8 @@ import { supabase } from '../supabaseClient'
 import { logAction } from '../services/supabaseService'
 import { useAuth } from '../hooks/useAuth'
 import { ROLE_METADATA, ROLES, assignableRoles } from '../constants/roles'
-import { Shield, UserPlus, CheckCircle2, XCircle, Loader2, Search, UserCog, Power, PowerOff, Mail, Phone, Building2, Calendar, Eye, X } from 'lucide-react'
+import { userProvisioningService } from '../services/userProvisioningService'
+import { Shield, UserPlus, CheckCircle2, XCircle, Loader2, Search, UserCog, Power, PowerOff, Mail, Phone, Building2, Calendar, Eye, X, MailPlus, Send, UserCheck, Clock, Layers } from 'lucide-react'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -38,17 +39,24 @@ export default function Users() {
   const [tab, setTab] = useState('all')
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
+  const [showProvision, setShowProvision] = useState(false)
   const [reviewUser, setReviewUser] = useState(null)
   const [creating, setCreating] = useState(false)
+  const [provisionStats, setProvisionStats] = useState({ eligibleWithoutAccounts: 0, alreadyLinked: 0, invited: 0, pendingApproval: 0 })
   const myAssignableRoles = assignableRoles(actorRole)
 
   const load = useCallback(async () => {
     setLoading(true)
     setErr(null)
     try {
-      const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
+      const [usersRes, statsRes] = await Promise.all([
+        supabase.from('profiles').select('*').order('created_at', { ascending: false }),
+        userProvisioningService.getAccountSummary().catch(() => null),
+      ])
+      const { data, error } = usersRes
       if (error) throw error
       setUsers(data || [])
+      if (statsRes) setProvisionStats(statsRes)
     } catch (e) {
       setErr(e?.message || 'Failed to load users')
     } finally {
@@ -170,9 +178,34 @@ export default function Users() {
           <h2 className="text-2xl font-semibold text-slate-900">User Management</h2>
           <p className="text-sm text-slate-500 mt-1">Approve registrations, assign roles, and manage user access.</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
-          <UserPlus className="w-4 h-4" /> Create User
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowProvision(true)} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-[#009944] text-[#009944] text-sm font-medium hover:bg-[#009944]/5">
+            <MailPlus className="w-4 h-4" /> Create Users from Employees
+          </button>
+          <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+            <UserPlus className="w-4 h-4" /> Create User
+          </button>
+        </div>
+      </div>
+
+      {/* Provisioning summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-400 uppercase"><Layers className="w-3.5 h-3.5" /> Employees without accounts</div>
+          <p className="text-2xl font-semibold text-slate-900 mt-1">{provisionStats.eligibleWithoutAccounts || 0}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-400 uppercase"><Mail className="w-3.5 h-3.5" /> Invited</div>
+          <p className="text-2xl font-semibold text-slate-900 mt-1">{provisionStats.invited || 0}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-400 uppercase"><Clock className="w-3.5 h-3.5" /> Pending approval</div>
+          <p className="text-2xl font-semibold text-slate-900 mt-1">{provisionStats.pendingApproval || 0}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-400 uppercase"><UserCheck className="w-3.5 h-3.5" /> Invites to resend</div>
+          <p className="text-2xl font-semibold text-slate-900 mt-1">{provisionStats.alreadyLinked || 0}</p>
+        </div>
       </div>
 
       {err && <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-sm p-3">{err}</div>}
@@ -288,6 +321,9 @@ export default function Users() {
 
       {/* Create User Modal */}
       {showCreate && <CreateUserModal onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); load() }} actorRole={actorRole} showToast={showToast} />}
+
+      {/* Create Users from Employees Modal */}
+      {showProvision && <EmployeeProvisioningModal onClose={() => setShowProvision(false)} onProvisioned={() => load()} actorRole={actorRole} showToast={showToast} />}
 
       {/* Review User Modal */}
       {reviewUser && <ReviewUserModal user={reviewUser} onClose={() => setReviewUser(null)} onApprove={approveUser} onReject={rejectUser} busyId={busyId} actorRole={actorRole} />}
@@ -456,6 +492,178 @@ function ReviewUserModal({ user, onClose, onApprove, onReject, busyId, actorRole
             </div>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
+// EMPLOYEE PROVISIONING MODAL — single/bulk "Create Users from
+// Employees". Reads eligible employees (no user_id, has email),
+// sends through the `invite-employees` Edge Function which does the
+// server-side linking with the service-role key.
+// ============================================================
+function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToast }) {
+  const [employees, setEmployees] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState({})
+  const [role, setRole] = useState('staff')
+  const [reason, setReason] = useState('')
+  const [sending, setSending] = useState(false)
+  const [results, setResults] = useState(null)
+  const [error, setError] = useState('')
+  const myRoles = assignableRoles(actorRole)
+
+  const load = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      setEmployees(await userProvisioningService.getEligibleEmployees())
+    } catch (e) {
+      setError(e?.message || 'Failed to load employees. The employees table may not be readable.')
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load() }, [])
+
+  const q = search.trim().toLowerCase()
+  const filtered = employees.filter((e) =>
+    !q ||
+    (e.full_name || '').toLowerCase().includes(q) ||
+    (e.email || '').toLowerCase().includes(q) ||
+    (e.department || '').toLowerCase().includes(q)
+  )
+
+  const allSelected = filtered.length > 0 && filtered.every((e) => selected[e.id])
+  const selectedList = employees.filter((e) => selected[e.id])
+  const count = selectedList.length
+
+  const toggle = (id) => setSelected((s) => ({ ...s, [id]: !s[id] }))
+  const toggleAll = () => {
+    const next = { ...selected }
+    filtered.forEach((e) => { if (allSelected) delete next[e.id]; else next[e.id] = true })
+    setSelected(next)
+  }
+
+  const send = async () => {
+    if (count === 0) return
+    setSending(true)
+    setError('')
+    setResults(null)
+    try {
+      const res = await userProvisioningService.inviteEmployees(selectedList, { role, reason })
+      const list = res?.results || []
+      setResults({ list, summary: userProvisioningService.summarizeResults(list) })
+      setSelected({})
+      const ok = list.filter((r) => r.result === 'SUCCESS').length
+      showToast(ok ? `${ok} invitation(s) sent` : 'Invitations processed — check results below')
+      if (ok) onProvisioned()
+    } catch (e) {
+      setError(e?.message || `Invitation request failed. Confirm the invite-employees Edge Function is deployed (HTTP ${e?.context?.status || e?.status || 'unknown'}).`)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+        <div className="border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2"><MailPlus className="w-5 h-5 text-[#009944]" /> Create Users from Employees</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <p className="text-sm text-slate-500">
+            Select employees from the staff record (active, with an email, and no linked InfinityCore account — so invites are never duplicated).
+            Account creation happens server-side; each employee then receives a setup invitation.
+          </p>
+
+          {error && <div className="rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-sm p-3">{error}</div>}
+
+          {results && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 mb-3"><Send className="w-4 h-4 text-[#009944]" /> Invitation results</div>
+              <div className="flex flex-wrap gap-2 mb-3 text-xs">
+                {Object.entries(results.summary).filter(([, n]) => n > 0).map(([k, n]) => {
+                  const meta = userProvisioningService.resultMeta(k)
+                  return <span key={k} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full font-medium ${meta.color}`}>{meta.label} • {n}</span>
+                })}
+              </div>
+              <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+                {results.list.map((r, i) => {
+                  const meta = userProvisioningService.resultMeta(r.result)
+                  return (
+                    <div key={i} className="flex items-center justify-between px-3 py-2 text-sm">
+                      <span className="text-slate-700">{r.employee_name || r.id || r.email || '—'}</span>
+                      <span className={`text-xs font-medium ${meta.color}`}>{meta.label}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Search + select all */}
+          {!results && (
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input className={`${inputCls} pl-9`} placeholder="Search employees..." value={search} onChange={(e) => setSearch(e.target.value)} />
+              </div>
+              {filtered.length > 0 && (
+                <button onClick={toggleAll} className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">
+                  <UserCheck className="w-4 h-4" /> {allSelected ? 'Clear all' : 'Select all'}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Employee list */}
+          {!results && (loading ? (
+            <div className="flex justify-center py-10"><div className="w-8 h-8 border-4 border-slate-200 border-t-[#009944] rounded-full animate-spin" /></div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-10 text-slate-400 text-sm">No eligible employees found (all staff may already have accounts, or the employee list is empty).</div>
+          ) : (
+            <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100 bg-white">
+              {filtered.map((e) => (
+                <div key={e.id} className="flex items-center gap-3 px-4 py-3">
+                  <input type="checkbox" checked={!!selected[e.id]} onChange={() => toggle(e.id)} className="w-4 h-4 accent-[#009944]" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-slate-900 truncate">{e.full_name || '—'}</p>
+                    <p className="text-xs text-slate-400 truncate">
+                      {e.email || 'no email'} {e.department ? `• ${e.department}` : ''} {e.employee_number || e.staff_id || e.employee_code ? `• ${e.employee_number || e.staff_id || e.employee_code}` : ''}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+
+          {/* Assignment + send */}
+          {!results && (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end border-t border-slate-100 pt-4">
+              <div className="sm:w-44">
+                <label className={labelCls}>Default Role</label>
+                <select className={inputCls} value={role} onChange={(e) => setRole(e.target.value)}>
+                  {myRoles.map((r) => <option key={r} value={r}>{ROLE_METADATA[r]?.label || r}</option>)}
+                </select>
+              </div>
+              <div className="flex-1">
+                <label className={labelCls}>Reason (optional, recorded in audit)</label>
+                <input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Phase 2 onboarding — new joiners" />
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+                <button onClick={send} disabled={sending || count === 0} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+                  {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Send Invitations ({count})
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
