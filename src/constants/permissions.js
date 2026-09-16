@@ -82,6 +82,7 @@ export const PERMISSIONS = {
 
   // HR configuration
   HR_CONFIG_MANAGE: 'hr_config.manage',
+  HR_ORG_MANAGE: 'hr.org.manage',
 
   // Team chat
   CHAT_READ: 'chat.read',
@@ -102,4 +103,5 @@ export const PERMISSION_CATEGORIES = {
   performance: 'Performance',
   appraisal: 'Appraisal',
   hr_config: 'HR Configuration',
+  hr_org: 'HR Organisation',
 }

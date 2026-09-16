@@ -26,6 +26,8 @@ import {
   Monitor,
   UserCircle,
   MessageSquare,
+  Network,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { PERMISSIONS } from '../constants/permissions'
 
@@ -54,12 +56,14 @@ export const routeConfig = [
     section: 'Performance',
     items: [
       { label: 'Performance', path: '/performance', icon: TrendingUp, element: 'Performance', permissions: [PERMISSIONS.PERFORMANCE_READ] },
+      { label: 'Performance Settings', path: '/performance-settings', icon: SlidersHorizontal, element: 'PerformanceSettings', permissions: [PERMISSIONS.PERFORMANCE_MANAGE] },
     ],
   },
   {
     section: 'HR',
     items: [
       { label: 'HR Dashboard', path: '/hr-dashboard', icon: BriefcaseBusiness, element: 'HRDashboard', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
+      { label: 'HR Organisation', path: '/hr-organisation', icon: Network, element: 'HROrganisation', permissions: [PERMISSIONS.HR_ORG_MANAGE] },
       { label: 'Recruitment', path: '/recruitment', icon: Users, element: 'Recruitment', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'Interviews', path: '/interviews', icon: CalendarCheck, element: 'Interviews', permissions: [PERMISSIONS.HR_INTERVIEWS_SCHEDULE] },
       { label: 'Assessments', path: '/assessments', icon: ClipboardCheck, element: 'Assessments', permissions: [PERMISSIONS.HR_ASSESSMENTS_CREATE] },

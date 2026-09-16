@@ -192,6 +192,7 @@ export const ROLE_PERMISSIONS = {
     'work.reports.review',
     'work.team.performance',
     'attendance.config.manage',
+    'hr.org.manage',
   ],
   [ROLES.ADMIN]: [
     'customers.read',
@@ -253,6 +254,7 @@ export const ROLE_PERMISSIONS = {
     'work.reports.review',
     'work.team.performance',
     'attendance.config.manage',
+    'hr.org.manage',
   ],
   [ROLES.BRANCH_MANAGER]: [
     'customers.read',
@@ -359,6 +361,7 @@ export const ROLE_PERMISSIONS = {
     'work.plans.manage',
     'work.reports.review',
     'work.team.performance',
+    'hr.org.manage',
   ],
   [ROLES.HR_OFFICER]: [
     'hr.applications.read',

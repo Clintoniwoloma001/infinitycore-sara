@@ -48,6 +48,8 @@ import Performance from './pages/Performance'
 import Reconciliation from './pages/Reconciliation'
 import Settings from './pages/Settings'
 import OnboardingReview from './pages/OnboardingReview'
+import HROrganisation from './pages/HROrganisation'
+import PerformanceSettings from './pages/PerformanceSettings'
 
 const pageComponents = {
   Dashboard,
@@ -84,6 +86,8 @@ const pageComponents = {
   Reconciliation,
   Settings,
   OnboardingReview,
+  HROrganisation,
+  PerformanceSettings,
 }
 
 function Protected({ children }) {
