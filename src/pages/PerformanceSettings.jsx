@@ -32,7 +32,7 @@ export default function PerformanceSettings() {
     try {
       const res = await performanceConfigService.list()
       setData(res)
-      if (!activeCode && res?.sections?.length) setActiveCode(res.sections[0].code)
+      if (!activeCode && (res?.data?.sections || res?.sections)?.length) setActiveCode(res.sections[0].code)
     } catch (e) {
       setError(e?.message || 'Performance configuration is unavailable. Run the phase 26 migration in Supabase, then retry.')
     } finally {
@@ -118,7 +118,7 @@ export default function PerformanceSettings() {
             <div className="grid lg:grid-cols-4 gap-6">
               {/* Section nav */}
               <div className="space-y-2">
-                {data.sections.map((s) => (
+                {(data.sections || []).map((s) => (
                   <button key={s.code} onClick={() => setActiveCode(s.code)}
                     className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium border ${activeSection?.code === s.code ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
                     {s.label}

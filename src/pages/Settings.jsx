@@ -3,6 +3,7 @@ import { Loader2, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState } from '../components/PageStates'
 import { leaveRulesService, LEAVE_TYPE_LABELS, EMPLOYEE_CATEGORIES } from '../services/leaveRulesService'
+import PlatformSettings from './PlatformSettings'
 import { performanceService } from '../services/performanceService'
 import { bankoneImportService } from '../services/bankoneImportService'
 import { GeofencingTab, DevicesTab, BiometricTab, AttendancePolicyTab } from '../components/AttendanceSettings'
@@ -376,6 +377,8 @@ function TransportAllowanceTab({ canManage }) {
           </div>
         </div>
       )}
+    <PlatformSettings />
+
     </div>
   )
 }

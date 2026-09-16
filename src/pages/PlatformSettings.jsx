@@ -15,7 +15,6 @@ const TABS = [
   { id: 'attendance', label: 'Attendance', icon: Shield },
   { id: 'geofence', label: 'Geofence', icon: MapPin },
   { id: 'currency', label: 'Currency', icon: Coins },
-  { id: 'currency', label: 'Currency', icon: Coins },
   { id: 'audit', label: 'Audit Trail', icon: History },
 ]
 

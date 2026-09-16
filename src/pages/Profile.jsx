@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, Camera, CheckCircle2, CreditCard, Download, FileText, GraduationCap, Loader2, Printer, Save, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Camera, CheckCircle2, CreditCard, Download, FileText, GraduationCap, Loader2, Printer, Save, ShieldCheck , Fingerprint } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import { employeeService } from '../services/employeeService'
@@ -188,6 +188,12 @@ export default function Profile() {
                 {loadingCard ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />}
                 My Staff ID Card
               </button>
+<button
+            onClick={() => window.location.hash = '#/biometrics/' + (employee?.id || '')}
+            disabled={!employee}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-[#009944] text-[#009944] text-sm font-medium hover:bg-emerald-50 disabled:opacity-60">
+            <Fingerprint className="w-4 h-4" /> Link Biometrics
+          </button>
               <button onClick={() => setShowPhotos(true)}
                 className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-50">
                 <Camera className="w-4 h-4" /> Manage Photos

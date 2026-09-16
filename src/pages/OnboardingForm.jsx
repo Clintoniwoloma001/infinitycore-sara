@@ -123,6 +123,15 @@ export default function OnboardingForm() {
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
 
+const readAsDataURL = (e, key) => {
+  const file = e.target.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => setForm((f) => ({ ...f, [key]: reader.result }))
+  reader.readAsDataURL(file)
+}
+
+
   useEffect(() => {
     let active = true
     const load = async () => {
@@ -339,9 +348,36 @@ export default function OnboardingForm() {
         <Field label="Email"><input className={inputCls} value={form.fidelity_email || ''} onChange={set('fidelity_email')} type="email" /></Field>
         <Field label="BVN"><input className={inputCls} value={form.fidelity_bvn || ''} onChange={set('fidelity_bvn')} /></Field>
         <Field label="NIN"><input className={inputCls} value={form.fidelity_nin || ''} onChange={set('fidelity_nin')} /></Field>
+
+        <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50/60 p-4 space-y-3">
+          <p className="text-sm font-medium text-slate-700">Upload Fidelity Supplements <span className="text-amber-600 text-xs">(passport, NIN &amp; BVN documents speed HR verification)</span></p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label className="flex flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-300 hover:border-[#009944] px-3 py-4 text-xs text-slate-500 cursor-pointer">
+              {form.fidelity_passport_doc ? <img src={form.fidelity_passport_doc} alt="passport" className="w-14 h-14 object-cover rounded-lg" /> : <span className="text-3xl font-light">+</span>}
+              Passport • {form.fidelity_passport_doc ? 'Uploaded' : 'Upload'}
+              <input type="file" accept="image/*" className="hidden" onChange={(e) => readAsDataURL(e, 'fidelity_passport_doc')} />
+            </label>
+            <label className="flex flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-300 hover:border-[#009944] px-3 py-4 text-xs text-slate-500 cursor-pointer">
+              {form.fidelity_nin_doc ? <img src={form.fidelity_nin_doc} alt="NIN" className="w-14 h-14 object-cover rounded-lg" /> : <span className="text-3xl font-light">+</span>}
+              NIN Slip • {form.fidelity_nin_doc ? 'Uploaded' : 'Upload'}
+              <input type="file" accept="image/*" className="hidden" onChange={(e) => readAsDataURL(e, 'fidelity_nin_doc')} />
+            </label>
+            <label className="flex flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-300 hover:border-[#009944] px-3 py-4 text-xs text-slate-500 cursor-pointer">
+              {form.fidelity_bvn_doc ? <img src={form.fidelity_bvn_doc} alt="BVN" className="w-14 h-14 object-cover rounded-lg" /> : <span className="text-3xl font-light">+</span>}
+              BVN Slip • {form.fidelity_bvn_doc ? 'Uploaded' : 'Upload'}
+              <input type="file" accept="image/*" className="hidden" onChange={(e) => readAsDataURL(e, 'fidelity_bvn_doc')} />
+            </label>
+          </div>
+        </div>
         <div className="sm:col-span-2"><Field label="Address"><input className={inputCls} value={form.fidelity_address || ''} onChange={set('fidelity_address')} /></Field></div>
         <Field label="Signature Date"><input className={inputCls} value={form.fidelity_date || ''} onChange={set('fidelity_date')} type="date" /></Field>
-        <Field label="Signature (data URL)"><input className={inputCls} value={form.fidelity_signature || ''} onChange={set('fidelity_signature')} placeholder="Paste signature data URL if obtained separately" /></Field>
+        <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">Fidelity Signature (draw below)</label>
+              <SignaturePad
+                value={form.fidelity_signature || null}
+                onChange={(dataUrlOrNull) => { setForm((f) => ({ ...f, fidelity_signature: dataUrlOrNull || '' })) }}
+              />
+            </div>
       </div>
     )
     return (

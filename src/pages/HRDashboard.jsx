@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BriefcaseBusiness, CalendarDays, ClipboardCheck, CheckCircle2, Sparkles, Users, Wallet } from 'lucide-react'
+import { Activity, BriefcaseBusiness, CalendarDays, ClipboardCheck, CheckCircle2, DollarSign, Sparkles, TrendingUp, UserMinus, UserPlus, Users, Wallet } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'

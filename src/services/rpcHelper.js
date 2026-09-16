@@ -13,16 +13,16 @@ export async function rpcWithRetry(fn) {
     if (out?.error && isMissing(out.error)) {
       const retried = await fn()
       if (retried?.error) throw retried.error
-      return retried
+      return retried?.data ?? retried
     }
     if (out?.error) throw out.error
-    return out
+    return out?.data ?? out
   } catch (err) {
     if (isMissing(err)) {
       const retried = await fn()
       if (retried?.error && isMissing(retried.error)) throw renamed(retried.error)
       if (retried?.error) throw retried.error
-      return retried
+      return retried?.data ?? retried
     }
     throw err
   }
