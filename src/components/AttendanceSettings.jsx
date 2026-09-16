@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Loader2, Plus, Trash2, MapPin, Edit, X, Check, Navigation, Fingerprint, Monitor, Cpu, Link2, Ban, RefreshCw, Wifi, WifiOff } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
+import { supabase } from '../supabaseClient'
 import { normalizeEmployeeId } from '../utils/employeeId'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'

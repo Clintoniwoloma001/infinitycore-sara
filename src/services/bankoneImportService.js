@@ -29,6 +29,70 @@ export const BANKONE_TARGET_FIELDS = [
   'customer_account_ref',
 ]
 
+// Allowed field data types in the mapping manager.
+export const BANKONE_FIELD_TYPES = ['text', 'number', 'currency', 'date', 'datetime', 'boolean', 'identifier']
+
+// Default per-field metadata (type + classification flags) for known
+// InfinityCore destination fields. These are the recommended defaults that
+// HR/Admin can override per mapping; nothing here blocks new fields.
+export const BANKONE_FIELD_FLAGS = {
+  transaction_reference: { required: true, unique: true, matching: false, performance: false, reconciliation: true },
+  transaction_date: { required: true, unique: false, matching: false, performance: true, reconciliation: true },
+  transaction_time: { required: false, unique: false, matching: false, performance: false, reconciliation: false },
+  staff_identifier: { required: true, unique: false, matching: true, performance: true, reconciliation: true },
+  branch: { required: false, unique: false, matching: false, performance: true, reconciliation: false },
+  transaction_type: { required: true, unique: false, matching: false, performance: true, reconciliation: false },
+  transaction_status: { required: false, unique: false, matching: false, performance: true, reconciliation: true },
+  amount: { required: true, unique: false, matching: false, performance: true, reconciliation: true },
+  channel: { required: false, unique: false, matching: false, performance: false, reconciliation: false },
+  product_service: { required: false, unique: false, matching: false, performance: false, reconciliation: false },
+  reversal_indicator: { required: false, unique: false, matching: false, performance: false, reconciliation: true },
+  original_transaction_reference: { required: false, unique: true, matching: false, performance: false, reconciliation: true },
+  customer_account_ref: { required: false, unique: false, matching: false, performance: false, reconciliation: true },
+}
+
+export const BANKONE_FIELD_TYPES_DEFAULT = {
+  transaction_reference: 'identifier',
+  transaction_date: 'date',
+  transaction_time: 'text',
+  staff_identifier: 'identifier',
+  branch: 'text',
+  transaction_type: 'text',
+  transaction_status: 'text',
+  amount: 'currency',
+  channel: 'text',
+  product_service: 'text',
+  reversal_indicator: 'boolean',
+  original_transaction_reference: 'identifier',
+  customer_account_ref: 'identifier',
+}
+
+// Known BankOne/Excel column aliases used only for template DISCOVERY.
+// Normalized match == collapse spaces/punctuation + lowercase.
+const COLUMN_ALIASES = {
+  transaction_reference: ['transaction_reference', 'transaction reference', 'trans ref', 'trans_ref', 'txn ref', 'txn_ref', 'ref', 'reference', 'transaction id', 'trn ref', 'reference no', 'ref no', 'transaction ref'],
+  transaction_date: ['transaction_date', 'transaction date', 'trans date', 'trans_date', 'date', 'value date', 'posted date', 'txn date'],
+  transaction_time: ['transaction_time', 'transaction time', 'time', 'txn time', 'trans time'],
+  staff_identifier: ['staff_identifier', 'staff id', 'staff code', 'employee', 'emp id', 'employee id', 'emp no', 'staff no', 'officer', 'staff', 'banking officer', 'emp_id'],
+  branch: ['branch', 'branch name', 'branch code', 'bank branch', 'branch_name'],
+  transaction_type: ['transaction_type', 'type', 'txn type', 'trans type', 'transaction type', 'product'],
+  transaction_status: ['transaction_status', 'status', 'txn status', 'trans status', 'transaction status', 'state'],
+  amount: ['amount', 'amt', 'value', 'transaction amount', 'txn amount', 'transaction value', 'amount (ngn)', 'amount(ngn)', 'credit amount', 'debit amount'],
+  channel: ['channel', 'transaction channel', 'channel_code'],
+  product_service: ['product_service', 'product', 'service', 'product name', 'service type', 'product_service_name'],
+  reversal_indicator: ['reversal_indicator', 'reversal', 'is reversal', 'rev ind', 'reverse', 'reversal flag'],
+  original_transaction_reference: ['original_transaction_reference', 'original txn ref', 'original ref', 'orig ref', 'original reference'],
+  customer_account_ref: ['customer_account_ref', 'account', 'account no', 'account number', 'customer account', 'acct no', 'nuban', 'account_no'],
+}
+
+const norm = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+// Build the alias lookup map once at module load.
+const ALIAS_MAP = {}
+Object.entries(COLUMN_ALIASES).forEach(([target, aliases]) => {
+  aliases.forEach((a) => { ALIAS_MAP[norm(a)] = target })
+})
+
 // Valid transaction statuses
 const VALID_STATUSES = [
   'completed', 'failed', 'pending', 'reversed', 'incomplete',
@@ -260,17 +324,122 @@ export const bankoneImportService = {
     return data
   },
 
-  async saveMapping(name, description, mapping, isDefault = false) {
+  async saveMapping(name, description, mapping, isDefault = false, opts = {}) {
     if (isDefault) {
       await supabase.from('bankone_column_mappings').update({ is_default: false }).neq('id', '00000000-0000-0000-0000-000000000000')
     }
     const { data, error } = await supabase
       .from('bankone_column_mappings')
-      .insert({ name, description, mapping, is_default: isDefault, is_active: true })
+      .insert({
+        name,
+        description,
+        mapping,
+        is_default: isDefault,
+        is_active: true,
+        field_metadata: opts.field_metadata || {},
+        version: opts.version || null,
+        created_by: opts.created_by || null,
+      })
       .select()
       .single()
     if (error) throw error
     return data
+  },
+
+  async updateMapping(id, patch) {
+    const { data, error } = await supabase
+      .from('bankone_column_mappings')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  async setDefaultMapping(id) {
+    await supabase.from('bankone_column_mappings').update({ is_default: false }).neq('id', '00000000-0000-0000-0000-000000000000')
+    const { data, error } = await supabase
+      .from('bankone_column_mappings')
+      .update({ is_default: true, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  // Soft-deactivate a mapping. Historical BankOne records/imports are
+  // never touched — this only stops the mapping from being used going forward.
+  async deactivateMapping(id) {
+    const { data, error } = await supabase
+      .from('bankone_column_mappings')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  // ---- Template discovery (does NOT import any transaction data) ----
+  // Reads only the header row of an Excel/CSV/JSON BankOne export and
+  // proposes a mapping. Suggestions are previewed before HR saves them as
+  // a reusable mapping/template. Nothing is written to production tables.
+  async parseTemplate(file) {
+    const parsed = await parseFile(file)
+    const headers = parsed.headers || []
+    const used = {}
+    const suggestions = headers.map((header) => {
+      const key = norm(header)
+      const direct = BANKONE_TARGET_FIELDS.includes(header) ? header : null
+      const target = direct || ALIAS_MAP[key] || null
+      let status = 'unmapped'
+      if (target) {
+        const already = used[target]
+        used[target] = (used[target] || 0) + 1
+        if (already) status = 'ambiguous'
+        else if (norm(target) === key || header === target) status = 'matched'
+        else status = 'suggested'
+      }
+      const meta = target ? (BANKONE_FIELD_FLAGS[target] || {}) : {}
+      return {
+        header,
+        target,
+        type: target ? (BANKONE_FIELD_TYPES_DEFAULT[target] || 'text') : 'text',
+        status,
+        required: !!meta.required,
+        unique: !!meta.unique,
+        matching: !!meta.matching,
+        performance: !!meta.performance,
+        reconciliation: !!meta.reconciliation,
+      }
+    })
+    const missingRequired = BANKONE_TARGET_FIELDS.filter(
+      (t) => (BANKONE_FIELD_FLAGS[t] || {}).required && !suggestions.some((sg) => sg.target === t)
+    )
+    return { headers, suggestions, missingRequired, parsedRowCount: parsed.rows.length }
+  },
+
+  // Produce the two persistence shapes from editable suggestions:
+  //  mapping         = { sourceColumn: targetField }
+  //  field_metadata  = { targetField: { type, required, unique, matching, performance, reconciliation } }
+  fromSuggestions(suggestions) {
+    const mapping = {}
+    const field_metadata = {}
+    suggestions.forEach((sg) => {
+      if (!sg.target) return
+      mapping[sg.header] = sg.target
+      field_metadata[sg.target] = {
+        type: sg.type || 'text',
+        required: !!sg.required,
+        unique: !!sg.unique,
+        matching: !!sg.matching,
+        performance: !!sg.performance,
+        reconciliation: !!sg.reconciliation,
+      }
+    })
+    return { mapping, field_metadata }
   },
 
   // ---- Import Batches ----

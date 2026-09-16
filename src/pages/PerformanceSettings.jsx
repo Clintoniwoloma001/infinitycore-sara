@@ -84,6 +84,21 @@ export default function PerformanceSettings() {
     }
   }
 
+  const resetAll = async () => {
+    if (!window.confirm('Reset ALL performance settings to the InfinityCore bank defaults?\n\nHistorical performance results are NOT touched — this affects future calculations only.')) return
+    setBusyKey('__all__')
+    setError('')
+    try {
+      await performanceConfigService.reset()
+      await load()
+      await loadAudit()
+    } catch (e) {
+      setError(e?.message || 'Reset failed')
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
   const activeSection = data?.sections?.find((s) => s.code === activeCode) || data?.sections?.[0]
 
   return (
@@ -103,7 +118,7 @@ export default function PerformanceSettings() {
 
       {!loading && data && (
         <>
-          <div className="flex gap-2 overflow-x-auto pb-3 mb-5">
+          <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-5">
             <button onClick={() => setTab('items')}
               className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border ${tab === 'items' ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-500 border-slate-200'}`}>
               Configuration
@@ -112,6 +127,15 @@ export default function PerformanceSettings() {
               className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border ${tab === 'audit' ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-500 border-slate-200'}`}>
               <History className="w-3 h-3 inline mr-1" />Change History
             </button>
+            <div className="ml-auto flex items-center gap-2">
+              {canManage && (
+                <button onClick={resetAll} disabled={busyKey === '__all__'}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-rose-200 text-sm font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50">
+                  {busyKey === '__all__' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                  Reset to InfinityCore Defaults
+                </button>
+              )}
+            </div>
           </div>
 
           {tab === 'items' ? (
