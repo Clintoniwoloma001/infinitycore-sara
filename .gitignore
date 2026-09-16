@@ -10,3 +10,10 @@ dist
 .env.local
 .vercel
 .env*
+
+# Playwright
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+e2e/.auth/

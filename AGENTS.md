@@ -43,6 +43,17 @@ credentials arrive; the platform file overrides them (listed last in `env_file:`
   return the app (confirms the preview proxy hostname is accepted).
 - Without valid Supabase credentials the app shows a config/auth error screen.
 
+## E2E browser smoke tests (Playwright)
+- `npm run test:e2e` — starts the Vite dev server on port 4173 and runs
+  `e2e/smoke.spec.js` (always) plus `e2e/authenticated.spec.js` (only with creds).
+- `npm run test:e2e:install` — one-time Chromium download.
+- Authenticated suite is read-only and opt-in via env:
+  `E2E_EMAIL=… E2E_PASSWORD=… npm run test:e2e`.
+  It logs in through the real UI (`e2e/auth.setup.js`) and reuses the session.
+- Target an existing deployment instead of the dev server with
+  `E2E_BASE_URL=https://… npm run test:e2e`.
+- Artifacts: `playwright-report/`, `test-results/` (both gitignored).
+
 ## Phase 10 — User Approval & Workforce Operations
 - SQL migration: `schema_phase10_user_workforce.sql` — run in Supabase SQL Editor.
   Adds: `profiles.status`/`department`/`approved_by`/`approved_at` columns,
