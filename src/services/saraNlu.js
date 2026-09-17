@@ -1,6 +1,7 @@
 import { supabase } from '../supabaseClient'
 import { parseSaraCommand } from './saraCommandParser'
 import { APPROVER_ROLES } from './leaveApprovalsService'
+import { canTerminateEmployee } from './terminationAuthorization'
 
 // ------------------------------------------------------------------
 // SARA NLU — hybrid approach.
@@ -17,15 +18,15 @@ import { APPROVER_ROLES } from './leaveApprovalsService'
 // ------------------------------------------------------------------
 
 // Intents the deterministic parser emits.
-export const LOCAL_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'APPROVE_LEAVE', 'REJECT_LEAVE', 'CONFIRM', 'CANCEL', 'HELP', 'NAVIGATE', 'ROLE_CHANGE_DENIED', 'UNKNOWN']
+export const LOCAL_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE', 'CONFIRM', 'CANCEL', 'HELP', 'NAVIGATE', 'ROLE_CHANGE_DENIED', 'UNKNOWN']
 
 // Intents the Edge Function may return on top of the local set.
-export const AI_INTENTS = ['DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS']
+export const AI_INTENTS = ['DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS', 'TERMINATE_EMPLOYEE']
 
 export const ALL_INTENTS = [...new Set([...LOCAL_INTENTS, ...AI_INTENTS])]
 
 // Writes that must NEVER run without the user's own permission set.
-export const CONSEQUENTIAL_INTENTS = ['APPROVE_LEAVE', 'REJECT_LEAVE']
+export const CONSEQUENTIAL_INTENTS = ['APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE']
 
 // Reads that are safe to run once the authenticated user can reach them —
 // record access still comes from RLS-scoped queries.
@@ -40,6 +41,8 @@ export const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY
 export const INTENT_PERMISSION_GATES = {
   APPROVE_LEAVE: ['hr.leave.manage'],
   REJECT_LEAVE: ['hr.leave.manage'],
+  // TERMINATE_EMPLOYEE is a ROLE gate (canTerminateEmployee), not a
+  // permission — handled in canExecuteIntent below.
 }
 
 export function isConsequentialIntent(intent) {
@@ -48,6 +51,7 @@ export function isConsequentialIntent(intent) {
 
 export function canExecuteIntent(intent, ctx) {
   if (READ_INTENTS.includes(intent)) return true
+  if (intent === 'TERMINATE_EMPLOYEE') return canTerminateEmployee(ctx?.role)
   const gates = INTENT_PERMISSION_GATES[intent]
   if (!gates) return false
   if (ctx?.isAdmin || APPROVER_ROLES.includes(ctx?.role)) return true
@@ -61,6 +65,7 @@ export function canExecuteIntent(intent, ctx) {
 export function intentWhitelist(ctx) {
   const list = [...READ_INTENTS]
   if (canExecuteIntent('APPROVE_LEAVE', ctx)) list.push('APPROVE_LEAVE', 'REJECT_LEAVE')
+  if (canExecuteIntent('TERMINATE_EMPLOYEE', ctx)) list.push('TERMINATE_EMPLOYEE')
   return list
 }
 

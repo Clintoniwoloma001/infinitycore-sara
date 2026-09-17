@@ -55,7 +55,7 @@ export default function HRDashboard() {
 
   if (state.loading) return <LoadingState label="Loading HR dashboard..." />
 
-  const { employees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [], submissions = [], verifications = [], workTasks = [], targets = [], kpis = [] } = state.data
+  const { employees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [], submissions = [], verifications = [], workTasks = [], targets = [], kpis = [], hrMetrics = null } = state.data
 
   // SARA intelligence metrics — derived from real data
   const pendingReviews = submissions.filter((s) => ['submitted', 'under_review', 'pending_guarantor', 'guarantor_submitted', 'correction_requested'].includes(s.onboarding_status)).length

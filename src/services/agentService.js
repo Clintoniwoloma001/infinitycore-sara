@@ -6,6 +6,8 @@ import { myQueue as computeMyQueue, currentStage, executeLeaveDecision } from '.
 import { LEAVE_TYPE_LABELS } from './leaveBalanceService'
 import { countRows } from './saraStats'
 import { protectedRoutes, canAccessRoute } from '../config/navigation'
+import { employeeService } from './employeeService'
+import { canTerminateEmployee, employeeLabel } from './terminationAuthorization'
 import {
   queryPendingOnboardingReviews, queryActiveEmployees, queryInterviewsToday, queryPendingUsers,
   formatOnboardingResponse, formatEmployeesResponse, formatInterviewsResponse, formatPendingUsersResponse,
@@ -122,6 +124,9 @@ export async function runSaraCommand({ command, pool, ctx }) {
   // Fast authorization gate before anything else. Blocks write intents
   // for users whose permission set cannot satisfy them.
   if (parsed.blocked === 'permission' || (isWriteIntent(parsed.intent) && (!canExecuteIntent(parsed.intent, ctx)))) {
+    if (parsed.intent === 'TERMINATE_EMPLOYEE') {
+      return { type: 'text', message: "I can't terminate employees from your current InfinityCore role. Only super_admin and hr_manager users are authorized to terminate employees — please ask an authorized HR manager instead." }
+    }
     return { type: 'text', message: "I can't do that with your current permissions. Approving or rejecting leave requires leave management rights — please use the Leave Requests page instead." }
   }
 
@@ -223,13 +228,80 @@ export async function runSaraCommand({ command, pool, ctx }) {
       }
     }
 
+    case 'TERMINATE_EMPLOYEE': {
+      // ROLE GATE (canonical — mirrors the server-side RPC): only
+      // super_admin and hr_manager may terminate employees. This check
+      // is UX-only; terminate_employee re-verifies on the server.
+      if (!canTerminateEmployee(ctx?.role)) {
+        return { type: 'text', message: "I can't terminate employees from your current InfinityCore role. Only super_admin and hr_manager users are authorized to terminate employees — please ask an authorized HR manager instead." }
+      }
+      const target = parsed.filters.employee
+      if (!target) {
+        return { type: 'text', message: "Who would you like me to terminate? For example \"terminate John Doe\" or \"fire Adam Ibrahim, employee code EMP-014\"." }
+      }
+      let matches = []
+      try {
+        matches = await employeeService.search(target)
+      } catch {
+        return { type: 'text', message: "I couldn't look up that employee right now — please try again or use the Employees page." }
+      }
+      // Never offer already-terminated or missing employees.
+      matches = (matches || []).filter((e) => e.employment_status !== 'terminated' && !e.is_archived)
+      if (matches.length === 0) {
+        return { type: 'text', message: `I couldn't find an active employee matching "${target}". Please check the name or employee ID and try again.` }
+      }
+      if (matches.length > 1) {
+        const hint = matches.map((e) => `${e.full_name} (${employeeLabel(e)})`).join(', ')
+        return { type: 'text', message: `I found ${matches.length} employees matching "${target}": ${hint}. Please be more specific — include the branch, or use the employee ID.` }
+      }
+      const emp = matches[0]
+      return {
+        type: 'confirm',
+        intent: 'TERMINATE_EMPLOYEE',
+        employee: emp,
+        message: `I found ${emp.full_name} — ${emp.position || 'no position'}${emp.department ? ` · ${emp.department}` : ''}${emp.branch ? ` · ${emp.branch}` : ''} (${employeeLabel(emp)}).\n\nTerminate this employee? This is permanent, restricted to super_admin/hr_manager, and cannot be undone. History is preserved.`,
+      }
+    }
+
     default:
       return { type: 'text', message: "I didn't catch that. Try \"show pending onboarding reviews\", \"how many active employees\", \"what interviews are scheduled today\", or \"help\"." }
   }
 }
 
 function isWriteIntent(intent) {
-  return ['APPROVE_LEAVE', 'REJECT_LEAVE'].includes(intent)
+  return ['APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE'].includes(intent)
+}
+
+// Executes a previously-confirmed employee termination via the audited,
+// authorization-enforcing terminate_employee RPC. `ctx` carries the
+// authenticated user's identity/role — this is who the database records
+// as the terminating authority, never SARA. Same confirm-then-execute
+// contract as leave approvals.
+export async function executeTerminationDecision({ employee, ctx, command, reason }) {
+  const res = await employeeService.terminate(employee.id, {
+    effectiveDate: new Date().toISOString().slice(0, 10),
+    reason: reason || (command ? `Terminated via SARA command.` : 'Terminated via SARA.'),
+    notes: `Terminated via SARA (${ctx?.method === 'voice' ? 'voice' : 'text'}) command. Record and full history preserved.`,
+    rehireEligible: true,
+    source: ctx?.method === 'voice' ? 'sara_voice' : 'sara_text',
+  })
+  try {
+    await logAction({
+      action: 'sara_employee_terminated',
+      entityType: 'Employee',
+      entityId: employee.id,
+      details: JSON.stringify({
+        intent: 'TERMINATE_EMPLOYEE',
+        employee: employee.full_name,
+        confirmation: 'VOICE_CONFIRMED',
+        result: 'SUCCESS',
+        via: ctx?.method === 'voice' ? 'sara_voice' : 'sara_text',
+      }),
+      userName: ctx?.approverName,
+      severity: 'high',
+    })
+  } catch { /* server audit already recorded in the RPC; this is supplementary */ }
+  return res
 }
 
 // Executes a previously-confirmed bulk/single decision. `ctx` carries the

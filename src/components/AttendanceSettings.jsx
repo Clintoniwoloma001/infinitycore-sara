@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { AlertTriangle, Camera, Check, CheckCircle2, Cpu, Edit, Fingerprint, Key, Link2, Loader2, Ban, MapPin, Monitor, Navigation, Plus, RefreshCw, Trash2, Wifi, WifiOff, X } from 'lucide-react'
+import { AlertTriangle, Camera, Check, CheckCircle2, Clock, Cpu, Edit, Fingerprint, Key, Link2, Loader2, Ban, MapPin, Monitor, Navigation, Plus, RefreshCw, Trash2, Wifi, WifiOff, X } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { biometricService } from '../services/biometricService'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
@@ -668,6 +668,7 @@ export function AttendancePolicyTab({ canManage }) {
   const [config, setConfig] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
   const [form, setForm] = useState({})
 
@@ -680,13 +681,13 @@ export function AttendancePolicyTab({ canManage }) {
         setForm({
           expected_start_time: cfg.expected_start_time || '08:00',
           expected_end_time: cfg.expected_end_time || '17:00',
-          grace_period_minutes: cfg.grace_period_minutes || 15,
+          grace_period_minutes: cfg.grace_period_minutes != null ? cfg.grace_period_minutes : 15,
           late_threshold_time: cfg.late_threshold_time || '08:16',
           geofence_enabled: cfg.geofence_enabled || false,
-          early_departure_threshold_minutes: cfg.early_departure_threshold_minutes || 30,
+          early_departure_threshold_minutes: cfg.early_departure_threshold_minutes != null ? cfg.early_departure_threshold_minutes : 30,
           break_allowed: cfg.break_allowed !== false,
-          break_duration_minutes: cfg.break_duration_minutes || 60,
-          overtime_threshold_hours: cfg.overtime_threshold_hours || 8.0,
+          break_duration_minutes: cfg.break_duration_minutes != null ? cfg.break_duration_minutes : 60,
+          overtime_threshold_hours: cfg.overtime_threshold_hours != null ? cfg.overtime_threshold_hours : 8.0,
           manual_correction_requires_reason: cfg.manual_correction_requires_reason !== false,
           allow_admin_override: cfg.allow_admin_override !== false,
         })
@@ -707,11 +708,40 @@ export function AttendancePolicyTab({ canManage }) {
 
   useEffect(() => { load() }, [])
 
+  const updateStartTime = (val) => {
+    const grace = Number(form.grace_period_minutes) || 15
+    const parts = (val || '08:00').split(':').map(Number)
+    let lateTime = form.late_threshold_time
+    if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+      const totalMins = parts[0] * 60 + parts[1] + grace + 1
+      const thH = Math.floor((totalMins / 60) % 24)
+      const thM = totalMins % 60
+      lateTime = `${String(thH).padStart(2, '0')}:${String(thM).padStart(2, '0')}`
+    }
+    setForm((p) => ({ ...p, expected_start_time: val, late_threshold_time: lateTime }))
+  }
+
+  const updateGracePeriod = (val) => {
+    const grace = Number(val) || 0
+    const parts = (form.expected_start_time || '08:00').split(':').map(Number)
+    let lateTime = form.late_threshold_time
+    if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+      const totalMins = parts[0] * 60 + parts[1] + grace + 1
+      const thH = Math.floor((totalMins / 60) % 24)
+      const thM = totalMins % 60
+      lateTime = `${String(thH).padStart(2, '0')}:${String(thM).padStart(2, '0')}`
+    }
+    setForm((p) => ({ ...p, grace_period_minutes: grace, late_threshold_time: lateTime }))
+  }
+
   const save = async () => {
     setBusy(true)
     setError('')
+    setSaved(false)
     try {
       await attendanceEngineService.updateConfig(form)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
       await load()
     } catch (e) {
       setError(e?.message || 'Update failed')
@@ -725,15 +755,29 @@ export function AttendancePolicyTab({ canManage }) {
   return (
     <div>
       <p className="text-sm text-slate-500 mb-4">Configure attendance policies including work hours, geofencing, breaks, and correction rules.</p>
+      
       {error && <div className="mb-4"><ErrorState message={error} /></div>}
+      
+      {saved && (
+        <div className="mb-4 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800 flex items-center gap-2 max-w-2xl">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>Attendance policy and Platform Settings working hours saved and synchronized successfully.</span>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-2xl space-y-5">
+        <div className="flex items-center gap-2 text-xs text-slate-600 bg-emerald-50/60 border border-emerald-200/60 rounded-lg p-3">
+          <Clock className="w-4 h-4 text-[#009944] shrink-0" />
+          <span>Working hours and grace period configured here automatically synchronize with <strong>Platform Settings → Working Hours</strong>.</span>
+        </div>
+
         {/* General */}
         <div>
           <h3 className="text-sm font-semibold text-slate-700 mb-3">General Work Hours</h3>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>Expected Start Time</label>
-              <input type="time" className={inputCls} value={form.expected_start_time || ''} onChange={(e) => setForm({ ...form, expected_start_time: e.target.value })} disabled={!canManage} />
+              <input type="time" className={inputCls} value={form.expected_start_time || ''} onChange={(e) => updateStartTime(e.target.value)} disabled={!canManage} />
             </div>
             <div>
               <label className={labelCls}>Expected End Time</label>
@@ -741,7 +785,7 @@ export function AttendancePolicyTab({ canManage }) {
             </div>
             <div>
               <label className={labelCls}>Grace Period (minutes)</label>
-              <input type="number" className={inputCls} value={form.grace_period_minutes || ''} onChange={(e) => setForm({ ...form, grace_period_minutes: Number(e.target.value) })} disabled={!canManage} />
+              <input type="number" className={inputCls} value={form.grace_period_minutes ?? ''} onChange={(e) => updateGracePeriod(e.target.value)} disabled={!canManage} />
             </div>
             <div>
               <label className={labelCls}>Late Threshold Time</label>
@@ -769,11 +813,11 @@ export function AttendancePolicyTab({ canManage }) {
             </label>
             <div>
               <label className={labelCls}>Break Duration (min)</label>
-              <input type="number" className={inputCls} value={form.break_duration_minutes || ''} onChange={(e) => setForm({ ...form, break_duration_minutes: Number(e.target.value) })} disabled={!canManage} />
+              <input type="number" className={inputCls} value={form.break_duration_minutes ?? ''} onChange={(e) => setForm({ ...form, break_duration_minutes: Number(e.target.value) })} disabled={!canManage} />
             </div>
             <div>
               <label className={labelCls}>Overtime Threshold (hrs)</label>
-              <input type="number" step="0.5" className={inputCls} value={form.overtime_threshold_hours || ''} onChange={(e) => setForm({ ...form, overtime_threshold_hours: Number(e.target.value) })} disabled={!canManage} />
+              <input type="number" step="0.5" className={inputCls} value={form.overtime_threshold_hours ?? ''} onChange={(e) => setForm({ ...form, overtime_threshold_hours: Number(e.target.value) })} disabled={!canManage} />
             </div>
           </div>
         </div>
@@ -792,7 +836,7 @@ export function AttendancePolicyTab({ canManage }) {
             </label>
             <div>
               <label className={labelCls}>Early Departure Threshold (min)</label>
-              <input type="number" className={inputCls} value={form.early_departure_threshold_minutes || ''} onChange={(e) => setForm({ ...form, early_departure_threshold_minutes: Number(e.target.value) })} disabled={!canManage} />
+              <input type="number" className={inputCls} value={form.early_departure_threshold_minutes ?? ''} onChange={(e) => setForm({ ...form, early_departure_threshold_minutes: Number(e.target.value) })} disabled={!canManage} />
             </div>
           </div>
         </div>

@@ -13,7 +13,8 @@
     "deploy": "gh-pages -d dist",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:install": "playwright install chromium"
+    "test:e2e:install": "playwright install chromium",
+    "test:termination-auth": "node scripts/verify-termination-auth.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

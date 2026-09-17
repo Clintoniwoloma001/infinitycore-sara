@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useMemo } from 'react'
-import { Calendar, TrendingUp, Clock, Clock3, CheckCircle2, AlertTriangle, AlertCircle, XCircle, Activity, X, Loader2, Send } from 'lucide-react'
+import React, { useEffect, useState, useMemo, useCallback } from 'react'
+import { Calendar, TrendingUp, Clock, Clock3, CheckCircle2, AlertTriangle, AlertCircle, XCircle, Activity, X, Loader2, Send, Building2, Users, Search, ArrowRight, Shield } from 'lucide-react'
+import { useNavigate, Link } from 'react-router-dom'
 import { attendanceService, platformDateKey } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { useAuth } from '../hooks/useAuth'
@@ -83,7 +84,8 @@ const ISSUE_TYPES = [
 ]
 
 export default function Attendance() {
-  const { name } = useAuth()
+  const { name, role, isAdmin, hasPermission } = useAuth()
+  const navigate = useNavigate()
   const [employee, setEmployee] = useState(null)
   const [record, setRecord] = useState(null)
   const [history, setHistory] = useState([])
@@ -98,6 +100,43 @@ export default function Attendance() {
   const [issueModal, setIssueModal] = useState(false)
   const [clockAnim, setClockAnim] = useState(false)
   const [geofenceBlocked, setGeofenceBlocked] = useState(null)
+
+  // Role-scoped views
+  const isBranchManager = role === 'branch_manager' || hasPermission('attendance.branch.read')
+  const isAreaManager = role === 'area_manager' || hasPermission('attendance.area.read')
+  const isHRorAdmin = ['super_admin', 'admin', 'hr_manager', 'hr_officer'].includes(role) || isAdmin
+  const [viewScope, setViewScope] = useState('my') // 'my' | 'branch' | 'area'
+  const [teamRows, setTeamRows] = useState([])
+  const [teamLoading, setTeamLoading] = useState(false)
+  const [teamDate, setTeamDate] = useState(platformDateKey())
+  const [teamSearch, setTeamSearch] = useState('')
+
+  const loadTeamAttendance = useCallback(async () => {
+    if (viewScope === 'my') return
+    setTeamLoading(true)
+    try {
+      const data = await attendanceService.listAll({
+        startDate: teamDate,
+        endDate: teamDate,
+        branchId: viewScope === 'branch' ? employee?.branch_id : undefined,
+      })
+      let filtered = data || []
+      if (viewScope === 'branch' && employee?.branch) {
+        filtered = filtered.filter((r) => r.branch_id === employee.branch_id || r.employees?.branch === employee.branch)
+      }
+      setTeamRows(filtered)
+    } catch (e) {
+      console.warn('Failed to load team attendance:', e)
+    } finally {
+      setTeamLoading(false)
+    }
+  }, [viewScope, teamDate, employee])
+
+  useEffect(() => {
+    if (viewScope !== 'my') {
+      loadTeamAttendance()
+    }
+  }, [viewScope, teamDate, loadTeamAttendance])
 
   const load = async () => {
     setLoading(true)
@@ -247,6 +286,18 @@ export default function Attendance() {
     [employee, requirements],
   )
 
+  // Must be declared before any early return so hook count is stable.
+  const searchedTeamRows = useMemo(() => {
+    if (!teamSearch.trim()) return teamRows
+    const q = teamSearch.toLowerCase()
+    return teamRows.filter((r) =>
+      r.employees?.full_name?.toLowerCase().includes(q) ||
+      r.employees?.department?.toLowerCase().includes(q) ||
+      r.employees?.position?.toLowerCase().includes(q) ||
+      r.status?.toLowerCase().includes(q)
+    )
+  }, [teamRows, teamSearch])
+
   if (loading) return <LoadingState label="Loading attendance..." />
 
   if (!employee) {
@@ -263,8 +314,139 @@ export default function Attendance() {
 
   return (
     <div className="max-w-5xl">
-      <h2 className="text-2xl font-semibold text-slate-900 mb-1">My Attendance</h2>
-      <p className="text-sm text-slate-500 mb-6">Clock in, clock out, and track your attendance.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+        <div>
+          <h2 className="text-2xl font-semibold text-slate-900 mb-1">
+            {viewScope === 'branch' ? `Branch Attendance — ${employee?.branch || 'My Branch'}` : viewScope === 'area' ? 'Area Attendance' : 'My Attendance'}
+          </h2>
+          <p className="text-sm text-slate-500">
+            {viewScope === 'branch'
+              ? 'Attendance records and daily oversight for team members in your branch.'
+              : viewScope === 'area'
+              ? 'Attendance tracking and oversight across branches in your area.'
+              : 'Clock in, clock out, and track your individual attendance health and analysis.'}
+          </p>
+        </div>
+
+        {/* View Scope Switcher for Branch Managers, Area Managers, HR & Admins */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setViewScope('my')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${viewScope === 'my' ? 'bg-[#009944] text-white shadow-sm' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`}
+          >
+            My Attendance
+          </button>
+          {isBranchManager && (
+            <button
+              onClick={() => setViewScope('branch')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${viewScope === 'branch' ? 'bg-[#009944] text-white shadow-sm' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`}
+            >
+              <Building2 className="w-3.5 h-3.5" /> Branch Attendance
+            </button>
+          )}
+          {isAreaManager && (
+            <button
+              onClick={() => setViewScope('area')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${viewScope === 'area' ? 'bg-[#009944] text-white shadow-sm' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`}
+            >
+              <Users className="w-3.5 h-3.5" /> Area Attendance
+            </button>
+          )}
+          {isHRorAdmin && (
+            <Link
+              to="/attendance-management"
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-[#009944] border border-[#009944]/30 bg-emerald-50/50 hover:bg-emerald-50 transition"
+            >
+              <Shield className="w-3.5 h-3.5" /> Full Management <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          )}
+        </div>
+      </div>
+
+      {viewScope !== 'my' ? (
+        <div className="space-y-5">
+          {/* Team Filter Bar */}
+          <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Date</label>
+                <input
+                  type="date"
+                  className="h-9 px-3 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#009944]"
+                  value={teamDate}
+                  onChange={(e) => setTeamDate(e.target.value)}
+                />
+              </div>
+              <button
+                onClick={loadTeamAttendance}
+                disabled={teamLoading}
+                className="mt-4 px-3 py-2 rounded-lg border border-slate-300 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
+              >
+                {teamLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
+              </button>
+            </div>
+            <div className="relative w-full sm:w-64">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                placeholder="Search staff, dept, position..."
+                className="w-full h-9 pl-9 pr-3 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#009944]"
+                value={teamSearch}
+                onChange={(e) => setTeamSearch(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Team Table */}
+          {teamLoading ? (
+            <LoadingState label="Loading team attendance records..." />
+          ) : searchedTeamRows.length === 0 ? (
+            <EmptyState
+              title="No attendance records for this date"
+              description={`No staff clock-in records found for ${teamDate}.`}
+            />
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-left">
+                  <tr>
+                    <th className="px-5 py-3 font-medium">Employee</th>
+                    <th className="px-5 py-3 font-medium">Department</th>
+                    <th className="px-5 py-3 font-medium">Branch</th>
+                    <th className="px-5 py-3 font-medium">Clock In</th>
+                    <th className="px-5 py-3 font-medium">Clock Out</th>
+                    <th className="px-5 py-3 font-medium">Hours</th>
+                    <th className="px-5 py-3 font-medium">Status</th>
+                    <th className="px-5 py-3 font-medium">Late</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {searchedTeamRows.map((r) => (
+                    <tr key={r.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-5 py-3 font-medium text-slate-800">
+                        {r.employees?.full_name || 'Staff Member'}
+                        <div className="text-xs text-slate-400 font-normal">{r.employees?.position || ''}</div>
+                      </td>
+                      <td className="px-5 py-3 text-slate-600">{r.employees?.department || '—'}</td>
+                      <td className="px-5 py-3 text-slate-600">{r.branches?.branch_name || r.employees?.branch || '—'}</td>
+                      <td className="px-5 py-3 text-slate-700 tabular-nums">
+                        {r.clock_in ? new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </td>
+                      <td className="px-5 py-3 text-slate-700 tabular-nums">
+                        {r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </td>
+                      <td className="px-5 py-3 text-slate-700 tabular-nums">{r.work_hours || '—'}</td>
+                      <td className="px-5 py-3"><StatusPill status={r.status} /></td>
+                      <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         {/* Clock card — takes 2 columns */}
@@ -355,6 +537,8 @@ export default function Attendance() {
             </tbody>
           </table>
         </div>
+      )}
+      </>
       )}
 
       {/* Late Arrival Modal */}

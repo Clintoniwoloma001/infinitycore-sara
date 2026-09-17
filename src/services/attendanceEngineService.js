@@ -17,6 +17,22 @@ function haversine(lat1, lng1, lat2, lng2) {
   return Math.round(R * 2 * Math.asin(Math.min(1, Math.sqrt(a))))
 }
 
+function formatTimeHHMM(t) {
+  if (!t) return ''
+  const s = String(t).trim()
+  return s.length >= 5 ? s.slice(0, 5) : s
+}
+
+function formatLateThreshold(startTimeStr, graceMins) {
+  if (!startTimeStr) return '08:16'
+  const parts = startTimeStr.split(':').map(Number)
+  if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) return '08:16'
+  const totalMins = parts[0] * 60 + parts[1] + (Number(graceMins) || 0) + 1
+  const thH = Math.floor((totalMins / 60) % 24)
+  const thM = totalMins % 60
+  return `${String(thH).padStart(2, '0')}:${String(thM).padStart(2, '0')}`
+}
+
 export const attendanceEngineService = {
   // ---- GEOFENCES ----
   // Returns attendance geofences PLUS branch-based geofences (configured in
@@ -222,25 +238,95 @@ export const attendanceEngineService = {
     return data
   },
 
-  // ---- ATTENDANCE CONFIG (extended) ----
+  // ---- ATTENDANCE CONFIG (extended & mirrored with Platform Settings) ----
   async getConfig() {
-    const { data, error } = await supabase
-      .from('attendance_config')
-      .select('*')
-      .eq('id', 1)
-      .single()
-    if (error && error.code !== 'PGRST116') throw error
-    return data
+    let cfg = null
+    let ps = null
+
+    try {
+      const [cfgRes, psRes] = await Promise.all([
+        supabase.from('attendance_config').select('*').eq('id', 1).maybeSingle(),
+        supabase.from('hr_platform_settings').select('*').eq('id', 1).maybeSingle(),
+      ])
+      cfg = cfgRes?.data || null
+      ps = psRes?.data || null
+    } catch {
+      try {
+        const { data } = await supabase.from('attendance_config').select('*').eq('id', 1).maybeSingle()
+        cfg = data
+      } catch {
+        cfg = null
+      }
+    }
+
+    if (!cfg && !ps) return null
+
+    const startTime = (ps?.default_work_start_time ? formatTimeHHMM(ps.default_work_start_time) : null) || (cfg?.expected_start_time ? formatTimeHHMM(cfg.expected_start_time) : '08:00')
+    const graceMins = ps?.default_grace_period_minutes ?? cfg?.grace_period_minutes ?? 15
+
+    return {
+      ...(cfg || {}),
+      expected_start_time: startTime,
+      expected_end_time: (ps?.default_work_end_time ? formatTimeHHMM(ps.default_work_end_time) : null) || (cfg?.expected_end_time ? formatTimeHHMM(cfg.expected_end_time) : '17:00'),
+      grace_period_minutes: graceMins,
+      late_threshold_time: (cfg?.late_threshold_time ? formatTimeHHMM(cfg.late_threshold_time) : null) || formatLateThreshold(startTime, graceMins),
+      break_duration_minutes: ps?.default_break_duration_minutes ?? cfg?.break_duration_minutes ?? 60,
+      overtime_threshold_hours: ps?.overtime_threshold_minutes != null
+        ? Number((Number(ps.overtime_threshold_minutes) / 60).toFixed(2))
+        : (cfg?.overtime_threshold_hours ?? 8.0),
+      geofence_enabled: ps?.geofence_enabled ?? cfg?.geofence_enabled ?? false,
+      early_departure_threshold_minutes: ps?.early_departure_threshold_minutes ?? cfg?.early_departure_threshold_minutes ?? 30,
+      break_allowed: cfg?.break_allowed !== false,
+      manual_correction_requires_reason: cfg?.manual_correction_requires_reason !== false,
+      allow_admin_override: cfg?.allow_admin_override !== false,
+    }
   },
 
   async updateConfig(payload) {
     const { data, error } = await supabase
       .from('attendance_config')
-      .upsert({ id: 1, ...payload })
+      .upsert({ id: 1, ...payload, updated_at: new Date().toISOString() })
       .select()
       .single()
     if (error) throw error
-    logAction({ action: 'ATTENDANCE_CONFIG_UPDATE', entityType: 'AttendanceConfig', entityId: 1, details: 'Attendance config updated' })
+
+    // Mirror changes to hr_platform_settings so Platform Settings working hours stay in sync
+    try {
+      const psUpdates = {}
+      if (payload.expected_start_time != null) {
+        psUpdates.default_work_start_time = formatTimeHHMM(payload.expected_start_time)
+      }
+      if (payload.expected_end_time != null) {
+        psUpdates.default_work_end_time = formatTimeHHMM(payload.expected_end_time)
+      }
+      if (payload.grace_period_minutes != null) {
+        psUpdates.default_grace_period_minutes = Number(payload.grace_period_minutes)
+        psUpdates.late_threshold_minutes = Number(payload.grace_period_minutes)
+      }
+      if (payload.break_duration_minutes != null) {
+        psUpdates.default_break_duration_minutes = Number(payload.break_duration_minutes)
+      }
+      if (payload.overtime_threshold_hours != null) {
+        psUpdates.overtime_threshold_minutes = Math.round(Number(payload.overtime_threshold_hours) * 60)
+      }
+      if (payload.geofence_enabled != null) {
+        psUpdates.geofence_enabled = Boolean(payload.geofence_enabled)
+      }
+      if (payload.early_departure_threshold_minutes != null) {
+        psUpdates.early_departure_threshold_minutes = Number(payload.early_departure_threshold_minutes)
+      }
+
+      if (Object.keys(psUpdates).length > 0) {
+        const { error: rpcErr } = await supabase.rpc('update_hr_settings', { p_settings: psUpdates })
+        if (rpcErr) {
+          await supabase.from('hr_platform_settings').update(psUpdates).eq('id', 1)
+        }
+      }
+    } catch (mirrorErr) {
+      console.warn('Mirroring attendance config to hr_platform_settings warning:', mirrorErr)
+    }
+
+    logAction({ action: 'ATTENDANCE_CONFIG_UPDATE', entityType: 'AttendanceConfig', entityId: 1, details: 'Attendance config updated and mirrored to platform settings' })
     return data
   },
 

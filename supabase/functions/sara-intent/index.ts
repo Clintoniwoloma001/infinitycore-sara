@@ -26,11 +26,18 @@ const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
 const MODEL = 'gpt-4o-mini'
 
 const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS']
-const WRITE_INTENTS = ['APPROVE_LEAVE', 'REJECT_LEAVE']
+const WRITE_INTENTS = ['APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE']
 const ALL_INTENTS = [...new Set([...READ_INTENTS, ...WRITE_INTENTS, 'HELP', 'UNKNOWN'])]
 
 const WRITE_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'hr_manager', 'hr_officer']
 const LOAN_READ_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'operations_manager', 'loan_officer', 'relationship_manager']
+
+// Employee termination is STRICTLY restricted to these two InfinityCore
+// roles — server-enforced here for NLU scope AND by the terminate_employee
+// RPC / employees_termination_guard trigger on execution. Frontend role
+// claims are never trusted; this list is derived from the authenticated
+// user's profile row.
+const TERMINATION_ROLES = ['super_admin', 'hr_manager']
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -51,6 +58,12 @@ function serverWhitelist(role, permsText) {
   if (perms.includes('hr.leave.manage') || WRITE_ROLES.includes(role)) {
     allowed.add('APPROVE_LEAVE')
     allowed.add('REJECT_LEAVE')
+  }
+  // Termination: ONLY the two personnel roles above. Everyone else —
+  // including `admin` and `hr_officer` — is excluded from the intent, so
+  // the model can't even express a firing request for them.
+  if (TERMINATION_ROLES.includes(role)) {
+    allowed.add('TERMINATE_EMPLOYEE')
   }
   const readLoans = perms.includes('loans.read') || LOAN_READ_ROLES.includes(role)
   if (!readLoans) allowed.delete('PENDING_LOANS')

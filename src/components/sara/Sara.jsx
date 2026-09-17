@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Mic, MicOff, Send, Settings, Volume2, VolumeX, X, Sparkles, Loader2 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { useMyLeaveApprovals } from '../../hooks/useMyLeaveApprovals'
-import { runSaraCommand, executeConfirmedDecision } from '../../services/agentService'
+import { runSaraCommand, executeConfirmedDecision, executeTerminationDecision } from '../../services/agentService'
 import { analyzeIntent } from '../../services/saraNlu'
 import { useSaraSettings, isQuietHours } from '../../services/saraSettings'
 import { useSaraVoice, speakText, cancelSpeech, MIC_STATES, SARA_WAKE_WORDS, playActivationTone } from '../../services/saraVoice'
@@ -100,7 +100,7 @@ export default function Sara() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [phase, setPhase] = useState(PHASES.IDLE)
-  const [pendingConfirm, setPendingConfirm] = useState(null) // { matches, decision, message }
+  const [pendingConfirm, setPendingConfirm] = useState(null) // { matches, decision, message } | { confirmKind:'terminate', employee, message }
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [micNotice, setMicNotice] = useState('')
 
@@ -161,10 +161,22 @@ export default function Sara() {
       if (pendingConfirm) {
         const parsed = await analyzeIntent(raw, { role, isAdmin, permissions: userPermissions })
         if (parsed.intent === 'CONFIRM') {
-          const { matches, decision } = pendingConfirm
+          const confirm = pendingConfirm
           setConfirmed(null)
           setPhase(PHASES.EXECUTING)
-          const results = await executeConfirmedDecision({ matches, decision, ctx: { approverId: user.id, approverName: userName, method }, command: raw, intent: parsed.intent })
+          const baseCtx = { approverId: user.id, approverName: userName, method }
+          if (confirm.confirmKind === 'terminate') {
+            try {
+              await executeTerminationDecision({ employee: confirm.employee, ctx: baseCtx, command: raw })
+              await refresh()
+              say(`Done. ${confirm.employee.full_name} has been terminated. Their record and full history are preserved — this was recorded under your authority.`)
+            } catch (e) {
+              say(`I couldn't terminate ${confirm.employee.full_name} — ${e?.message || 'the server denied the action'}.`)
+            }
+            return
+          }
+          const { matches, decision } = confirm
+          const results = await executeConfirmedDecision({ matches, decision, ctx: baseCtx, command: raw, intent: parsed.intent })
           const okCount = results.filter((r) => r.ok).length
           await refresh()
           say(okCount === results.length
@@ -187,8 +199,12 @@ export default function Sara() {
         ctx: { userId: user.id, role, isAdmin, permissions: userPermissions, intent: null },
       })
       if (result.type === 'confirm') {
-        setConfirmed({ matches: result.matches, decision: result.decision })
-        say(result.message, { requests: result.matches })
+        if (result.intent === 'TERMINATE_EMPLOYEE') {
+          setConfirmed({ confirmKind: 'terminate', employee: result.employee, message: result.message })
+        } else {
+          setConfirmed({ matches: result.matches, decision: result.decision, message: result.message })
+        }
+        say(result.message, result.employee ? { employee: result.employee } : { requests: result.matches })
       } else if (result.type === 'list') {
         say(result.message, { requests: result.requests })
       } else if (result.type === 'navigate') {
@@ -471,7 +487,9 @@ export default function Sara() {
                 {pendingConfirm && (
                   <div className="flex justify-start">
                     <div className="flex gap-2">
-                      <button onClick={() => handleCommand('confirm', 'text')} disabled={busy} className="px-3 py-1.5 rounded-lg bg-[#009944] text-white text-xs font-medium disabled:opacity-50">Confirm</button>
+                      <button onClick={() => handleCommand('confirm', 'text')} disabled={busy} className={`px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50 ${pendingConfirm.confirmKind === 'terminate' ? 'bg-rose-600 text-white' : 'bg-[#009944] text-white'}`}>
+                        {pendingConfirm.confirmKind === 'terminate' ? 'Terminate' : 'Confirm'}
+                      </button>
                       <button onClick={() => handleCommand('cancel', 'text')} disabled={busy} className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium disabled:opacity-50">Cancel</button>
                     </div>
                   </div>

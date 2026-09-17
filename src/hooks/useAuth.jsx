@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../supabaseClient'
 import { ROLES, ROLE_METADATA, ROLE_MODULES, ROLE_PERMISSIONS } from '../constants/roles'
+import { canTerminateEmployee, canArchiveEmployee } from '../services/terminationAuthorization'
 
 const AuthContext = createContext(null)
 
@@ -153,6 +154,12 @@ export function AuthProvider({ children }) {
     canManageUsers: hasPermission('admin.manage_users'),
     canViewAudit: hasPermission('admin.view_audit'),
     canManageConfig: hasPermission('admin.manage_config'),
+
+    // Personnel termination / archive authorization (STRICT).
+    // Derived from the ACTUAL RBAC role — never the "viewing as" role,
+    // never a client-supplied value. Server enforces the same rule.
+    canTerminate: canTerminateEmployee(actualRole),
+    canArchive: canArchiveEmployee(actualRole),
   }
 
   const value = {

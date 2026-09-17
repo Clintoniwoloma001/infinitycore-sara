@@ -531,13 +531,14 @@ END; $$;
 CREATE OR REPLACE FUNCTION public.log_attendance_config_change()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
-  INSERT INTO public.audit_logs (action, entity_type, entity_id, details, user_id)
+  INSERT INTO public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
   VALUES (
     'ATTENDANCE_CONFIG_CHANGE',
     'AttendanceConfig',
-    NEW.id,
-    jsonb_build_object('old', to_jsonb(OLD), 'new', to_jsonb(NEW)),
-    auth.uid()
+    NEW.id::text,
+    coalesce(auth.uid()::text, 'system'),
+    jsonb_build_object('old', to_jsonb(OLD), 'new', to_jsonb(NEW))::text,
+    'info'
   );
   RETURN NEW;
 END; $$;

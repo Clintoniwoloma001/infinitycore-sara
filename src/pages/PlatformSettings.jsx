@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Settings, Clock, Calendar, MapPin, Shield, Loader2, CheckCircle2, History, Coins, Save } from 'lucide-react'
 import { platformSettingsService } from '../services/platformSettingsService'
+import { attendanceEngineService } from '../services/attendanceEngineService'
 import { geofenceService } from '../services/geofenceService'
 import { LoadingState, ErrorState } from '../components/PageStates'
 import GeofenceEditor from '../components/attendance/GeofenceEditor'
@@ -69,6 +70,28 @@ export default function PlatformSettings() {
       })
       if (Object.keys(updates).length > 0) {
         await platformSettingsService.update(updates)
+
+        // Mirror working hours and attendance policies to attendance_config
+        try {
+          const cfgUpdates = {}
+          if (updates.default_work_start_time != null) cfgUpdates.expected_start_time = updates.default_work_start_time
+          if (updates.default_work_end_time != null) cfgUpdates.expected_end_time = updates.default_work_end_time
+          if (updates.default_grace_period_minutes != null) cfgUpdates.grace_period_minutes = Number(updates.default_grace_period_minutes)
+          if (updates.default_break_duration_minutes != null) cfgUpdates.break_duration_minutes = Number(updates.default_break_duration_minutes)
+          if (updates.overtime_threshold_minutes != null) {
+            cfgUpdates.overtime_threshold_hours = Number((Number(updates.overtime_threshold_minutes) / 60).toFixed(2))
+          }
+          if (updates.geofence_enabled != null) cfgUpdates.geofence_enabled = Boolean(updates.geofence_enabled)
+          if (updates.early_departure_threshold_minutes != null) cfgUpdates.early_departure_threshold_minutes = Number(updates.early_departure_threshold_minutes)
+          if (updates.allow_manual_correction != null) cfgUpdates.manual_correction_requires_reason = Boolean(updates.allow_manual_correction)
+
+          if (Object.keys(cfgUpdates).length > 0) {
+            await attendanceEngineService.updateConfig(cfgUpdates)
+          }
+        } catch (syncErr) {
+          console.warn('Mirroring platform settings to attendance_config warning:', syncErr)
+        }
+
         setSaved(true)
         setTimeout(() => setSaved(false), 2000)
         await load()

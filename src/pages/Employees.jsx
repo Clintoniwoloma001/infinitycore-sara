@@ -1,34 +1,80 @@
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronRight, Loader2, Trash2, UserPlus } from 'lucide-react'
+import { Archive, ChevronRight, Loader2, UserPlus, UserX } from 'lucide-react'
 import { date, ModuleTable, status, useTable } from './hrShared'
 import { useAuth } from '../hooks/useAuth'
 import { employeeService } from '../services/employeeService'
 import AddEmployeeModal from '../components/AddEmployeeModal'
+import TerminationModal from '../components/TerminationModal'
+import ArchiveModal from '../components/ArchiveModal'
 
 export default function Employees() {
   const { rows, loading, error, reload } = useTable('employees')
-  const { hasPermission, isAdmin, isHR } = useAuth()
+  const { hasPermission, isAdmin, isHR, canTerminate, canArchive } = useAuth()
   const [showAdd, setShowAdd] = useState(false)
   const [terminating, setTerminating] = useState(null)
+  const [archiving, setArchiving] = useState(null)
+  const [restoring, setRestoring] = useState(false)
+  const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
-  const canAdd = isAdmin || isHR || hasPermission('hr.employee.update')
-  const canDelete = isAdmin || isHR
+  const [showArchived, setShowArchived] = useState(false)
 
-  const terminate = async (employee) => {
-    const label = employee.employee_code || employee.employee_number || employee.staff_id || 'no code'
-    if (!confirm(`Terminate ${employee.full_name} (${label})?\n\nThis sets the employment status to "terminated". The record and its history are kept.`)) return
+  const canAdd = isAdmin || isHR || hasPermission('hr.employee.update')
+
+  // The terminate/archive actions are shown ONLY to super_admin and
+  // hr_manager (UX). The backend RPC still independently re-verifies
+  // the authenticated user's role — a hidden button is never the gate.
+  const canRunLifecycle = canTerminate || canArchive
+
+  const confirmTerminate = async (employee, { effectiveDate, reason, notes, rehireEligible }) => {
     setActionError('')
-    setTerminating(employee.id)
+    setBusy(true)
+    setTerminating(employee)
     try {
-      await employeeService.terminate(employee.id)
+      await employeeService.terminate(employee.id, { effectiveDate, reason, notes, rehireEligible })
+      setTerminating(null)
       reload()
     } catch (e) {
       setActionError(e?.message || 'Unable to terminate employee')
-    } finally {
       setTerminating(null)
+    } finally {
+      setBusy(false)
     }
   }
+
+  const confirmArchive = async (employee, { reason }) => {
+    setActionError('')
+    setBusy(true)
+    setArchiving(employee)
+    try {
+      await employeeService.archive(employee.id, reason, false)
+      setArchiving(null)
+      reload()
+    } catch (e) {
+      setActionError(e?.message || 'Unable to archive employee')
+      setArchiving(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const confirmRestore = async (employee) => {
+    setActionError('')
+    setBusy(true)
+    setRestoring(employee)
+    try {
+      await employeeService.archive(employee.id, '', true)
+      setRestoring(null)
+      reload()
+    } catch (e) {
+      setActionError(e?.message || 'Unable to restore employee')
+      setRestoring(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const visibleRows = showArchived ? rows : (rows || []).filter((r) => !r.is_archived)
 
   return (
     <div>
@@ -37,11 +83,23 @@ export default function Employees() {
           <h2 className="text-2xl font-semibold text-slate-900">Employees</h2>
           <p className="text-sm text-slate-500 mt-1">Employee directory, department assignment, branch, and employment status</p>
         </div>
-        {canAdd && (
-          <button onClick={() => setShowAdd(true)} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
-            <UserPlus className="w-4 h-4" /> Add Employee
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {canRunLifecycle && (
+            <button
+              onClick={() => setShowArchived((v) => !v)}
+              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium ${
+                showArchived ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <Archive className="w-4 h-4" /> {showArchived ? 'Hide archived' : 'Archived'}
+            </button>
+          )}
+          {canAdd && (
+            <button onClick={() => setShowAdd(true)} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+              <UserPlus className="w-4 h-4" /> Add Employee
+            </button>
+          )}
+        </div>
       </div>
 
       {actionError && (
@@ -51,10 +109,10 @@ export default function Employees() {
       <ModuleTable
         title=""
         subtitle=""
-        rows={rows}
+        rows={visibleRows}
         loading={loading}
         error={error}
-        searchKeys={['full_name', 'email', 'department', 'position', 'branch', 'employee_code']}
+        searchKeys={['full_name', 'email', 'department', 'position', 'branch', 'employee_code', 'employee_number', 'staff_id']}
         columns={[
           { key: 'full_name', label: 'Employee', render: (r) => (
             <Link to={`/employees/${r.id}`} className="group flex items-center gap-2">
@@ -65,29 +123,51 @@ export default function Employees() {
               <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-[#009944]" />
             </Link>
           ) },
-          { key: 'employee_code', label: 'Work ID', render: (r) => r.employee_code || '-' },
+          { key: 'employee_code', label: 'Work ID', render: (r) => r.employee_code || r.employee_number || r.staff_id || '-' },
           { key: 'department', label: 'Department' },
           { key: 'position', label: 'Position' },
           { key: 'branch', label: 'Branch', render: (r) => r.branch || '-' },
           { key: 'employment_status', label: 'Status', render: (r) => status(r.employment_status) },
           { key: 'hire_date', label: 'Date Joined', render: (r) => date(r.hire_date || r.created_at) },
-          ...(canDelete ? [{
+          ...(canRunLifecycle ? [{
             key: 'actions',
             label: '',
             render: (r) => (
-              <div className="flex justify-end">
-                {r.employment_status === 'terminated'
-                  ? <span className="text-xs text-slate-400">Terminated</span>
-                  : (
-                    <button
-                      onClick={() => terminate(r)}
-                      disabled={terminating === r.id}
-                      className="p-2 rounded-lg hover:bg-rose-50 text-rose-500 disabled:opacity-50"
-                      title="Terminate employee"
-                    >
-                      {terminating === r.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                    </button>
-                  )}
+              <div className="flex justify-end items-center gap-1.5">
+                {r.is_archived ? (
+                  <button
+                    onClick={() => confirmRestore(r)}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-600 border border-slate-300 hover:bg-slate-50 disabled:opacity-50"
+                    title="Restore employee from archive"
+                  >
+                    <Archive className="w-3.5 h-3.5" /> Restore
+                  </button>
+                ) : (
+                  <>
+                    {canTerminate && r.employment_status !== 'terminated' && (
+                      <button
+                        onClick={() => setTerminating(r)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-rose-600 border border-rose-200 hover:bg-rose-50"
+                        title="Terminate employee (ends employment, preserves history)"
+                      >
+                        {terminating?.id === r.id && busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserX className="w-3.5 h-3.5" />} Terminate Employee
+                      </button>
+                    )}
+                    {r.employment_status === 'terminated' && (
+                      <span className="text-xs text-slate-400">Terminated</span>
+                    )}
+                    {canArchive && r.employment_status !== 'terminated' && (
+                      <button
+                        onClick={() => setArchiving(r)}
+                        className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs text-slate-500 border border-slate-200 hover:bg-slate-50"
+                        title="Archive employee (hide from active views, preserve history)"
+                      >
+                        <Archive className="w-3.5 h-3.5" /> Archive
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             ),
           }] : []),
@@ -95,6 +175,26 @@ export default function Employees() {
       />
 
       {showAdd && <AddEmployeeModal onClose={() => setShowAdd(false)} onCreated={(empId) => { setShowAdd(false); reload() }} />}
+
+      {terminating && canTerminate && (
+        <TerminationModal
+          employee={terminating}
+          busy={busy}
+          error=""
+          onClose={() => setTerminating(null)}
+          onConfirm={(opts) => confirmTerminate(terminating, opts)}
+        />
+      )}
+
+      {archiving && canArchive && (
+        <ArchiveModal
+          employee={archiving}
+          busy={busy}
+          error=""
+          onClose={() => setArchiving(null)}
+          onConfirm={(opts) => confirmArchive(archiving, opts)}
+        />
+      )}
     </div>
   )
 }

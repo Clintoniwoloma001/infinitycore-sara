@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Briefcase, CalendarDays, Camera, CheckCircle2, Clock, CreditCard, Download, FileText, GraduationCap, Loader2, Pencil, Plus, Printer, RefreshCw, Save, ShieldCheck, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Archive, Briefcase, CalendarDays, Camera, CheckCircle2, Clock, CreditCard, Download, FileText, GraduationCap, Loader2, Pencil, Plus, Printer, RefreshCw, Save, ShieldCheck, Trash2, UserX, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import { date, money, status } from './hrShared'
@@ -17,6 +17,8 @@ import ProfilePhotoModal from '../components/ProfilePhotoModal'
 import BiometricModal from '../components/BiometricModal'
 import EmployeeRecordPrint, { RECORD_SECTIONS, ALL_RECORD_SECTIONS } from '../components/EmployeeRecordPrint'
 import PrintPortal from '../components/PrintPortal'
+import TerminationModal from '../components/TerminationModal'
+import ArchiveModal from '../components/ArchiveModal'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -121,7 +123,7 @@ const HR_CONTROLLED_FIELDS = [
 
 export default function EmployeeProfile() {
   const { id } = useParams()
-  const { hasPermission, user, isAdmin, isHR } = useAuth()
+  const { hasPermission, user, isAdmin, isHR, canTerminate, canArchive } = useAuth()
   const canEdit = hasPermission('hr.employee.update')
 
   const [employee, setEmployee] = useState(null)
@@ -162,6 +164,10 @@ export default function EmployeeProfile() {
   const [passportUrl, setPassportUrl] = useState(null)
   const [recordBusy, setRecordBusy] = useState(false)
   const [recordError, setRecordError] = useState('')
+
+  const [lifecycleBusy, setLifecycleBusy] = useState(false)
+  const [showTerminate, setShowTerminate] = useState(false)
+  const [showArchive, setShowArchive] = useState(false)
 
   // Record section selection (default = full employee file)
   const [recordSections, setRecordSections] = useState(ALL_RECORD_SECTIONS)
@@ -267,6 +273,42 @@ export default function EmployeeProfile() {
   useEffect(() => { load() }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const canIssueLetter = isAdmin || isHR
+
+  // Strict employee-lifecycle actions (Phase 37). Only super_admin and
+  // hr_manager see the buttons (UX); the server-side RPC re-verifies
+  // the authenticated user's role before any write is permitted.
+  const confirmTerminate = async (options) => {
+    setLifecycleBusy(true)
+    try {
+      await employeeService.terminate(employee.id, {
+        effectiveDate: options.effectiveDate,
+        reason: options.reason,
+        notes: options.notes,
+        rehireEligible: options.rehireEligible,
+      })
+      setShowTerminate(false)
+      setMessage('Employee terminated. History preserved.')
+      await load()
+    } catch (e) {
+      setMessage(`Termination failed: ${e?.message || 'server denied the action'}`)
+    } finally {
+      setLifecycleBusy(false)
+    }
+  }
+
+  const confirmArchive = async ({ reason }) => {
+    setLifecycleBusy(true)
+    try {
+      await employeeService.archive(employee.id, reason, false)
+      setShowArchive(false)
+      setMessage('Employee archived. History preserved.')
+      await load()
+    } catch (e) {
+      setMessage(`Archive failed: ${e?.message || 'server denied the action'}`)
+    } finally {
+      setLifecycleBusy(false)
+    }
+  }
 
   const issueLetter = async () => {
     setLetterBusy(true); setLetterError(''); setLetterMsg('')
@@ -551,6 +593,18 @@ export default function EmployeeProfile() {
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 whitespace-nowrap">
               <Printer className="w-4 h-4" /> Print / Download Record
             </button>
+            {canTerminate && employee?.employment_status !== 'terminated' && (
+              <button onClick={() => setShowTerminate(true)} disabled={lifecycleBusy}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 disabled:opacity-50 whitespace-nowrap">
+                <UserX className="w-4 h-4" /> Terminate Employee
+              </button>
+            )}
+            {canArchive && employee?.employment_status !== 'terminated' && (
+              <button onClick={() => setShowArchive(true)} disabled={lifecycleBusy}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap">
+                <Archive className="w-4 h-4" /> Archive
+              </button>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
@@ -1396,6 +1450,26 @@ export default function EmployeeProfile() {
             />
           </PrintPortal>
         </div>
+      )}
+
+      {/* ---- Employee Termination / Archive Modals (Phase 37) ---- */}
+      {showTerminate && canTerminate && (
+        <TerminationModal
+          employee={employee}
+          busy={lifecycleBusy}
+          error=""
+          onClose={() => setShowTerminate(false)}
+          onConfirm={confirmTerminate}
+        />
+      )}
+      {showArchive && canArchive && (
+        <ArchiveModal
+          employee={employee}
+          busy={lifecycleBusy}
+          error=""
+          onClose={() => setShowArchive(false)}
+          onConfirm={confirmArchive}
+        />
       )}
     </div>
   )

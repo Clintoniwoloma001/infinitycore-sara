@@ -66,6 +66,22 @@ export const employeeService = {
     return data
   },
 
+  // Server-side fuzzy match across every employee identity field. Used
+  // by SARA to resolve a spoken/typed name or ID to a single employee
+  // before asking for termination confirmation.
+  async search(keyword) {
+    const needle = String(keyword || '').trim()
+    if (!needle) return []
+    const { data, error } = await supabase
+      .from('employees')
+      .select('id, full_name, employee_code, employee_number, staff_id, department, position, branch, employment_status, hire_date, is_archived, created_at')
+      .or(
+        `full_name.ilike.%${needle}%,employee_code.ilike.%${needle}%,employee_number.ilike.%${needle}%,staff_id.ilike.%${needle}%`
+      )
+      .limit(10)
+    if (error) throw error
+    return data || []
+  },
   async update(employeeId, payload) {
     const { data, error } = await supabase
       .from('employees')
@@ -100,11 +116,42 @@ export const employeeService = {
     }
   },
 
-  // Soft-delete: mark the employee as terminated without removing the record
-  // or its history. Routed through the audited, server-authorized HR-fields RPC
-  // so the same role check and field allowlist apply.
-  async terminate(employeeId) {
-    return this.updateHrFields(employeeId, { employment_status: 'terminated' })
+  // ------------------------------------------------------------------
+  // STRICT TERMINATION / ARCHIVE AUTHORIZATION (Phase 37).
+  //
+  // Termination and archive are employee-lifecycle operations reserved
+  // for `super_admin` and `hr_manager` users. The authorization check
+  // is enforced SERVER-SIDE by the SECURITY DEFINER RPCs and the
+  // employees_termination_guard trigger — this client call never
+  // supplies an actor/role; the backend derives the actor from the
+  // authenticated session and rejects anything else.
+  // ------------------------------------------------------------------
+
+  // Permanent employment-status change to 'terminated' via the audited
+  // terminate_employee RPC. Never deletes the record or its history.
+  async terminate(employeeId, opts = {}) {
+    const { data, error } = await supabase.rpc('terminate_employee', {
+      p_employee_id: employeeId,
+      p_effective_date: opts.effectiveDate || new Date().toISOString().slice(0, 10),
+      p_reason: opts.reason || '',
+      p_hr_notes: opts.notes || null,
+      p_rehire_eligible: opts.rehireEligible ?? true,
+      p_source: opts.source || 'ui',
+    })
+    if (error) throw error
+    return data
+  },
+
+  // Archive (soft-hide) / restore an employee while preserving full
+  // history. Restricted to super_admin/hr_manager on the server.
+  async archive(employeeId, reason = '', restore = false) {
+    const { data, error } = await supabase.rpc('archive_employee', {
+      p_employee_id: employeeId,
+      p_reason: reason || '',
+      p_restore: restore,
+    })
+    if (error) throw error
+    return data
   },
 
   // Phase 12: Self-service personal info update via server-side RPC.

@@ -41,6 +41,41 @@ function extractBranch(text) {
   return null
 }
 
+// ------------------------------------------------------------------
+// Strict termination detection. This is the deterministic entry point
+// for firing/dismissing an employee. It only EXTRACTS the target and
+// intent — the caller (agentService) is still responsible for role
+// checking (super_admin / hr_manager ONLY), employee resolution, user
+// confirmation, and the audited terminate_employee RPC.
+// ------------------------------------------------------------------
+const TERMINATION_VERBS = /\b(terminate|fire|dismiss|let go|lay off|discharge|relieve)\b/i
+
+function extractTerminationTarget(text) {
+  // "<name>'s employment (is|being) terminated"
+  let m = text.match(/([a-zA-Z][a-zA-Z'\s]*?)'s\s+(?:employment\s+)?(?:is|being|be|has been)?\s*terminated/i)
+  if (m) return m[1].trim()
+  // "end <name>'s employment"
+  m = text.match(/\bend\s+([a-zA-Z][a-zA-Z'\s]*?)'s\s+employment/i)
+  if (m) return m[1].trim()
+  // "terminate/fire/dismiss/... <name> ..." — capture the name, stop at
+  // qualifiers like "effective", "for", "because", "due to".
+  m = text.match(/\b(?:terminate|fire|dismiss|let go|lay off|discharge|relieve)\s+(?:the\s+)?(?:employment\s+of\s+|contract\s+of\s+)?([a-zA-Z][a-zA-Z'\s]*?)(?:\s+(?:effective|for|because|due|as of|immediately)|\s*,|\s*\.|\s*$)/i)
+  if (m) return m[1].trim()
+  // "<name>'s employment terminated" without a verb
+  m = text.match(/([a-zA-Z][a-zA-Z'\s]*?)'s\s+employment\s+(?:has\s+been\s+)?terminated/i)
+  if (m) return m[1].trim()
+  return null
+}
+
+function isTerminationRequest(text) {
+  if (/\bonboarding\b/.test(text)) return false
+  if (/\b(?:review|query|about|how do i|how to|what is|who|why)\b/i.test(text) && !TERMINATION_VERBS.test(text)) return false
+  // Avoid "show terminated employees" (a read) — terminate must be a
+  // direct action on a specific person.
+  if (/show|list|display|see|how many|count/i.test(text) && /terminated|termination/i.test(text)) return false
+  return TERMINATION_VERBS.test(text) || /termination|terminate/i.test(text)
+}
+
 function extractDays(text) {
   let m = text.match(/(\d+)\s*days?\s*or\s*less/i)
   if (m) return { max_days: Number(m[1]) }
@@ -101,6 +136,13 @@ export function parseSaraCommand(raw) {
 
   if (/\bhelp\b/i.test(text) && text.split(/\s+/).length < 4) {
     return { intent: 'HELP', filters: {} }
+  }
+
+  if (isTerminationRequest(text)) {
+    const target = extractTerminationTarget(text)
+    if (target && target.trim().length > 1) {
+      return { intent: 'TERMINATE_EMPLOYEE', filters: { employee: target.trim() } }
+    }
   }
 
   if (/\breject/i.test(text)) {
