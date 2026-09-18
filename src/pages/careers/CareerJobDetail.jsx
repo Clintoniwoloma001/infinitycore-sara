@@ -20,9 +20,10 @@ export default function CareerJobDetail() {
   const [status, setStatus] = useState('loading') // loading | ready | error
   const [errorMsg, setErrorMsg] = useState('')
   const [showApply, setShowApply] = useState(false)
-  const [form, setForm] = useState({ full_name: '', email: '', phone: '', current_company: '', years_experience: '', skills: '', cover_letter: '' })
+  const [form, setForm] = useState({ full_name: '', email: '', phone: '', location: '', current_company: '', years_experience: '', skills: '', cover_letter: '' })
   const [cv, setCv] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [formError, setFormError] = useState('')
   const [result, setResult] = useState(null)
 
@@ -54,25 +55,29 @@ export default function CareerJobDetail() {
     setCv(file)
   }
 
+  const removeCV = () => setCv(null)
+
   const submit = async () => {
     setFormError('')
     if (!form.full_name.trim()) return setFormError('Full name is required.')
     if (!form.email.trim() && !form.phone.trim()) return setFormError('An email address or phone number is required.')
-    const folderCheck = cv ? { ok: true } : { ok: true }
-    if (!folderCheck.ok) return setFormError('CV storage is not ready yet. Please try again shortly.')
+    const formConfig = job.application_form_config || {}
+    if (formConfig.cv_required && !cv) return setFormError('Please upload your CV or resume.')
     setSubmitting(true)
+    setUploadProgress(0)
     try {
       let cvPath = null
       let cvMeta = null
       if (cv) {
-        const up = await careerService.uploadCV(cv)
+        const up = await careerService.uploadCV(cv, 'anon', setUploadProgress)
         cvPath = up.path
-        cvMeta = { name: cv.name, size: cv.size, mime: cv.type || 'application/pdf' }
+        cvMeta = { name: cv.name, size: cv.size, mime: up.mime }
       }
       const application = {
         full_name: form.full_name.trim(),
         email: (form.email || '').trim().toLowerCase(),
         phone: (form.phone || '').trim() || null,
+        location: (form.location || '').trim() || null,
         current_company: (form.current_company || '').trim() || null,
         years_experience: Number(form.years_experience || 0),
         skills: (form.skills || '').split(',').map((s) => s.trim()).filter(Boolean),
@@ -143,7 +148,7 @@ export default function CareerJobDetail() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h1 className="text-2xl font-bold text-slate-900">{job.job_title}</h1>
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-slate-500">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-slate-500">
                   <span className="inline-flex items-center gap-1.5"><Building2 className="w-4 h-4" /> {job.department || 'General'}</span>
                   {job.location && <span className="inline-flex items-center gap-1.5"><MapPin className="w-4 h-4" /> {job.location}</span>}
                   <span className="inline-flex items-center gap-1.5"><FileText className="w-4 h-4" /> {job.employment_type || 'full_time'}</span>
@@ -154,6 +159,7 @@ export default function CareerJobDetail() {
                     {fmtMoney(job.salary_currency, job.salary_min)}{job.salary_max ? ` – ${fmtMoney(job.salary_currency, job.salary_max)}` : ''} <span className="text-xs text-slate-400">/ annum</span>
                   </p>
                 )}
+                {job.application_deadline && <p className="mt-2 text-xs text-amber-700">Applications close {new Date(job.application_deadline).toLocaleDateString()}</p>}
               </div>
               <button
                 onClick={() => setShowApply(true)}
@@ -194,10 +200,11 @@ export default function CareerJobDetail() {
                   <label className={labelCls}>Email</label>
                   <input className={inputCls} type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" />
                 </div>
-                <div>
-                  <label className={labelCls}>Phone</label>
-                  <input className={inputCls} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+234…" />
-                </div>
+                 <div>
+                   <label className={labelCls}>Phone</label>
+                   <input className={inputCls} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+234…" />
+                 </div>
+                 {(job.application_form_config?.location !== false) && <div><label className={labelCls}>Location</label><input className={inputCls} value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="City or region" /></div>}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className={labelCls}>Current company</label>
@@ -208,23 +215,24 @@ export default function CareerJobDetail() {
                     <input className={inputCls} type="number" min="0" value={form.years_experience} onChange={(e) => setForm({ ...form, years_experience: e.target.value })} />
                   </div>
                 </div>
-                <div>
-                  <label className={labelCls}>Skills</label>
-                  <input className={inputCls} value={form.skills} onChange={(e) => setForm({ ...form, skills: e.target.value })} placeholder="Comma separated, e.g. Risk Analysis, SQL" />
-                </div>
-                <div>
-                  <label className={labelCls}>Cover letter</label>
-                  <textarea className={textareaCls} rows="4" value={form.cover_letter} onChange={(e) => setForm({ ...form, cover_letter: e.target.value })} placeholder="Introduce yourself and explain why you're the right fit…" />
-                </div>
+                 {(job.application_form_config?.skills !== false) && <div>
+                   <label className={labelCls}>Skills</label>
+                   <input className={inputCls} value={form.skills} onChange={(e) => setForm({ ...form, skills: e.target.value })} placeholder="Comma separated, e.g. Risk Analysis, SQL" />
+                 </div>}
+                 {(job.application_form_config?.cover_letter !== false) && <div>
+                   <label className={labelCls}>Cover letter</label>
+                   <textarea className={textareaCls} rows="4" value={form.cover_letter} onChange={(e) => setForm({ ...form, cover_letter: e.target.value })} placeholder="Introduce yourself and explain why you're the right fit…" />
+                 </div>}
                 <div>
                   <label className={labelCls}>CV / Resume</label>
-                  <label className="flex items-center justify-center gap-2 h-24 rounded-lg border-2 border-dashed border-slate-300 hover:border-[#009944] cursor-pointer text-slate-500 text-sm">
-                    {cv ? (
-                      <span className="flex items-center gap-2 text-[#009944] font-medium"><FileText className="w-4 h-4" /> {cv.name}{' '}<span className="text-xs text-slate-400">({Math.round(cv.size / 1024)} KB) — click to change</span></span>
-                    ) : (<span className="flex items-center gap-2"><Upload className="w-4 h-4" /> Upload PDF or Word</span>)}
-                    <input type="file" accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={handleFile} />
-                  </label>
-                </div>
+                   <label className="flex items-center justify-center gap-2 min-h-24 rounded-lg border-2 border-dashed border-slate-300 hover:border-[#009944] cursor-pointer text-slate-500 text-sm p-3">
+                     {cv ? (
+                       <span className="flex flex-wrap items-center justify-center gap-2 text-[#009944] font-medium"><FileText className="w-4 h-4" /> {cv.name}<span className="text-xs text-slate-400">({Math.round(cv.size / 1024)} KB) — click to replace</span><button type="button" onClick={(event) => { event.preventDefault(); removeCV() }} className="text-xs text-rose-600 hover:underline">Remove</button></span>
+                     ) : (<span className="flex items-center gap-2"><Upload className="w-4 h-4" /> Upload PDF or Word</span>)}
+                     <input type="file" accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={handleFile} />
+                   </label>
+                   {submitting && cv && <div className="mt-2"><div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-[#009944] transition-all" style={{ width: `${uploadProgress}%` }} /></div><p className="text-[11px] text-slate-400 mt-1">Uploading resume… {uploadProgress}%</p></div>}
+                 </div>
                 {formError && <p className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{formError}</p>}
                 <div className="flex gap-3">
                   <button onClick={submit} disabled={submitting} className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-[#009944] text-white py-2.5 text-sm font-semibold hover:bg-[#00813a] disabled:opacity-60">

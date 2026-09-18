@@ -52,11 +52,12 @@ Edge function: `supabase/functions/bankone-transaction-status/index.ts`
 - The function merges `Token` server-side and POSTs to the documented URL above.
 - `TransactionDate` must be `YYYY-MM-DD`; `Amount` is a numeric string and is
   forwarded verbatim (never converted) — no currency conversion is performed.
-- Response is normalized to
-  `{ success, provider, operation, status, requestId, providerStatus, responseCode, responseMessage, data, raw, durationMs }`.
-  Provider HTTP status codes are preserved (200/400/401/403/404/429/5xx);
-  timeouts map to 504. Provider response bodies are forwarded untouched for
-  field compatibility, but the token is never emitted by InfinityCore.
+- Response is normalized to a token-free envelope containing HTTP
+  `providerStatus`, masked `request` metadata, `requestTimestamp`, `durationMs`,
+  and sanitized `data`/`raw` provider fields.
+  Provider HTTP status codes are preserved (200/400/401/403/404/408/429/5xx);
+  network failures map to 502 and timeouts map to 504. Provider error details
+  are surfaced only after recursive secret redaction.
 
 ### Implemented — integration health (no provider call)
 
@@ -104,13 +105,14 @@ Migration (idempotent, additive): `schema_phase43_bankone_live_api.sql`
 - `src/services/bankone/bankoneTypes.js` — env labels (`sandbox`→Staging,
   `live`→Production), documented endpoint roadmap, status styles.
 - `src/pages/BankOneIntegration.jsx` — admin/HR-ops page (route
-  `/bankone-integration`, permission `BANKONE_READ`): explicit Test Connection
-  diagnostics, separate configuration/Edge Function/provider states, status
-  query form, result panel, masked recent logs, endpoint roadmap table.
+  `/bankone-integration`, permission `BANKONE_READ`): Test Connection reuses
+  the real transaction-status form, separate configuration/Edge
+  Function/provider states, result panel, masked recent logs, and endpoint
+  roadmap table.
 
 ## Verification
 
-- `npm run test:bankone` — 23 tests: validation, creds safety, status
+- `npm run test:bankone` — 27 tests: validation, creds safety, status
   classification, timeout, malformed JSON, token-never-returned /
   never-logged / never-sent-from-frontend (source-level).
 - `npm run build` — Vite production build succeeds.

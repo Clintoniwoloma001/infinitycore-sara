@@ -17,21 +17,24 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import {
   DEFAULT_BANKONE_BASE_URL,
   BANKONE_ENV_STAGING,
-  BANKONE_ENV_LIVE,
+  BANKONE_STATUS_ENDPOINT,
   BANKONE_QUERY_ROLES,
+  isAllowedBankOneHost,
+  resolveBankoneEnvironment,
   newRequestId,
 } from '../_shared/bankone-core.mjs'
 
 const OPERATION = 'health'
 
 const DEFAULT_CORS_ORIGINS =
-  'https://clintoniwoloma001.github.io,http://localhost:3000,http://127.0.0.1:3000,http://localhost:4173,http://127.0.0.1:4173,http://localhost:5173,http://127.0.0.1:5173'
+  'https://infinitymfbcore.vercel.app,https://clintoniwoloma001.github.io,http://localhost:3000,http://127.0.0.1:3000,http://localhost:4173,http://127.0.0.1:4173,http://localhost:5173,http://127.0.0.1:5173'
 
 function corsHeaders(origin) {
-  const allowed = (Deno.env.get('BANKONE_CORS_ORIGINS') || DEFAULT_CORS_ORIGINS)
+  const configured = (Deno.env.get('BANKONE_CORS_ORIGINS') || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
+  const allowed = [...new Set([...DEFAULT_CORS_ORIGINS.split(','), ...configured])]
   const allowOrigin = origin && allowed.includes(origin) ? origin : 'null'
   return {
     'Access-Control-Allow-Origin': allowOrigin || 'null',
@@ -52,26 +55,16 @@ function json(body, status = 200, origin) {
   })
 }
 
-function isAllowedBankOneHost(baseUrl) {
-  let u
-  try {
-    u = new URL(String(baseUrl || '').trim())
-  } catch {
-    return false
-  }
-  if (!/^https:$/.test(u.protocol)) return false
-  const host = u.hostname.toLowerCase()
-  return host === 'staging.mybankone.com' || host === 'api.mybankone.com' || host === 'mybankone.com'
-}
-
-function resolveEnvironment(baseUrl) {
-  return String(baseUrl || '').toLowerCase().includes('staging') ? BANKONE_ENV_STAGING : BANKONE_ENV_LIVE
-}
-
 function classifyReachability(call) {
   if (!call) return 'not_tested'
   if (call.status === 'ok') return 'reachable'
-  if (call.error_category === 'network' || call.error_category === 'timeout' || call.http_status) return 'unreachable'
+  if (call.http_status !== null && call.http_status !== undefined) {
+    if (call.error_category === 'malformed_response' || call.error_category === 'provider_response_invalid') return 'provider_response_invalid'
+    if (call.error_category === 'provider_result_failed' || call.error_category === 'provider_result_unconfirmed') return 'provider_result_failed'
+    if (call.error_category === 'unauthorized' || call.error_category === 'forbidden') return 'provider_authentication_rejected'
+    return 'provider_rejected'
+  }
+  if (call.error_category === 'network' || call.error_category === 'timeout') return 'unreachable'
   return 'not_tested'
 }
 
@@ -144,61 +137,24 @@ async function handleHealthRequest(req, origin, requestId) {
   // ---- Configuration health (secret presence only — values never exposed) ----
   const baseUrlRaw = (Deno.env.get('BANKONE_API_BASE_URL') || '').trim()
   const tokenRaw = (Deno.env.get('BANKONE_API_TOKEN') || '').trim()
-  const accountRaw = (Deno.env.get('BANKONE_ACCOUNT_NUMBER') || '').trim()
-  const creditGlRaw = (Deno.env.get('BANKONE_CREDIT_GL_CODE') || '').trim()
-  const debitGlRaw = (Deno.env.get('BANKONE_DEBIT_GL_CODE') || '').trim()
   const timeoutRaw = Deno.env.get('BANKONE_TIMEOUT_MS') || ''
   const baseUrlConfigured = Boolean(baseUrlRaw)
   const tokenConfigured = Boolean(tokenRaw)
-  const accountConfigured = Boolean(accountRaw)
-  const creditGlConfigured = Boolean(creditGlRaw)
-  const debitGlConfigured = Boolean(debitGlRaw)
 
-  const checks = [
-    {
-      name: 'bankone_api_base_url',
-      ok: baseUrlConfigured,
-      detail: baseUrlRaw ? 'BANKONE_API_BASE_URL set' : 'BANKONE_API_BASE_URL missing',
-    },
-    {
-      name: 'bankone_base_url_valid_host',
-      ok: !baseUrlRaw || isAllowedBankOneHost(baseUrlRaw),
-      detail: 'Base URL must be an https BankOne/Qore host',
-    },
-    {
-      name: 'bankone_api_token',
-      ok: tokenConfigured,
-      detail: tokenRaw ? 'BANKONE_API_TOKEN set' : 'BANKONE_API_TOKEN missing',
-    },
-    {
-      name: 'bankone_account_number',
-      ok: accountConfigured,
-      detail: accountConfigured ? 'BANKONE_ACCOUNT_NUMBER set' : 'BANKONE_ACCOUNT_NUMBER missing',
-    },
-    {
-      name: 'bankone_credit_gl_code',
-      ok: creditGlConfigured,
-      detail: creditGlConfigured ? 'BANKONE_CREDIT_GL_CODE set' : 'BANKONE_CREDIT_GL_CODE missing',
-    },
-    {
-      name: 'bankone_debit_gl_code',
-      ok: debitGlConfigured,
-      detail: debitGlConfigured ? 'BANKONE_DEBIT_GL_CODE set' : 'BANKONE_DEBIT_GL_CODE missing',
-    },
-    {
-      name: 'bankone_timeout',
-      ok: !timeoutRaw || !Number.isNaN(Number(timeoutRaw)),
-      detail: timeoutRaw ? 'timeout configured' : 'using default timeout',
-    },
-  ]
-
-  const configurationHealthy = checks.every((c) => c.ok)
+  const baseUrlValid = baseUrlConfigured && isAllowedBankOneHost(baseUrlRaw)
+  const timeoutValid = !timeoutRaw || (Number.isFinite(Number(timeoutRaw)) && Number(timeoutRaw) > 0)
+  const configurationHealthy = baseUrlConfigured && tokenConfigured && baseUrlValid && timeoutValid
+  const checks = [{
+    name: 'bankone_server_configuration',
+    ok: configurationHealthy,
+    detail: configurationHealthy ? 'Server-side BankOne configuration is valid' : 'Server-side BankOne configuration is incomplete or invalid',
+  }]
 
   // ---- Provider reachability (historical evidence only) ----
   let bankoneReachable = null
   let providerEvidence = null
   let lastProviderCall = null
-  const environment = resolveEnvironment(baseUrlRaw || DEFAULT_BANKONE_BASE_URL)
+  const environment = resolveBankoneEnvironment(baseUrlRaw || DEFAULT_BANKONE_BASE_URL)
   try {
     const { data: conn } = await admin
       .from('integration_connections')
@@ -224,49 +180,38 @@ async function handleHealthRequest(req, origin, requestId) {
     lastProviderCall = null
   }
   const reachabilityStatus = classifyReachability(lastProviderCall)
-  if (reachabilityStatus === 'reachable') bankoneReachable = true
+  if (['reachable', 'provider_rejected', 'provider_authentication_rejected', 'provider_response_invalid', 'provider_result_failed'].includes(reachabilityStatus)) bankoneReachable = true
   else if (reachabilityStatus === 'unreachable') bankoneReachable = false
 
-  const missing = [
-    !baseUrlConfigured && 'BANKONE_API_BASE_URL',
-    !tokenConfigured && 'BANKONE_API_TOKEN',
-    !accountConfigured && 'BANKONE_ACCOUNT_NUMBER',
-    !creditGlConfigured && 'BANKONE_CREDIT_GL_CODE',
-    !debitGlConfigured && 'BANKONE_DEBIT_GL_CODE',
-  ].filter(Boolean)
   const message = configurationHealthy
     ? reachabilityStatus === 'not_tested'
       ? 'Configuration is healthy. No documented non-transaction BankOne health endpoint is available; provider connectivity has not been tested.'
       : `Configuration is healthy. Provider reachability reflects the latest real transaction-status attempt; this check did not call BankOne.`
-    : `Configuration is incomplete. Missing ${missing.join(', ')}. Provider connectivity was not tested by this check.`
+    : 'Server-side BankOne configuration is incomplete or invalid. Provider connectivity was not tested by this check.'
 
   const body = {
     ok: configurationHealthy,
-    success: true,
+    success: configurationHealthy,
     functionOperational: true,
-    provider: 'BankOne',
+    provider: 'BankOne/Qore Staging',
     operation: OPERATION,
     requestId,
     configured: configurationHealthy,
+    authType: 'server-side secret',
     environment: environment === BANKONE_ENV_STAGING ? 'staging' : 'production',
     databaseEnvironment: environment,
     configuration: {
-      baseUrlConfigured,
-      tokenConfigured,
-      accountConfigured,
-      creditGlConfigured,
-      debitGlConfigured,
+      configured: configurationHealthy,
+      authType: 'server-side secret',
+      transactionStatusEndpoint: BANKONE_STATUS_ENDPOINT,
     },
     providerReachability: reachabilityStatus,
     message,
-    baseUrlConfigured,
-    tokenConfigured,
-    accountConfigured,
-    creditGlConfigured,
-    debitGlConfigured,
+    transactionStatusEndpoint: BANKONE_STATUS_ENDPOINT,
     configurationHealthy,
     bankoneReachable,
     reachabilityStatus,
+    errorCode: configurationHealthy ? null : 'BANKONE_CONFIGURATION_MISSING',
     lastProviderCall: safeProviderCall(lastProviderCall),
     providerEvidence: providerEvidence
       ? {

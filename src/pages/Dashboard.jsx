@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { AlertTriangle, ArrowRight, Building2, CalendarDays, CheckCircle2, Clock3, FileCheck2, ListChecks, Target, Users } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Building2, CalendarDays, CheckCircle2, Clock3, FileCheck2, ListChecks, Target, TrendingUp, Users } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import RoleSwitcher from '../components/RoleSwitcher'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
@@ -228,6 +228,7 @@ function ManagementDashboard({ snapshot, filters, setFilters, options, access, o
   const headcount = snapshot.headcount || {}
   const onboarding = snapshot.onboarding || {}
   const attendance = snapshot.attendance || {}
+  const attendanceToday = snapshot.attendance_today || {}
   const leave = snapshot.leave || {}
   const performance = snapshot.performance || {}
   const work = snapshot.work || {}
@@ -256,6 +257,9 @@ function ManagementDashboard({ snapshot, filters, setFilters, options, access, o
         <MetricCard icon={Users} label="Employees" value={headcount.total ?? 0} detail={`${headcount.active ?? 0} active${headcount.unconfirmed != null ? ` · ${headcount.unconfirmed} unconfirmed` : ''}`} />
         <MetricCard icon={FileCheck2} label="Onboarding complete" value={onboarding.complete ?? 'No data'} detail={onboarding.pending_review != null ? `${onboarding.pending_review} awaiting review` : null} accent="#2563eb" />
         <MetricCard icon={Clock3} label="Attendance late" value={attendance.late ?? 0} detail={`${attendance.records ?? 0} records in period`} accent="#f59e0b" />
+        <MetricCard icon={CheckCircle2} label="Present today" value={attendanceToday.present_today ?? 0} detail={`${attendanceToday.total_employees ?? 0} active employees`} accent="#009944" />
+        <MetricCard icon={AlertTriangle} label="Absent today" value={attendanceToday.absent_today ?? 0} detail={attendanceToday.working_day === false ? 'Non-working day' : 'No clock-in record'} accent="#ef4444" />
+        <MetricCard icon={TrendingUp} label="Attendance today" value={attendanceToday.attendance_percent == null ? 'No data' : `${attendanceToday.attendance_percent}%`} detail={attendanceToday.average_hours != null ? `${attendanceToday.average_hours} avg hours` : 'No completed shifts'} accent="#2563eb" />
         <MetricCard icon={CalendarDays} label="Leave pending" value={leave.pending ?? 0} detail="Requests awaiting action" accent="#8b5cf6" />
         <MetricCard icon={Target} label="KPI achievement" value={performance.avg_achievement == null ? 'No data' : `${performance.avg_achievement}%`} detail={performance.kpi_count ? `${performance.kpi_count} KPI records` : 'KPI data not yet available'} accent="#009944" />
         <MetricCard icon={ListChecks} label="Work overdue" value={work.overdue ?? 0} detail={`${work.submitted ?? 0} submitted for review`} accent="#ef4444" />

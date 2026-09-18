@@ -94,8 +94,8 @@ async function currentSessionState() {
 }
 
 function errorStage({ body, status, error }) {
-  const providerStatus = body?.statusCode ?? null
-  const providerCode = body?.error?.code
+  const providerStatus = body?.providerStatus ?? null
+  const providerCode = body?.errorCode || body?.error?.code
   if (providerStatus !== null && providerStatus !== undefined) return 'bankone_http'
   if (body?.provider === 'bankone' && ['network', 'timeout', 'malformed_response', 'rate_limited', 'upstream_error'].includes(providerCode)) {
     return 'edge_to_bankone'
@@ -106,7 +106,7 @@ function errorStage({ body, status, error }) {
 }
 
 function defaultErrorMessage({ stage, body, status }) {
-  const providerMessage = body?.error?.providerMessage
+  const providerMessage = body?.error?.providerMessage || (typeof body?.error === 'string' ? body.error : null)
   if (providerMessage) return providerMessage
   if (body?.error?.message) return body.error.message
   if (body?.message) return body.message
@@ -138,7 +138,7 @@ function makeDiagnosticError({
   const safeBody = sanitizeDiagnosticValue(body)
   const requestId = safeBody?.requestId || responseHeader(response, 'x-request-id') || null
   const supabaseRequestId = responseHeader(response, 'sb-request-id') || null
-  const providerHttpStatus = safeBody?.statusCode ?? (stage === 'bankone_http' ? status : null)
+  const providerHttpStatus = safeBody?.providerStatus ?? (stage === 'bankone_http' ? status : null)
   const error = new Error(message || 'BankOne integration call failed.')
   error.name = 'BankOneIntegrationError'
   error.code = code
@@ -155,7 +155,11 @@ function makeDiagnosticError({
   error.providerHttpStatus = providerHttpStatus
   error.requestId = requestId
   error.supabaseRequestId = supabaseRequestId
-  error.details = safeBody?.error?.details || null
+  error.details = safeBody?.error?.details || safeBody?.details || null
+  error.providerRequestSent = safeBody?.providerRequestSent ?? null
+  error.providerResponseReceived = safeBody?.providerResponseReceived ?? null
+  error.requestTimestamp = safeBody?.requestTimestamp || null
+  error.durationMs = safeBody?.durationMs ?? null
   error.responseBody = safeBody
   error.envelope = safeBody && typeof safeBody === 'object' ? safeBody : null
   error.transportMessage = cause?.message ? sanitizeDiagnosticValue(cause.message) : null
@@ -173,6 +177,10 @@ function makeDiagnosticError({
     functionResponseReceived,
     httpStatus: status,
     providerHttpStatus,
+    providerRequestSent: error.providerRequestSent,
+    providerResponseReceived: error.providerResponseReceived,
+    requestTimestamp: error.requestTimestamp,
+    durationMs: error.durationMs,
     requestId,
     supabaseRequestId,
     transportMessage: error.transportMessage,
@@ -189,9 +197,9 @@ export async function unwrapError(error, data, response, context = {}) {
   const body = data && typeof data === 'object'
     ? sanitizeDiagnosticValue(data)
     : await readResponseBody(responseForError) || parseDiagnosticBody(errorContext.body)
-  const status = responseForError?.status || errorContext.status || body?.statusCode || null
+  const status = responseForError?.status || errorContext.status || body?.statusCode || body?.providerStatus || null
   const stage = errorStage({ body, status, error })
-  const code = body?.error?.code
+  const code = body?.errorCode || body?.error?.code
     || (error?.name === 'FunctionsFetchError' ? 'edge_function_unreachable' : 'bankone_call_failed')
   const applicationResponseReceived = Boolean(body?.provider || body?.requestId || body?.operation || body?.functionOperational)
   return makeDiagnosticError({
@@ -249,9 +257,9 @@ export async function invokeBankoneFunction(functionName, body = {}, options = {
     }
     // If the function still returned a success:false envelope (rare), surface it.
     if (data && typeof data === 'object' && data.success === false) {
-      const status = data.statusCode || data.status || null
+      const status = data.statusCode || data.providerStatus || data.status || null
       throw makeDiagnosticError({
-        code: data.error?.code || 'bankone_call_failed',
+        code: data.errorCode || data.error?.code || 'bankone_call_failed',
         message: defaultErrorMessage({ stage: errorStage({ body: data, status, error: null }), body: data, status }),
         stage: errorStage({ body: data, status, error: null }),
         functionName,

@@ -148,6 +148,14 @@ export const assessmentService = {
     return data // { ok, assignment_id, invitation_token, url, expires_at }
   },
 
+  async sendInvitationEmail({ assignmentId, invitationToken }) {
+    const { data, error } = await supabase.functions.invoke('send-assessment-email', {
+      body: { assignmentId, invitationToken },
+    })
+    if (error) throw error
+    return data
+  },
+
   async cancelAssignment(assignmentId) {
     const { data, error } = await supabase
       .from('hr_assessments')

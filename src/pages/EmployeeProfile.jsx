@@ -5,7 +5,7 @@ import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import { date, money, status } from './hrShared'
 import { employeeService } from '../services/employeeService'
-import { attendanceService } from '../services/attendanceService'
+import { attendanceService, formatWorkedHours } from '../services/attendanceService'
 import { documentService } from '../services/documentService'
 import { employmentLetterService } from '../services/employmentLetterService'
 import { guarantorVerificationService } from '../services/guarantorVerificationService'
@@ -22,6 +22,7 @@ import ArchiveModal from '../components/ArchiveModal'
 import MedicalCardModal from '../components/medical/MedicalCardModal'
 import MedicalScreeningHistory from '../components/medical/MedicalScreeningHistory'
 import { openOfferPreview } from '../lib/offerLetterPdf'
+import { trainingService, formatTrainingType, hours as trainingHours } from '../services/trainingService'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -159,6 +160,7 @@ export default function EmployeeProfile() {
   const [queries, setQueries] = useState([])
   const [leaveRequests, setLeaveRequests] = useState([])
   const [trainingLoading, setTrainingLoading] = useState(false)
+  const [trainingRecords, setTrainingRecords] = useState([])
 
   const [showCard, setShowCard] = useState(false)
   const [showRecord, setShowRecord] = useState(false)
@@ -218,6 +220,10 @@ export default function EmployeeProfile() {
       }
       const att = await attendanceService.getHistory(id, { limit: 90 }).catch(() => [])
       setAttendance(att)
+
+      setTrainingLoading(true)
+      setTrainingRecords(await trainingService.listEmployeeRecords(id).catch(() => []))
+      setTrainingLoading(false)
 
       // Load guarantor verifications
       const verifs = await guarantorVerificationService.listVerificationsForEmployee(id).catch(() => [])
@@ -1035,7 +1041,7 @@ export default function EmployeeProfile() {
                       <td className="px-4 py-2">{date(r.attendance_date)}</td>
                       <td className="px-4 py-2">{r.clock_in ? new Date(r.clock_in).toLocaleTimeString() : '—'}</td>
                       <td className="px-4 py-2">{r.clock_out ? new Date(r.clock_out).toLocaleTimeString() : '—'}</td>
-                      <td className="px-4 py-2">{r.work_hours || '—'}</td>
+                      <td className="px-4 py-2">{formatWorkedHours(r)}</td>
                       <td className="px-4 py-2">{status(r.status)}</td>
                     </tr>
                   ))}
@@ -1176,8 +1182,18 @@ export default function EmployeeProfile() {
 
       {/* ---- TRAINING ---- */}
       {tab === 'training' && (
-        <Section title="Training & Development">
-          <ComingSoon title="Training & Development" description="Training records, certifications, and development plans will be available here once the training module is implemented." />
+        <Section title="Training & Development" actions={<Link to="/training" className="text-sm text-[#009944] hover:underline">Open training dashboard</Link>}>
+          {trainingLoading ? <LoadingState label="Loading training history..." /> : (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+                <div className="rounded-lg bg-emerald-50 p-3"><p className="text-xs text-emerald-700">Training hours</p><p className="text-xl font-semibold text-slate-900 mt-1">{trainingHours(trainingRecords.reduce((sum, record) => sum + Number(record.duration_minutes || 0), 0))}h</p></div>
+                <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Completed trainings</p><p className="text-xl font-semibold text-slate-900 mt-1">{trainingRecords.length}</p></div>
+                <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">KSS sessions</p><p className="text-xl font-semibold text-slate-900 mt-1">{trainingRecords.filter((record) => record.training_type === 'kss').length}</p></div>
+                <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Average score</p><p className="text-xl font-semibold text-slate-900 mt-1">{(() => { const scores = trainingRecords.map((record) => Number(record.assessment_percentage)).filter(Number.isFinite); return scores.length ? `${(scores.reduce((sum, score) => sum + score, 0) / scores.length).toFixed(1)}%` : '—' })()}</p></div>
+              </div>
+              {trainingRecords.length === 0 ? <EmptyState title="No training history" description="Assigned and completed development records will appear here." /> : <div className="space-y-3">{trainingRecords.map((record) => { const certificate = record.training_certificates?.[0] || record.training_certificates; return <div key={record.id} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3"><div><p className="font-medium text-slate-900">{record.training_title}</p><p className="text-xs text-slate-500 mt-1">{formatTrainingType(record.training_type)} · {date(record.training_date)} · {trainingHours(record.duration_minutes)}h · {record.facilitator}</p></div>{certificate?.certificate_number && <Link to={`/certificate/verify/${encodeURIComponent(certificate.certificate_number)}`} target="_blank" className="inline-flex items-center gap-1.5 text-sm text-[#009944] hover:underline"><Download className="w-4 h-4" /> Certificate</Link>}</div><p className="text-xs text-slate-400 mt-2">Assessment: {record.assessment_percentage == null ? 'Not required' : `${record.assessment_percentage}% · ${record.assessment_passed ? 'Passed' : 'Not passed'}`}</p></div> })}</div>}
+            </>
+          )}
         </Section>
       )}
 

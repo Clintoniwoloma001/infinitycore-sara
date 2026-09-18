@@ -104,6 +104,11 @@ function extractSearchQuery(text) {
   return null
 }
 
+function extractTrainingArea(text) {
+  const match = text.match(/(?:in|from|did)\s+([a-z][a-z\s&-]*?)\s+area\b/i)
+  return match ? `${match[1].trim()} Area` : null
+}
+
 // ------------------------------------------------------------------
 // Communication (phase 40) intents — read-only and RLS-scoped. They are
 // checked before the generic navigation fallback so "show announcements"
@@ -150,6 +155,25 @@ export function parseSaraCommand(raw) {
   // leave approvals".
   const comm = detectCommunicationIntent(text)
   if (comm) return comm
+
+  // Training/man-hour questions are read-only and are resolved by the
+  // server-side aggregate RPC under the caller's existing organisation scope.
+  if (/fewer than\s+(\d+(?:\.\d+)?)\s+training hours|less than\s+(\d+(?:\.\d+)?)\s+training hours/i.test(text)) {
+    const match = text.match(/(?:fewer than|less than)\s+(\d+(?:\.\d+)?)\s+training hours/i)
+    return { intent: 'TRAINING_LOW_HOURS', filters: { threshold: Number(match?.[1] || 10), area: extractTrainingArea(text) } }
+  }
+  if (/incomplete mandatory training|mandatory training.*incomplete|branches.*incomplete.*training/i.test(text)) {
+    return { intent: 'TRAINING_MANDATORY', filters: { area: extractTrainingArea(text) } }
+  }
+  if (/monthly training report|training report/i.test(text)) {
+    return { intent: 'TRAINING_REPORT', filters: { area: extractTrainingArea(text) } }
+  }
+  if (/training man[- ]hours|man[- ]hours.*(?:training|kss)|kss.*man[- ]hours/i.test(text)) {
+    return { intent: 'TRAINING_MAN_HOURS', filters: { area: extractTrainingArea(text) } }
+  }
+  if (/training hours|employees completed training|completed training/i.test(text)) {
+    return { intent: 'TRAINING_STATS', filters: { area: extractTrainingArea(text) } }
+  }
 
   if (/how many.*(leave|approval|pending)/i.test(text) || /count.*(leave|approval)/i.test(text)) {
     return { intent: 'COUNT_PENDING', filters: {} }

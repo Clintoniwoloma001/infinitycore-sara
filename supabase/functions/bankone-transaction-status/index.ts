@@ -28,15 +28,17 @@
 //   supabase secrets set BANKONE_API_BASE_URL=https://staging.mybankone.com
 //   supabase secrets set BANKONE_API_TOKEN=...
 // Optional:
-//   supabase secrets set BANKONE_TIMEOUT_MS=15000
+//   supabase secrets set BANKONE_TIMEOUT_MS=30000
 //   supabase secrets set BANKONE_CORS_ORIGINS="https://example.com,http://localhost:3000"
 // ============================================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import {
   PROVIDER,
+  DEFAULT_BANKONE_BASE_URL,
   BANKONE_ENV_STAGING,
   BANKONE_ENV_LIVE,
+  BANKONE_STATUS_ENDPOINT,
   BANKONE_QUERY_ROLES,
   validateTransactionStatusRequest,
   buildTransactionStatusRequest,
@@ -44,6 +46,10 @@ import {
   classifyProviderStatus,
   normalizeResponse,
   parseProviderBody,
+  sanitizeProviderValue,
+  extractProviderMessage,
+  maskReference,
+  redactText,
   safeError,
   maskedLogSummary,
   newRequestId,
@@ -53,13 +59,14 @@ import {
 const OPERATION = 'transaction_status'
 
 const DEFAULT_CORS_ORIGINS =
-  'https://clintoniwoloma001.github.io,http://localhost:3000,http://127.0.0.1:3000,http://localhost:4173,http://127.0.0.1:4173,http://localhost:5173,http://127.0.0.1:5173'
+  'https://infinitymfbcore.vercel.app,https://clintoniwoloma001.github.io,http://localhost:3000,http://127.0.0.1:3000,http://localhost:4173,http://127.0.0.1:4173,http://localhost:5173,http://127.0.0.1:5173'
 
 function corsHeaders(origin) {
-  const allowed = (Deno.env.get('BANKONE_CORS_ORIGINS') || DEFAULT_CORS_ORIGINS)
+  const configured = (Deno.env.get('BANKONE_CORS_ORIGINS') || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
+  const allowed = [...new Set([...DEFAULT_CORS_ORIGINS.split(','), ...configured])]
 
   const allowOrigin = origin && allowed.includes(origin) ? origin : 'null'
 
@@ -171,12 +178,19 @@ Deno.serve(async (req) => {
   const baseUrl = Deno.env.get('BANKONE_API_BASE_URL') || ''
   const token = Deno.env.get('BANKONE_API_TOKEN') || ''
   const timeoutMs = resolveTimeoutMs(Deno.env.get('BANKONE_TIMEOUT_MS'))
-  const environment = resolveEnvironment(baseUrl)
+  const environment = resolveEnvironment(baseUrl || DEFAULT_BANKONE_BASE_URL)
 
-  if (!token) {
+  if (!baseUrl || !token) {
     const error = safeError({ category: ERROR_CATEGORIES.MISSING_CREDENTIALS })
-    await recordFailure(admin, { requestId, environment, error, startedAt, actorName, userRef })
-    return json({ success: false, provider: PROVIDER, operation: OPERATION, requestId, error }, 500, origin)
+    return json(failureEnvelope({
+      requestId,
+      environment,
+      error,
+      startedAt,
+      input: validation.value,
+      providerRequestSent: false,
+      providerResponseReceived: false,
+    }), 500, origin)
   }
 
   // ---- 4. Build + call BankOne ----
@@ -185,8 +199,15 @@ Deno.serve(async (req) => {
     outgoing = buildTransactionStatusRequest({ baseUrl, token, input: validation.value })
   } catch (e) {
     const error = safeError({ category: ERROR_CATEGORIES.MISSING_CREDENTIALS })
-    await recordFailure(admin, { requestId, environment, error, startedAt, actorName, userRef })
-    return json({ success: false, provider: PROVIDER, operation: OPERATION, requestId, error }, 500, origin)
+    return json(failureEnvelope({
+      requestId,
+      environment,
+      error,
+      startedAt,
+      input: validation.value,
+      providerRequestSent: false,
+      providerResponseReceived: false,
+    }), 500, origin)
   }
 
   const controller = new AbortController()
@@ -206,50 +227,241 @@ Deno.serve(async (req) => {
     const error = timedOut
       ? safeError({ category: ERROR_CATEGORIES.TIMEOUT })
       : safeError({ category: ERROR_CATEGORIES.NETWORK })
-    await recordFailure(admin, { requestId, environment, error, startedAt, actorName, userRef })
-    return json({ success: false, provider: PROVIDER, operation: OPERATION, requestId, error }, error.status, origin)
+    await recordFailure(admin, {
+      requestId,
+      environment,
+      error,
+      startedAt,
+      actorName,
+      userRef,
+      reference: validation.value.RetrievalReference,
+      secret: token,
+    })
+    return json(failureEnvelope({
+      requestId,
+      environment,
+      error,
+      startedAt,
+      input: validation.value,
+      providerRequestSent: true,
+      providerResponseReceived: false,
+    }), error.status, origin)
   }
   clearTimeout(timer)
 
   const httpStatus = response.status
-  const rawText = await response.text()
-
-  // ---- 5. Preserve provider HTTP status; handle non-JSON bodies ----
-  if (!response.ok) {
-    // Deliberately does NOT echo the provider body. Safe classification only.
-    const error = classifyProviderStatus(httpStatus) || safeError({ category: ERROR_CATEGORIES.UPSTREAM_ERROR, status: httpStatus })
-    await recordFailure(admin, { requestId, environment, error, httpStatus, startedAt, actorName, userRef })
-    return json({ success: false, provider: PROVIDER, operation: OPERATION, requestId, error, statusCode: httpStatus }, httpStatus, origin)
+  let rawText = ''
+  try {
+    rawText = await response.text()
+  } catch {
+    const error = safeError({ category: ERROR_CATEGORIES.MALFORMED_RESPONSE, status: 502 })
+    await recordFailure(admin, {
+      requestId,
+      environment,
+      error,
+      httpStatus,
+      startedAt,
+      actorName,
+      userRef,
+      reference: validation.value.RetrievalReference,
+      secret: token,
+    })
+    return json(failureEnvelope({
+      requestId,
+      environment,
+      error,
+      startedAt,
+      input: validation.value,
+      providerStatus: httpStatus,
+      providerRequestSent: true,
+      providerResponseReceived: false,
+    }), 502, origin)
   }
 
-  let parsed = null
-  {
-    const parsedRes = parseProviderBody(rawText)
-    if (!parsedRes.ok) {
-      const error = safeError({ category: ERROR_CATEGORIES.MALFORMED_RESPONSE })
-      await recordFailure(admin, { requestId, environment, error, httpStatus, startedAt, actorName, userRef })
-      return json({ success: false, provider: PROVIDER, operation: OPERATION, requestId, error, statusCode: httpStatus }, 502, origin)
+  const parsedRes = parseProviderBody(rawText)
+  if (!parsedRes.ok) {
+    if (!response.ok) {
+      const error = classifyProviderStatus(httpStatus) || safeError({ category: ERROR_CATEGORIES.UPSTREAM_ERROR, status: httpStatus })
+      await recordFailure(admin, {
+        requestId,
+        environment,
+        error,
+        httpStatus,
+        startedAt,
+        actorName,
+        userRef,
+        reference: validation.value.RetrievalReference,
+        secret: token,
+      })
+      return json(failureEnvelope({
+        requestId,
+        environment,
+        error,
+        startedAt,
+        input: validation.value,
+        providerStatus: httpStatus,
+        providerRequestSent: true,
+        providerResponseReceived: true,
+      }), httpStatus, origin)
     }
-    parsed = parsedRes.value
+
+    const error = safeError({ category: ERROR_CATEGORIES.MALFORMED_RESPONSE, status: 502 })
+    await recordFailure(admin, {
+      requestId,
+      environment,
+      error,
+      httpStatus,
+      startedAt,
+      actorName,
+      userRef,
+      reference: validation.value.RetrievalReference,
+      secret: token,
+    })
+    return json(failureEnvelope({
+      requestId,
+      environment,
+      error,
+      startedAt,
+      input: validation.value,
+      providerStatus: httpStatus,
+      providerRequestSent: true,
+      providerResponseReceived: true,
+    }), 502, origin)
+  }
+
+  const providerData = sanitizeProviderValue(parsedRes.value, token)
+
+  // ---- 5. Preserve provider HTTP status and expose only safe details ----
+  if (!response.ok) {
+    const classified = classifyProviderStatus(httpStatus) || safeError({ category: ERROR_CATEGORIES.UPSTREAM_ERROR, status: httpStatus })
+    const providerMessage = extractProviderMessage(providerData)
+    const error = {
+      ...classified,
+      providerMessage: providerMessage || classified.providerMessage,
+    }
+    await recordFailure(admin, {
+      requestId,
+      environment,
+      error,
+      httpStatus,
+      startedAt,
+      actorName,
+      userRef,
+      reference: validation.value.RetrievalReference,
+      secret: token,
+    })
+    return json(failureEnvelope({
+      requestId,
+      environment,
+      error,
+      startedAt,
+      input: validation.value,
+      providerStatus: httpStatus,
+      details: providerData,
+      providerRequestSent: true,
+      providerResponseReceived: true,
+    }), httpStatus, origin)
   }
 
   // ---- 6. Normalize + persist audit traces ----
   const durationMs = Date.now() - startedAt
-  const normalized = normalizeResponse({ raw: parsed, operation: OPERATION, requestId, httpStatus, durationMs, secret: token })
-
-  await recordSuccess(admin, {
+  const normalized = normalizeResponse({
+    raw: providerData,
+    operation: OPERATION,
     requestId,
-    environment,
     httpStatus,
     durationMs,
-    startedAt,
-    actorName,
-    userRef,
-    reference: validation.value.RetrievalReference,
-  }).catch(() => {})
+    secret: token,
+    request: safeRequest(validation.value),
+    timestamp: new Date(startedAt).toISOString(),
+    environment: environmentLabel(environment),
+    providerRequestSent: true,
+    providerResponseReceived: true,
+  })
+
+  // A transport-level 200 only means BankOne answered the HTTP request. Keep
+  // the audit state aligned with the provider's business-level result so a
+  // rejected query never appears as a successful provider call in the UI.
+  if (normalized.success) {
+    await recordSuccess(admin, {
+      requestId,
+      environment,
+      httpStatus,
+      durationMs,
+      startedAt,
+      actorName,
+      userRef,
+      reference: validation.value.RetrievalReference,
+      secret: token,
+    }).catch(() => {})
+  } else {
+    await recordFailure(admin, {
+      requestId,
+      environment,
+      error: {
+        code: normalized.errorCode || 'BANKONE_PROVIDER_RESULT_FAILED',
+        message: normalized.error || 'BankOne returned an unsuccessful transaction result.',
+        status: httpStatus,
+      },
+      httpStatus,
+      startedAt,
+      actorName,
+      userRef,
+      reference: validation.value.RetrievalReference,
+      secret: token,
+    }).catch(() => {})
+  }
 
   return json(normalized, httpStatus, origin)
 })
+
+function environmentLabel(environment) {
+  return environment === BANKONE_ENV_STAGING ? 'staging' : 'production'
+}
+
+function safeRequest(input) {
+  return {
+    retrievalReference: maskReference(input?.RetrievalReference),
+    transactionDate: input?.TransactionDate || null,
+  }
+}
+
+function failureEnvelope({
+  requestId,
+  environment,
+  error,
+  startedAt,
+  input,
+  providerStatus = null,
+  details = null,
+  providerRequestSent = false,
+  providerResponseReceived = false,
+}) {
+  const errorMessage = error.providerMessage
+    || (providerStatus === 400 ? 'BankOne rejected the transaction-status request.' : error.message)
+    || 'The BankOne transaction-status request could not be completed.'
+  return {
+    success: false,
+    provider: PROVIDER,
+    operation: OPERATION,
+    status: providerStatus ?? error.status ?? 500,
+    providerStatus,
+    providerHttpStatus: providerStatus,
+    providerReached: providerResponseReceived,
+    statusCode: providerStatus ?? error.status ?? 500,
+    requestId,
+    error: errorMessage,
+    errorCode: error.code,
+    details,
+    request: input ? safeRequest(input) : null,
+    environment: environmentLabel(environment),
+    endpoint: BANKONE_STATUS_ENDPOINT,
+    requestTimestamp: new Date(startedAt).toISOString(),
+    durationMs: Date.now() - startedAt,
+    providerRequestSent,
+    providerResponseReceived,
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Audit writes — masked, token-free, best-effort. Uses the SERVICE ROLE client
@@ -257,7 +469,7 @@ Deno.serve(async (req) => {
 // the other integration RPCs the edge functions call. Never logs secrets.
 // ---------------------------------------------------------------------------
 
-async function recordSuccess(admin, { requestId, environment, httpStatus, durationMs, startedAt, actorName, userRef, reference }) {
+async function recordSuccess(admin, { requestId, environment, httpStatus, durationMs, startedAt, actorName, userRef, reference, secret }) {
   await recordProviderCall(admin, {
     environment,
     operation: OPERATION,
@@ -269,11 +481,12 @@ async function recordSuccess(admin, { requestId, environment, httpStatus, durati
     userRef,
     reference,
     requestId,
+    secret,
   })
-  await audit(admin, { action: 'BANKONE_TRANSACTION_STATUS_OK', actorName, userRef, environment, reference, requestId, httpStatus, durationMs })
+  await audit(admin, { action: 'BANKONE_TRANSACTION_STATUS_OK', actorName, userRef, environment, reference, requestId, httpStatus, durationMs, secret })
 }
 
-async function recordFailure(admin, { requestId, environment, error, httpStatus = null, startedAt, actorName, userRef }) {
+async function recordFailure(admin, { requestId, environment, error, httpStatus = null, startedAt, actorName, userRef, reference = null, secret = '' }) {
   const durationMs = Date.now() - startedAt
   await recordProviderCall(admin, {
     environment,
@@ -286,6 +499,8 @@ async function recordFailure(admin, { requestId, environment, error, httpStatus 
     userRef,
     requestId,
     errorCode: error.code,
+    reference,
+    secret,
   })
   await audit(admin, {
     action: 'BANKONE_TRANSACTION_STATUS_ERROR',
@@ -297,14 +512,17 @@ async function recordFailure(admin, { requestId, environment, error, httpStatus 
     durationMs,
     errorCode: error.code,
     severity: 'high',
+    reference,
+    secret,
   })
 }
 
 // Prefers the Phase 43 RPC (single audited server-side entry point) and falls
 // back to direct writes so the function works even before migrations run.
-async function recordProviderCall(admin, { environment, operation, status, httpStatus, durationMs, startedAt, actorName, userRef, requestId, reference, errorCode }) {
-  const endpointRef = '/thirdpartyapiservice/apiservice/CoreTransactions/TransactionStatusQuery'
+async function recordProviderCall(admin, { environment, operation, status, httpStatus, durationMs, startedAt, actorName, userRef, requestId, reference, errorCode, secret = '' }) {
+  const endpointRef = BANKONE_STATUS_ENDPOINT
   const summary = maskedLogSummary({ operation, status, httpStatus, requestId, errorCode, durationMs })
+  const safeReference = redactText(maskReference(reference) || '', secret) || null
 
   try {
     const { error } = await admin.rpc('integration_record_provider_call', {
@@ -318,7 +536,7 @@ async function recordProviderCall(admin, { environment, operation, status, httpS
       p_correlation_id: requestId,
       p_error_category: errorCode || null,
       p_masked_summary: summary,
-      p_record_reference: reference || null,
+      p_record_reference: safeReference,
       p_created_by: userRef,
     })
     if (!error) return
@@ -335,7 +553,7 @@ async function recordProviderCall(admin, { environment, operation, status, httpS
       status,
       http_status: httpStatus,
       duration_ms: durationMs,
-      record_reference: reference || null,
+      record_reference: safeReference,
       correlation_id: requestId,
       error_category: errorCode || null,
       masked_summary: summary,
@@ -362,8 +580,8 @@ async function recordProviderCall(admin, { environment, operation, status, httpS
   }
 }
 
-async function audit(admin, { action, actorName, userRef, environment, reference, requestId, httpStatus, durationMs, errorCode, severity = 'info' }) {
-  const details = [`env=${environment}`, requestId ? `request=${requestId}` : '', httpStatus ? `http=${httpStatus}` : '', durationMs != null ? `ms=${durationMs}` : '', errorCode ? `error=${errorCode}` : '', reference ? `ref=${reference}` : '']
+async function audit(admin, { action, actorName, userRef, environment, reference, requestId, httpStatus, durationMs, errorCode, severity = 'info', secret = '' }) {
+  const details = [`env=${environment}`, requestId ? `request=${requestId}` : '', httpStatus ? `http=${httpStatus}` : '', durationMs != null ? `ms=${durationMs}` : '', errorCode ? `error=${errorCode}` : '', reference ? `ref=${maskReference(reference)}` : '']
     .filter(Boolean)
     .join(' ')
   try {
@@ -371,8 +589,8 @@ async function audit(admin, { action, actorName, userRef, environment, reference
       action,
       entity_type: 'BankOneIntegration',
       entity_id: requestId,
-      user_name: actorName,
-      details,
+      user_name: redactText(actorName || userRef || 'system', secret),
+      details: redactText(details, secret),
       severity,
     })
   } catch {

@@ -13,7 +13,7 @@ import { useNetworkTime } from '../../hooks/useNetworkTime'
  * schedule stored in the DB, evaluated in the platform timezone. It
  * never claims "on time" merely because a record exists.
  */
-export default function SaraBriefing({ records, employees, isManager, myRecord = null, schedule = null }) {
+export default function SaraBriefing({ records, employees, isManager, myRecord = null, schedule = null, summary = null }) {
   const [briefing, setBriefing] = useState(null)
   const { now: networkNow } = useNetworkTime()
 
@@ -27,11 +27,11 @@ export default function SaraBriefing({ records, employees, isManager, myRecord =
     const timezone = schedule?.timezone || DEFAULT_ATTENDANCE_TIMEZONE
     const today = timeZoneDateKey(networkNow, timezone)
     const todayRecords = records.filter((r) => String(r.attendance_date) === today)
-    const totalEmployees = isManager ? (employees?.length || 0) : 0
-    const presentToday = todayRecords.filter((r) => r.clock_in && (r.status === 'present' || r.status === 'late')).length
-    const lateToday = todayRecords.filter((r) => r.status === 'late' || (r.late_minutes || 0) > 0).length
-    const notClockedIn = isManager ? Math.max(0, totalEmployees - presentToday) : 0
-    const attendancePct = totalEmployees > 0 ? Math.round((presentToday / totalEmployees) * 100) : 0
+    const totalEmployees = isManager ? (summary?.total_employees ?? employees?.length ?? 0) : 0
+    const presentToday = isManager ? (summary?.present_today ?? todayRecords.filter((r) => r.clock_in).length) : 0
+    const lateToday = isManager ? (summary?.late_today ?? todayRecords.filter((r) => r.status === 'late' || (r.late_minutes || 0) > 0).length) : 0
+    const notClockedIn = isManager ? (summary?.absent_today ?? Math.max(0, totalEmployees - presentToday)) : 0
+    const attendancePct = isManager ? (summary?.attendance_percent ?? (totalEmployees > 0 ? Math.round((presentToday / totalEmployees) * 100) : 0)) : 0
 
     // Department breakdown for late arrivals
     const lateByDept = {}
@@ -45,10 +45,13 @@ export default function SaraBriefing({ records, employees, isManager, myRecord =
     const parts = []
 
     if (isManager) {
-      if (attendancePct > 0) parts.push(`${attendancePct}% of employees have clocked in today.`)
+      if (summary?.working_day === false) parts.push('Today is not configured as a working day.')
+      parts.push(`Boss, ${presentToday} of ${totalEmployees} active employees have clocked in today. ${notClockedIn} ${notClockedIn === 1 ? 'employee has' : 'employees have'} no clock-in record yet.`)
       if (lateToday > 0) parts.push(`${lateToday} employee${lateToday > 1 ? 's are' : ' is'} late.`)
       if (topLateDept) parts.push(`The highest late-arrival concentration is in ${topLateDept[0]}.`)
-      if (notClockedIn > 0) parts.push(`${notClockedIn} employee${notClockedIn > 1 ? 's have' : ' has'} not clocked in.`)
+      if ((summary?.cross_branch_today || 0) > 0) {
+        parts.push(`${summary.cross_branch_today} employee${summary.cross_branch_today === 1 ? '' : 's'} clocked in outside their assigned branch${summary.head_office_today ? `; ${summary.head_office_today} at Head Office and ${summary.other_registered_branch_today || 0} at other registered branches` : ''}.`)
+      }
     } else {
       const mine = myRecord || todayRecords[0] || null
       const state = calculateAttendanceState(mine, schedule || {})
@@ -130,6 +133,7 @@ function timeZoneDateKey(date, timeZone) {
 }
 
 function minutesToLabel(minutes) {
+  if (minutes == null) return 'configured time'
   const h = Math.floor((minutes || 0) / 60)
   const m = (minutes || 0) % 60
   const ampm = h >= 12 ? 'PM' : 'AM'

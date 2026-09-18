@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 //
 // Wake-word detection happens locally: we run the browser's own
 // SpeechRecognition in continuous + interim mode and match the phrase
-// "SARA" against interim transcripts in this file. Audio is handled
+// the configured wake words against interim transcripts in this file. Audio is handled
 // entirely by the browser speech engine — we never stream microphone
 // audio to any AI endpoint just to detect the wake word, and we never
 // call a remote model while waiting for the wake word.
@@ -30,13 +30,9 @@ export const MIC_STATES = {
 
 // Central, configurable wake words. The engine derives every pattern
 // from this list — adding a word here is all that is needed later.
-export const SARA_WAKE_WORDS = ['sara', 'core']
-
-// Words that appear in ordinary speech must STAND ALONE at the end of an
-// utterance (or after "hey/okay") before they wake SARA — this stops
-// phrases like "core values" or "core banking" from false-triggering.
-const STRICT_WAKE_WORDS = ['core']
-const LOOSE_WAKE_WORDS = SARA_WAKE_WORDS.filter((w) => !STRICT_WAKE_WORDS.includes(w))
+export const SARA_WAKE_WORDS = ['core', 'sara', 'assistant']
+const WAKE_WORD_MAX_DISTANCE = 1
+const STOP_PHRASE_RE = /^(?:stop(?: listening)?|cancel(?: listening)?|never\s*mind|go to sleep|sleep)$/i
 
 const COMMAND_TIMEOUT_MS = 6000 // spec: ~5–8s command window after the wake word
 
@@ -44,20 +40,43 @@ function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-const LOOSE_WAKE_RE = new RegExp(`(^|[^a-z0-9])(${LOOSE_WAKE_WORDS.map(escapeRegExp).join('|')})(?![a-z0-9])`, 'i')
-const STRICT_WAKE_RE = new RegExp(`(^|[^a-z0-9])(${STRICT_WAKE_WORDS.map(escapeRegExp).join('|')})\\s*\\p{P}*$`, 'iu')
+function levenshteinDistance(a, b) {
+  const previous = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = previous[0]
+    previous[0] = i
+    for (let j = 1; j <= b.length; j += 1) {
+      const above = previous[j]
+      previous[j] = a[i - 1] === b[j - 1]
+        ? diagonal
+        : Math.min(previous[j] + 1, previous[j - 1] + 1, diagonal + 1)
+      diagonal = above
+    }
+  }
+  return previous[b.length]
+}
 
 // Local, on-device detection: finds which (if any) wake word is present
 // and returns { word, command } where command is whatever followed it in
-// the same utterance ("sara show pending" works in one sentence).
-function findWakeMatch(transcript) {
+// the same utterance ("sara show pending" works in one sentence). Tokenizing
+// first gives every trigger a word boundary while allowing one STT typo.
+export function findWakeMatch(transcript) {
   const text = (transcript || '').trim()
   if (!text) return null
-  for (const re of [LOOSE_WAKE_RE, STRICT_WAKE_RE]) {
-    const m = re.exec(text)
-    if (m) return { word: m[2].toLowerCase(), command: extractCommandAfterWake(text, m.index + m[1].length + m[2].length) }
+  const tokens = [...text.toLowerCase().matchAll(/[a-z0-9]+/g)]
+  for (const token of tokens) {
+    const heard = token[0]
+    const word = SARA_WAKE_WORDS.find((candidate) => levenshteinDistance(heard, candidate) <= WAKE_WORD_MAX_DISTANCE)
+    if (word) {
+      const end = token.index + heard.length
+      return { word, command: extractCommandAfterWake(text, end) }
+    }
   }
   return null
+}
+
+export function isStopPhrase(text) {
+  return STOP_PHRASE_RE.test(String(text || '').trim())
 }
 
 function extractCommandAfterWake(text, wakeEnd) {
@@ -220,7 +239,7 @@ export function useSaraVoice() {
 
   // Single-shot command capture (used after the wake word, and by the
   // push-to-talk fallback). Stops the wake recognizer first.
-  const captureCommand = useCallback(({ onResult, ack = null, timeoutMs = COMMAND_TIMEOUT_MS, liveInterim = null, onNoMicrophone = null, onTimeout = null }) => {
+  const captureCommand = useCallback(({ onResult, ack = null, timeoutMs = COMMAND_TIMEOUT_MS, liveInterim = null, onNoMicrophone = null, onTimeout = null, onStop = null }) => {
     stopWake()
     const fire = async () => {
       const ok = await requestMic()
@@ -265,6 +284,10 @@ export function useSaraVoice() {
           if (timeoutTimer) clearTimeout(timeoutTimer)
           setCommandTranscript('')
           const transcript = stripWakePrefix(finalText.trim())
+          if (isStopPhrase(transcript)) {
+            onStop?.()
+            return
+          }
           liveInterim?.(transcript)
           onResult?.(transcript)
         }

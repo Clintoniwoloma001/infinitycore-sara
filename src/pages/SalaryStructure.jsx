@@ -27,7 +27,7 @@ export default function SalaryStructure() {
 
   useEffect(() => {
     Promise.all([
-      supabase.from('employees').select('id, full_name, department, salary, basic_salary, salary_currency').eq('is_archived', false).order('full_name', { ascending: true }),
+      supabase.from('employees').select('id, full_name, department, salary, basic_salary').eq('is_archived', false).order('full_name', { ascending: true }),
       payrollProfileService.listComponents(),
     ]).then(([empRes, comps]) => {
       if (empRes.error) throw empRes.error

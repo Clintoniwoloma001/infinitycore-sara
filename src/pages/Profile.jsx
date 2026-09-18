@@ -9,6 +9,7 @@ import { supabase } from '../supabaseClient'
 import StaffIdCard from '../components/StaffIdCard'
 import ProfilePhotoModal from '../components/ProfilePhotoModal'
 import PrintPortal from '../components/PrintPortal'
+import { trainingService, formatTrainingType, hours as trainingHours } from '../services/trainingService'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -49,6 +50,7 @@ export default function Profile() {
   const [docs, setDocs] = useState([])
   const [photoUrl, setPhotoUrl] = useState(null)
   const [passportUrl, setPassportUrl] = useState(null)
+  const [trainingRecords, setTrainingRecords] = useState([])
 
   const [showCard, setShowCard] = useState(false)
   const [showPhotos, setShowPhotos] = useState(false)
@@ -73,6 +75,7 @@ export default function Profile() {
           setEducation(childData.employee_education || [])
           setGuarantors(childData.employee_guarantors || [])
           setFidelityBonds(childData.employee_fidelity_bonds || [])
+          setTrainingRecords(await trainingService.listEmployeeRecords(emp.id).catch(() => []))
           // Load documents & passport photo
           const docList = await documentService.list('employee', emp.id).catch(() => [])
           setDocs(docList)
@@ -210,6 +213,7 @@ export default function Profile() {
           { id: 'employment', label: 'Employment (Read-only)' },
           { id: 'guarantor', label: 'Guarantor (Read-only)' },
           { id: 'education', label: 'Education & Documents' },
+          { id: 'training', label: 'Training & Development' },
         ].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border ${tab === t.id ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-500 border-slate-200'}`}>
             {t.label}
@@ -456,6 +460,23 @@ export default function Profile() {
               </ul>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Training & Development (read-only employee history) */}
+      {tab === 'training' && (
+        <div className="bg-white rounded-lg border border-slate-200 p-5 space-y-5">
+          <div className="flex items-center justify-between gap-3">
+            <div><div className="flex items-center gap-2"><GraduationCap className="w-5 h-5 text-[#009944]" /><h3 className="font-semibold text-slate-900">Training &amp; Development</h3></div><p className="text-sm text-slate-500 mt-1">Your immutable completion history and certificates.</p></div>
+            <Link to="/my-training" className="text-sm text-[#009944] hover:underline">Open My Training</Link>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="rounded-lg bg-emerald-50 p-3"><p className="text-xs text-emerald-700">Total hours</p><p className="text-xl font-semibold text-slate-900 mt-1">{trainingHours(trainingRecords.reduce((sum, row) => sum + Number(row.duration_minutes || 0), 0))}h</p></div>
+            <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Completed</p><p className="text-xl font-semibold text-slate-900 mt-1">{trainingRecords.length}</p></div>
+            <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">KSS</p><p className="text-xl font-semibold text-slate-900 mt-1">{trainingRecords.filter((row) => row.training_type === 'kss').length}</p></div>
+            <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Certificates</p><p className="text-xl font-semibold text-slate-900 mt-1">{trainingRecords.filter((row) => row.training_certificates?.length || row.training_certificates).length}</p></div>
+          </div>
+          {trainingRecords.length === 0 ? <div className="text-center py-8 text-sm text-slate-400">No training records on file.</div> : <div className="space-y-2">{trainingRecords.map((row) => { const cert = row.training_certificates?.[0] || row.training_certificates; return <div key={row.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-slate-200 p-3"><div><p className="text-sm font-medium text-slate-800">{row.training_title}</p><p className="text-xs text-slate-500 mt-1">{formatTrainingType(row.training_type)} · {row.training_date} · {trainingHours(row.duration_minutes)}h</p></div>{cert?.certificate_number && <Link to={`/certificate/verify/${encodeURIComponent(cert.certificate_number)}`} target="_blank" className="inline-flex items-center gap-1 text-sm text-[#009944] hover:underline"><Download className="w-4 h-4" /> View certificate</Link>}</div> })}</div>}
         </div>
       )}
 

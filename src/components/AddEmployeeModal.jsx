@@ -3,7 +3,6 @@ import { supabase } from '../supabaseClient'
 import { Loader2, X, User, UserPlus, AlertCircle, CheckCircle2, RefreshCw, Mail } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { ROLES, ROLE_METADATA, assignableRoles } from '../constants/roles'
-import { generateCompanyEmail } from '../utils/companyEmail'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -28,7 +27,6 @@ export default function AddEmployeeModal({ onClose, onCreated }) {
   const [duplicate, setDuplicate] = useState(null)
   const [createAccount, setCreateAccount] = useState(false)
   const [empCode, setEmpCode] = useState('')
-  const [generatedEmail, setGeneratedEmail] = useState('')
   const [branches, setBranches] = useState([])
 
   const set = (k) => (e) => {
@@ -49,15 +47,6 @@ export default function AddEmployeeModal({ onClose, onCreated }) {
       .then(({ data }) => { if (data) setBranches(data) }).catch(() => {})
   }, [])
 
-  // Auto-fill a company email once the name is known, unless overridden
-  useEffect(() => {
-    if (!form.full_name || (form.account_email && form.account_email !== generatedEmail)) return
-    const email = generateCompanyEmail(form.full_name)
-    setGeneratedEmail(email)
-    if (email) setForm((f) => ({ ...f, account_email: f.account_email || email }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.full_name])
-
   // Duplicate check on email/phone change
   const checkDuplicate = async (field, value) => {
     if (!value) return
@@ -73,7 +62,7 @@ export default function AddEmployeeModal({ onClose, onCreated }) {
 
   const validate = () => {
     if (!form.full_name) return 'Full name is required.'
-    if (step === 6 && createAccount && !form.account_email) return 'Account email is required when creating a user account.'
+    if (step === 6 && createAccount && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(form.email || '').trim())) return 'This employee does not have a valid email address. Update the employee record before creating the user account.'
     return null
   }
 
@@ -136,19 +125,19 @@ export default function AddEmployeeModal({ onClose, onCreated }) {
       const employeeId = data?.employee_id
 
       // Optionally create user account
-      if (createAccount && form.account_email) {
+      if (createAccount && form.email) {
         try {
-          await supabase.functions.invoke('create-user', {
+          const { data: accountData, error: accountError } = await supabase.functions.invoke('invite-employees', {
             body: {
-              email: form.account_email,
-              fullName: form.full_name,
-              phone: form.phone || null,
-              role: form.account_role || 'staff',
-              department: form.department || null,
-              branch: form.branch || null,
-              userType: 'staff',
+              employee_ids: [employeeId],
+              intended_role: form.account_role || 'staff',
+              reason: 'Employee created with account access',
             },
           })
+          if (accountError) throw accountError
+          if (accountData?.error) throw new Error(accountData.message || accountData.error)
+          const accountResult = accountData?.results?.[0]
+          if (accountResult?.result === 'FAILED' || accountResult?.result === 'INVALID_EMAIL') throw new Error(accountResult.error || 'Employee account invitation failed')
         } catch (e) {
           // Employee created, but account creation failed — not critical
           setSuccess({ employeeId, warning: 'Employee created, but user account creation failed. Edge function may not be deployed.' })
@@ -340,13 +329,8 @@ export default function AddEmployeeModal({ onClose, onCreated }) {
                 <>
                   <div>
                     <label className={labelCls}>Account Email *</label>
-                    <input className={inputCls} value={form.account_email || ''} onChange={set('account_email')} placeholder="john@company.com" />
-                    {generatedEmail && (
-                      <p className="mt-1 flex items-center gap-1 text-xs text-slate-400">
-                        <Mail className="w-3.5 h-3.5" />
-                        Suggested: <span className="text-[#009944] font-medium">{generatedEmail}</span>
-                      </p>
-                    )}
+                    <input className={`${inputCls} bg-slate-50`} value={form.email || ''} readOnly placeholder="Add the employee email in Contact & Address" />
+                    <p className="mt-1 flex items-center gap-1 text-xs text-slate-400"><Mail className="w-3.5 h-3.5" /> The invitation is sent to the employee email above and cannot be changed here.</p>
                   </div>
                   <div>
                     <label className={labelCls}>Account Role</label>

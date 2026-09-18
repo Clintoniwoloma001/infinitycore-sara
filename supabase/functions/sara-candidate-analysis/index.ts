@@ -83,16 +83,32 @@ function sanitizeScreen(raw, cfg) {
     assessment_score: raw.components?.assessment_score != null ? clamp100(raw.components.assessment_score) : null,
     interview_score: raw.components?.interview_score != null ? clamp100(raw.components.interview_score) : null,
   }
-  const weights = (cfg && cfg.weights) || {}
-  const overall = Math.max(0, Math.min(100, Math.round(
-    (Number(weights.education) || 0) * 0.5 +
-    (Number(weights.experience) || 25) * (components.experience_match / 100) +
-    (Number(weights.technical_skills) || 20) * (components.skills_match / 100) +
-    (Number(weights.cv_relevance) || 10) * (components.cv_match / 100) +
-    (Number(weights.cover_letter_relevance) || 10) * (components.cover_letter_relevance / 100) +
-    (Number(weights.assessment_score) || 15) * ((components.assessment_score || 0) / 100) +
-    (Number(weights.interview_score) || 5) * ((components.interview_score || 0) / 100)
-  )))
+  const weights = (cfg && cfg.weights) || {
+    cv_relevance: 30,
+    technical_skills: 25,
+    assessment_score: 25,
+    interview_score: 20,
+  }
+  const componentMap = {
+    education: components.education,
+    experience: components.experience_match,
+    technical_skills: components.skills_match,
+    cv_relevance: components.cv_match,
+    cover_letter_relevance: components.cover_letter_relevance,
+    assessment_score: components.assessment_score,
+    interview_score: components.interview_score,
+  }
+  let weighted = 0
+  let availableWeight = 0
+  const matchBreakdown = {}
+  for (const [key, value] of Object.entries(componentMap)) {
+    const weight = Number(weights[key] || 0)
+    if (weight <= 0 || value == null) continue
+    weighted += weight * (Number(value) / 100)
+    availableWeight += weight
+    matchBreakdown[key] = { weight, score: Number(value), contribution: Math.round(weight * (Number(value) / 100) * 100) / 100 }
+  }
+  const overall = availableWeight > 0 ? Math.max(0, Math.min(100, Math.round((weighted / availableWeight) * 100))) : 0
 
   const strengths = Array.isArray(raw.strengths) ? raw.strengths.map((s) => asString(s, 300)).filter(Boolean).slice(0, 10) : []
   const concerns = Array.isArray(raw.concerns) ? raw.concerns.map((s) => asString(s, 300)).filter(Boolean).slice(0, 10) : []
@@ -116,6 +132,8 @@ function sanitizeScreen(raw, cfg) {
       missing_skills: Array.isArray(raw.missing_skills) ? raw.missing_skills.map((s) => asString(s, 120)).filter(Boolean).slice(0, 25) : [],
       reasoning: asString(raw.reasoning, 3000),
     },
+    match_breakdown: matchBreakdown,
+    evidence_scope: 'job_related_only',
   }
 }
 
@@ -237,7 +255,8 @@ async function screenCandidate(supabase, body) {
     '{"overall_score": number 0-100, "components": {"experience_match": 0-100, "skills_match": 0-100, "cv_match": 0-100, "education": 0-100, "cover_letter_relevance": 0-100, "assessment_score": number|null, "interview_score": number|null}, ' +
     '"skills_found": string[], "missing_skills": string[], "strengths": string[], "concerns": string[], "flags": string[], ' +
     '"summary": string, "recommended_action": "recommended_interview"|"recommended_offer"|"assessment_needed"|"manual_review"|"not_recommended", "reasoning": string}. ' +
-    'Score everything 0-100. Be balanced and specific. If the CV text is absent rely on the cover letter and skills.'
+    'Score everything 0-100. Be balanced and specific. If the CV text is absent rely on the cover letter and skills. ' +
+    'Use only job-related evidence. Never use or infer race, ethnicity, religion, gender, pregnancy, disability, age, political affiliation, marital status, health status, family status, or any other protected/personal characteristic. SARA is advisory and must not make a hiring decision.'
 
   const criteria = cfg
     ? {
@@ -300,6 +319,8 @@ async function screenCandidate(supabase, body) {
     concerns: clean.concerns,
     summary: clean.summary,
     detailed_analysis: clean.detailed_analysis,
+    match_breakdown: clean.match_breakdown,
+    evidence_scope: clean.evidence_scope,
     recommended_action: recommended,
     ai_generated: true,
     created_by: body._actor_id || null,
@@ -311,6 +332,8 @@ async function screenCandidate(supabase, body) {
     .update({
       screening_score: clean.overall_score,
       ai_screening_summary: clean.summary,
+      match_score: clean.overall_score,
+      match_breakdown: clean.match_breakdown,
       application_status: 'screening',
       status_change_note: 'AI screening completed',
     })

@@ -1,7 +1,7 @@
 import { supabase } from '../supabaseClient'
 import { generateToken, md5Hex } from './onboardingService'
 import { logAction } from './supabaseService'
-import { SITE_URL } from '../config/siteUrl'
+import { APP_URL } from '../config/siteUrl'
 
 // ------------------------------------------------------------------
 // Medical Screening / Hospital Referral service (Phase 40).
@@ -55,7 +55,7 @@ export const SCREENING_TYPE_LABEL = (type, other) => {
 }
 
 export function buildMedicalScreeningUrl(token) {
-  return `${SITE_URL}${window.location.pathname}#/medical-screening/${token}`
+  return `${APP_URL}${window.location.pathname}#/medical-screening/${token}`
 }
 
 async function rpcWithRetry(fn) {

@@ -97,7 +97,18 @@ export const dashboardService = {
       p_end_date: filters.endDate || null,
     }
     const { data, error } = await supabase.rpc('get_dashboard_snapshot', range)
-    if (!error && data) return data
+    if (!error && data) {
+      if (data.scope === 'management') {
+        // Do not let an unavailable summary silently turn a real attendance
+        // record into the dashboard's "No data" state. The scoped RPC is the
+        // canonical source; the legacy summary keeps already-deployed schemas
+        // functional until the additive migration is applied.
+        const today = await attendanceService.getDashboardToday(filters)
+          .catch(() => attendanceService.getManagementSummary().catch(() => null))
+        return today ? { ...data, attendance_today: today } : data
+      }
+      return data
+    }
     if (!filters.branchId && !filters.department && !filters.employeeId && !filters.area && isMissingRpc(error)) {
       return getSelfSnapshot(userId)
     }

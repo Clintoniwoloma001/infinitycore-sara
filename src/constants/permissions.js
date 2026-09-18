@@ -96,6 +96,11 @@ export const PERMISSIONS = {
   // Medical screening / hospital referrals (Phase 40)
   MEDICAL_READ: 'medical.read',
   MEDICAL_MANAGE: 'medical.manage',
+
+  // Training, KSS and workforce intelligence (Phase 51)
+  HR_TRAINING_READ: 'hr.training.read',
+  HR_TRAINING_MANAGE: 'hr.training.manage',
+  WORKFORCE_MANHOUR_READ: 'workforce.manhour.read',
 }
 
 // Permission categories for organization
@@ -114,4 +119,5 @@ export const PERMISSION_CATEGORIES = {
   appraisal: 'Appraisal',
   hr_config: 'HR Configuration',
   hr_org: 'HR Organisation',
+  workforce: 'Workforce Intelligence',
 }

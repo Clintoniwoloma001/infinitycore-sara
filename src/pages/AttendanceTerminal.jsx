@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Fingerprint, Loader2, Check, X, Clock, MapPin, ShieldCheck } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, normalizeAttendanceError } from '../services/attendanceService'
@@ -20,6 +20,9 @@ import { useNetworkTime } from '../hooks/useNetworkTime'
 // ============================================================
 export default function AttendanceTerminal() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const terminalToken = new URLSearchParams(location.search).get('token') || ''
+  const publicMode = Boolean(terminalToken)
   const [devices, setDevices] = useState([])
   const [selectedDevice, setSelectedDevice] = useState(null)
   const [pin, setPin] = useState('')
@@ -34,35 +37,37 @@ export default function AttendanceTerminal() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [devs, requirements] = await Promise.all([
-          attendanceEngineService.listDevices(),
-          attendanceService.getAttendanceRequirements(),
-        ])
-        const terminals = devs.filter((d) => d.device_type === 'attendance_terminal' && d.status === 'active')
-        setDevices(terminals)
-        if (terminals.length > 0) setSelectedDevice(terminals[0])
+        const requirements = await attendanceService.getAttendanceRequirements()
+        if (!publicMode) {
+          const devs = await attendanceEngineService.listDevices()
+          const terminals = devs.filter((d) => d.device_type === 'attendance_terminal' && d.status === 'active')
+          setDevices(terminals)
+          if (terminals.length > 0) setSelectedDevice(terminals[0])
+        }
         if (requirements?.appTimezone) setTimeZone(requirements.appTimezone)
       } catch (e) {
         setError(e?.message || 'Failed to load terminal data')
       }
     }
     load()
-  }, [])
+  }, [publicMode])
 
   const verifyEmployee = async () => {
-    if (!pin || !selectedDevice) return
+    if (!pin || (!selectedDevice && !publicMode)) return
     setBusy(true)
     setError('')
     setResult(null)
     setConfirmed(null)
     try {
-      const lookup = await attendanceEngineService.lookupAttendanceEmployee(pin)
-      if (!lookup?.found) {
+      const lookup = publicMode
+        ? await attendanceService.validatePublicTerminalEmployee(terminalToken, pin)
+        : await attendanceEngineService.lookupAttendanceEmployee(pin)
+      if (publicMode ? !lookup?.valid : !lookup?.found) {
         setError(lookup?.error || 'Employee ID not found. Please check the ID and try again.')
         setBusy(false)
         return
       }
-      setConfirmed(lookup.employee)
+      setConfirmed(publicMode ? { employee_number: pin, public: true } : lookup.employee)
     } catch (e) {
       setError(e?.message || 'Employee lookup failed')
     } finally {
@@ -71,23 +76,29 @@ export default function AttendanceTerminal() {
   }
 
   const handleClock = async (eventType) => {
-    if (!selectedDevice || !confirmed) return
+    if ((!selectedDevice && !publicMode) || !confirmed) return
     setBusy(true)
     setError('')
     setResult(null)
     try {
-      const data = await attendanceEngineService.simulateDeviceEvent({
-        deviceId: selectedDevice.id,
-        externalUserId: confirmed.employee_number || pin,
-        eventType,
-        verificationMethod: 'DEVICE_AUTHENTICATION',
-        employeeId: confirmed.id,
-      })
+      const data = publicMode
+        ? await attendanceService.clockPublicTerminal({
+          token: terminalToken,
+          employeeIdentifier: confirmed.employee_number || pin,
+          eventType,
+        })
+        : await attendanceEngineService.simulateDeviceEvent({
+          deviceId: selectedDevice.id,
+          externalUserId: confirmed.employee_number || pin,
+          eventType,
+          verificationMethod: 'DEVICE_AUTHENTICATION',
+          employeeId: confirmed.id,
+        })
 
       if (data?.success) {
         setResult({
           success: true,
-          name: data.employee_name || confirmed.full_name,
+           name: publicMode ? 'Attendance recorded' : (data.employee_name || confirmed.full_name),
           eventType,
           time: data.event_time || data.server_time,
         })
@@ -106,7 +117,7 @@ export default function AttendanceTerminal() {
 
   // ---- WebAuthn / device authentication (option B) ----
   const handleBiometric = async (eventType) => {
-    if (!selectedDevice) return
+    if (!selectedDevice || publicMode) return
     setBusy(true)
     setError('')
     setResult(null)
@@ -160,12 +171,14 @@ export default function AttendanceTerminal() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center p-4">
       <div className="max-w-md w-full">
         {/* Back navigation */}
-        <button
-          onClick={() => navigate(-1)}
-          className="inline-flex items-center gap-1.5 text-sm text-white/50 hover:text-white transition-colors mb-4"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back
-        </button>
+        {!publicMode && (
+          <button
+            onClick={() => navigate(-1)}
+            className="inline-flex items-center gap-1.5 text-sm text-white/50 hover:text-white transition-colors mb-4"
+          >
+            <ArrowLeft className="w-4 h-4" /> Back
+          </button>
+        )}
 
         {/* Terminal Header */}
         <div className="text-center mb-8">
@@ -173,13 +186,13 @@ export default function AttendanceTerminal() {
             <Fingerprint className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-white">InfinityCore</h1>
-          <p className="text-sm text-white/60 mt-1">Attendance Terminal</p>
+           <p className="text-sm text-white/60 mt-1">{publicMode ? 'QR Attendance Terminal' : 'Attendance Terminal'}</p>
           <p className="text-3xl font-bold text-white tabular-nums mt-4">{currentTime ? currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone }) : 'Syncing official time...'}</p>
           <p className="text-sm text-white/60 mt-1">{currentTime ? currentTime.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone }) : 'Official server time'}</p>
         </div>
 
         {/* Device selector */}
-        {devices.length > 1 && (
+        {!publicMode && devices.length > 1 && (
           <div className="mb-6">
             <select
               value={selectedDevice?.id || ''}
@@ -222,11 +235,11 @@ export default function AttendanceTerminal() {
                 {(confirmed.full_name || '?').split(' ').filter(Boolean).slice(0, 2).map((n) => n[0]?.toUpperCase()).join('')}
               </div>
               <div>
-                <p className="font-semibold text-slate-900 text-lg leading-tight">{confirmed.full_name || 'Unknown'}</p>
+                <p className="font-semibold text-slate-900 text-lg leading-tight">{confirmed.public ? 'Employee number verified' : (confirmed.full_name || 'Unknown')}</p>
                 <p className="font-mono text-sm text-[#009944] font-medium">{confirmed.employee_number || '—'}</p>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-sm">
+            {!confirmed.public && <div className="grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-lg bg-slate-50 p-3">
                 <p className="text-xs text-slate-500">Department</p>
                 <p className="font-medium text-slate-800">{confirmed.department || '—'}</p>
@@ -235,7 +248,7 @@ export default function AttendanceTerminal() {
                 <p className="text-xs text-slate-500">Branch</p>
                 <p className="font-medium text-slate-800">{confirmed.branch || '—'}</p>
               </div>
-            </div>
+            </div>}
             <div className="grid grid-cols-2 gap-3 mt-4">
               <button
                 onClick={() => handleClock('CLOCK_IN')}
@@ -258,7 +271,7 @@ export default function AttendanceTerminal() {
         {/* ID entry */}
         {!result?.success && !confirmed && (
           <div className="bg-white/5 backdrop-blur rounded-2xl border border-white/10 p-6">
-            <p className="text-white/60 text-sm text-center mb-4">Enter your Employee ID or PIN</p>
+             <p className="text-white/60 text-sm text-center mb-4">{publicMode ? 'Enter your Employee Number' : 'Enter your Employee ID or PIN'}</p>
             <input
               type="text"
               value={pin}
@@ -276,14 +289,14 @@ export default function AttendanceTerminal() {
               {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShieldCheck className="w-5 h-5" /> Verify ID</>}
             </button>
 
-            {biometricService.isWebAuthnSupported() && (
+             {!publicMode && biometricService.isWebAuthnSupported() && (
               <div className="mt-4 flex items-center gap-3">
                 <div className="flex-1 h-px bg-white/10" />
                 <span className="text-xs text-white/40">or</span>
                 <div className="flex-1 h-px bg-white/10" />
               </div>
             )}
-            <div className="grid grid-cols-2 gap-3 mt-4">
+            {!publicMode && <div className="grid grid-cols-2 gap-3 mt-4">
               <button
                 onClick={() => handleBiometric('CLOCK_IN')}
                 disabled={busy || !networkTimeSynced || !biometricService.isWebAuthnSupported()}
@@ -298,13 +311,18 @@ export default function AttendanceTerminal() {
               >
                 <Fingerprint className="w-4 h-4" /> Biometric Out
               </button>
-            </div>
+            </div>}
           </div>
         )}
 
         {/* Status */}
         <div className="mt-6 text-center space-y-1">
-          {selectedDevice ? (
+          {publicMode ? (
+            <>
+              <p className="text-xs text-white/40 flex items-center justify-center gap-1.5"><MapPin className="w-3 h-3" /> Public QR terminal · location required</p>
+              <p className="text-xs text-white/30 flex items-center justify-center gap-1.5">No InfinityCore login or private employee data is required.</p>
+            </>
+          ) : selectedDevice ? (
             <>
               <p className="text-xs text-white/40 flex items-center justify-center gap-1.5">
                 <MapPin className="w-3 h-3" /> {selectedDevice.device_name} · {selectedDevice.branch_id || 'No branch'}

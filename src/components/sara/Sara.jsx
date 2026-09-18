@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Mic, MicOff, Send, Settings, Volume2, VolumeX, X, Sparkles, Loader2 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { useMyLeaveApprovals } from '../../hooks/useMyLeaveApprovals'
@@ -10,6 +10,7 @@ import { useSaraVoice, speakText, cancelSpeech, MIC_STATES, SARA_WAKE_WORDS, pla
 import { useSaraAlerts, pushBrowserNotification, buildLeaveAlert } from '../../services/saraAlerts'
 import { formatDate } from '../../lib/utils'
 import { LEAVE_TYPE_LABELS } from '../../services/leaveBalanceService'
+import { requestSaraReply, requestSaraSummary, saraErrorMessage } from '../../services/saraChatService'
 
 export const PHASES = {
   IDLE: 'idle',           // ⚪ Idle
@@ -94,6 +95,7 @@ export default function Sara() {
   const { user, name: userName, role, isAdmin, userPermissions } = useAuth()
   const { queue, count, oldest, refresh } = useMyLeaveApprovals()
   const navigate = useNavigate()
+  const location = useLocation()
 
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState([]) // { from: 'sara'|'user', text, requests? }
@@ -103,8 +105,11 @@ export default function Sara() {
   const [pendingConfirm, setPendingConfirm] = useState(null) // { matches, decision, message } | { confirmKind:'terminate', employee, message }
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [micNotice, setMicNotice] = useState('')
+  const [insight, setInsight] = useState(null)
+  const [insightBusy, setInsightBusy] = useState(false)
+  const [insightError, setInsightError] = useState('')
 
-  const { settings, update: updateSettings } = useSaraSettings()
+  const { settings, update: updateSettings } = useSaraSettings(user?.id)
   const voice = useSaraVoice()
   const alerts = useSaraAlerts({ settings, count, oldest })
 
@@ -114,6 +119,9 @@ export default function Sara() {
   voiceRef.current = voice
   const committingRef = useRef(false)
   const pendingConfirmRef = useRef(null) // mirror of pendingConfirm for async callbacks
+  const handleCommandRef = useRef(null)
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
   const setConfirmed = (v) => { pendingConfirmRef.current = v; setPendingConfirm(v) }
 
   // Re-arm wake-word listening after a command completes or times out.
@@ -154,6 +162,7 @@ export default function Sara() {
 
   const handleCommand = async (raw, method) => {
     if (!raw) return
+    const history = messagesRef.current
     setMessages((m) => [...m, { from: 'user', text: raw }])
     setBusy(true)
     setPhase(PHASES.THINK)
@@ -196,7 +205,7 @@ export default function Sara() {
       const result = await runSaraCommand({
         command: raw,
         pool: queue,
-        ctx: { userId: user.id, role, isAdmin, permissions: userPermissions, intent: null },
+        ctx: { userId: user.id, role, isAdmin, permissions: userPermissions, intent: null, route: location.pathname, aiEnabled: settings.aiNlu },
       })
       if (result.type === 'confirm') {
         if (result.intent === 'TERMINATE_EMPLOYEE') {
@@ -210,6 +219,13 @@ export default function Sara() {
       } else if (result.type === 'navigate') {
         say(result.message)
         navigate(result.route)
+      } else if (result.type === 'unknown') {
+        try {
+          const response = await requestSaraReply({ message: raw, history, route: location.pathname })
+          say(response.reply)
+        } catch (e) {
+          say(saraErrorMessage(e))
+        }
       } else {
         say(result.message)
       }
@@ -218,6 +234,23 @@ export default function Sara() {
     } finally {
       setBusy(false)
       setPhase(pendingConfirmRef.current ? PHASES.CONFIRM : PHASES.IDLE)
+      if (method === 'voice' && !pendingConfirmRef.current) rearmWake()
+    }
+  }
+
+  handleCommandRef.current = handleCommand
+
+  const refreshInsight = async (force = false) => {
+    if (insightBusy) return
+    setInsightBusy(true)
+    setInsightError('')
+    try {
+      const result = await requestSaraSummary({ userId: user.id, route: location.pathname, force })
+      setInsight(result)
+    } catch (e) {
+      setInsightError(saraErrorMessage(e))
+    } finally {
+      setInsightBusy(false)
     }
   }
 
@@ -229,12 +262,22 @@ export default function Sara() {
     committingRef.current = true
     voice.captureCommand({
       onResult: (text) => {
-        committingRef.current = false
-        if (text) handleCommand(text, 'voice')
+        if (text) {
+          committingRef.current = true
+          handleCommandRef.current?.(text, 'voice')
+        } else {
+          committingRef.current = false
+        }
       },
       onNoMicrophone: () => { committingRef.current = false },
       timeoutMs: 20000,
       liveInterim: () => {},
+      onStop: () => {
+        committingRef.current = false
+        setConfirmed(null)
+        say('Okay, I stopped listening.')
+        rearmWake()
+      },
     })
     return () => cancelSpeech()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -278,13 +321,20 @@ export default function Sara() {
           const reply = String(word || '').toLowerCase() === 'core' ? "I'm listening." : 'Yes, boss. I\u2019m listening.'
           speakText(reply, { volume: s.volume })
         }
+        if (command) {
+          committingRef.current = true
+          setPhase(PHASES.THINK)
+          handleCommandRef.current?.(command, 'voice')
+          return
+        }
         setPhase(PHASES.LISTEN)
         v.captureCommand({
           onResult: (text) => {
-            committingRef.current = false
             if (text) {
-              handleCommand(text, 'voice')
+              committingRef.current = true
+              handleCommandRef.current?.(text, 'voice')
             } else {
+              committingRef.current = false
               say("I didn't catch that. You can also type your request.")
               rearmWake()
             }
@@ -295,6 +345,11 @@ export default function Sara() {
           onTimeout: () => {
             if (settingsRef.current.voiceOn) speakText("I'm here whenever you need me.", { volume: settingsRef.current.volume })
             setMessages((m) => [...m, { from: 'sara', text: "I'm here whenever you need me." }])
+            rearmWake()
+          },
+          onStop: () => {
+            committingRef.current = false
+            say('Okay, I stopped listening.')
             rearmWake()
           },
         })
@@ -339,11 +394,21 @@ export default function Sara() {
     setPhase(PHASES.LISTEN)
     voice.captureCommand({
       onResult: (text) => {
-        committingRef.current = false
-        if (text) handleCommand(text, 'voice')
-        else { say("I didn't catch that. Please try again or type your request."); setPhase(PHASES.IDLE) }
+        if (text) {
+          committingRef.current = true
+          handleCommandRef.current?.(text, 'voice')
+        } else {
+          committingRef.current = false
+          say("I didn't catch that. Please try again or type your request.")
+          setPhase(PHASES.IDLE)
+        }
       },
       onNoMicrophone: () => setMicNotice("I couldn't reach the microphone for that command."),
+      onStop: () => {
+        committingRef.current = false
+        say('Okay, I stopped listening.')
+        rearmWake()
+      },
     })
   }
 
@@ -358,7 +423,7 @@ export default function Sara() {
   if (!user) return null
 
   const status = STATUS_META[phase]
-  const micActive = voice.wakeListening || phase === PHASES.LISTEN || phase === PHASES.CONFIRM
+  const micActive = voice.wakeListening || voice.micState === MIC_STATES.REQUESTING || phase === PHASES.LISTEN || phase === PHASES.CONFIRM
   const voiceOn = !!(settings.voiceOn && !settings.micMuted)
 
   return (
@@ -389,6 +454,13 @@ export default function Sara() {
           </span>
         )}
       </button>
+
+      {micActive && (
+        <div className="fixed bottom-[4.75rem] right-5 z-40 inline-flex max-w-[calc(100vw-2.5rem)] items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-2 text-[11px] font-medium text-emerald-700 shadow-lg" role="status" aria-live="polite">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
+          {phase === PHASES.WAKE ? WAKE_LABEL : phase === PHASES.LISTEN || phase === PHASES.CONFIRM ? 'Listening for your request' : 'Requesting microphone access'}
+        </div>
+      )}
 
       {open && (
         <div className="fixed bottom-24 right-5 z-40 w-[calc(100vw-2.5rem)] max-w-sm h-[560px] max-h-[75vh] bg-white rounded-2xl border border-slate-200 shadow-2xl flex flex-col overflow-hidden">
@@ -423,7 +495,7 @@ export default function Sara() {
           {settingsOpen ? (
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-slate-50">
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">SARA Settings</p>
-              <Switch label="SARA Voice" hint="Wake word + spoken replies" checked={settings.voiceOn} onChange={(v) => updateSettings({ voiceOn: v })} />
+              <Switch label="SARA Voice / wake words" hint="Explicitly opt in to local microphone listening and spoken replies" checked={settings.voiceOn} onChange={(v) => updateSettings({ voiceOn: v })} />
               <Switch label="Mute Microphone" hint="Blocks listening but keeps replies" checked={settings.micMuted} onChange={(v) => updateSettings({ micMuted: v })} disabled={!settings.voiceOn} />
               <div className="pt-2">
                 <div className="flex items-center justify-between">
@@ -439,6 +511,26 @@ export default function Sara() {
               </div>
               <div className="border-t border-slate-200">
                 <Switch label="AI understanding" hint="Use the server NLU when plain parsing fails" checked={settings.aiNlu} onChange={(v) => updateSettings({ aiNlu: v })} />
+              </div>
+              <div className="border-t border-slate-200 pt-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-slate-700">Live operational insight</p>
+                    <p className="text-xs text-slate-400">Read-only platform data, cached for 5 minutes</p>
+                  </div>
+                  <button type="button" onClick={() => refreshInsight(false)} disabled={insightBusy} className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-white disabled:opacity-50">
+                    {insightBusy ? 'Refreshing…' : insight ? 'Refresh' : 'Generate'}
+                  </button>
+                </div>
+                {insightError && <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700">{insightError}</p>}
+                {insight && (
+                  <div className="mt-2 rounded-lg border border-violet-100 bg-violet-50/60 p-3">
+                    <ul className="space-y-1 text-xs leading-relaxed text-slate-700">
+                      {insight.bullets.map((bullet, index) => <li key={`${bullet}-${index}`} className="flex gap-2"><span className="text-violet-500">•</span><span>{bullet}</span></li>)}
+                    </ul>
+                    <p className="mt-2 text-[10px] text-slate-400">Data captured {new Date(insight.generatedAt).toLocaleString()}</p>
+                  </div>
+                )}
               </div>
               <div className="border-t border-slate-200 pt-2">
                 <Switch label="Quiet hours" checked={settings.quietHours} onChange={(v) => updateSettings({ quietHours: v })} />
@@ -457,7 +549,7 @@ export default function Sara() {
               <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 bg-slate-50">
                 {messages.length === 0 && (
                   <div className="text-center text-xs text-slate-400 mt-8">
-                    Say "Sara" or "Core" to activate, then ask, e.g.<br />"what requires my attention?"<br />or "approve John's leave"
+                    Say "Core", "Sara", or "Assistant" to activate, then ask, e.g.<br />"what requires my attention?"<br />or "approve John's leave"
                   </div>
                 )}
                 {messages.map((m, i) => (
@@ -501,7 +593,7 @@ export default function Sara() {
                   <button
                     onClick={pushToTalk}
                     disabled={busy || !settings.voiceOn}
-                    title={settings.voiceOn ? 'Push to talk (or say "Sara" / "Core")' : 'Voice mode is off'}
+                    title={settings.voiceOn ? 'Push to talk (or say "Core", "Sara", or "Assistant")' : 'Voice mode is off'}
                     className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${micActive ? 'bg-rose-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'} disabled:opacity-40`}
                     aria-label="Push to talk to SARA"
                   >

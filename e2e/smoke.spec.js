@@ -42,4 +42,15 @@ test.describe('app boot', () => {
     await expect(page.getByRole('heading', { name: /payroll\s*&\s*bankone/i })).toHaveCount(0)
     await expect(email).toBeVisible()
   })
+
+  test('certificate verification route is public and handles an unknown number', async ({ page }) => {
+    await page.goto('/#/certificate/verify/INF-TRN-2026-999999')
+    await expect(page.getByText(/certificate (not valid|verification unavailable|valid)/i).first()).toBeVisible({ timeout: 30_000 })
+  })
+
+  test('account activation route is public and does not fall through to page not found', async ({ page }) => {
+    await page.goto('/#/activate-account')
+    const activation = page.getByText(/Invitation unavailable|Welcome to InfinityCore|Authentication system not initialized/i).first()
+    await expect(activation).toBeVisible({ timeout: 30_000 })
+  })
 })

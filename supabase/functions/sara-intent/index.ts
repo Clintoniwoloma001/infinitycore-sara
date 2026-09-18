@@ -24,6 +24,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
 const MODEL = 'gpt-4o-mini'
+const DAILY_CALL_LIMIT = 40
 
 const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS']
 const WRITE_INTENTS = ['APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE']
@@ -50,6 +51,28 @@ function json(body, status = 200) {
     status,
     headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
   })
+}
+
+const memoryUsage = new Map()
+
+async function allowAiCall(supabase, userId) {
+  // Shared durable limiter with sara-chat. The fallback keeps older
+  // deployments bounded until the additive usage migration is applied.
+  try {
+    const { data, error } = await supabase.rpc('consume_sara_ai_usage', {
+      p_daily_limit: DAILY_CALL_LIMIT,
+      p_min_interval_seconds: 0,
+    })
+    if (!error && data && data.allowed === false) return data
+    if (!error && data?.allowed === true) return data
+  } catch { /* use the per-instance fallback below */ }
+  const day = new Date().toISOString().slice(0, 10)
+  const current = memoryUsage.get(userId)
+  const entry = current?.day === day ? current : { day, count: 0 }
+  if (entry.count >= DAILY_CALL_LIMIT) return { allowed: false, error: 'rate_limited' }
+  entry.count += 1
+  memoryUsage.set(userId, entry)
+  return { allowed: true }
 }
 
 function serverWhitelist(role, permsText) {
@@ -136,6 +159,9 @@ Deno.serve(async (req) => {
   }
   const text = String(body?.text || '').trim().slice(0, 500)
   if (!text) return json({ intent: 'UNKNOWN', confidence: 0 })
+
+  const usage = await allowAiCall(supabase, user.id)
+  if (usage.allowed === false) return json({ intent: 'UNKNOWN', confidence: 0, error: 'rate_limited' }, 200)
 
   // Intersect with what the client asked for (advisory) — server wins,
   // but the intersect avoids surprising intents the UI can't render.

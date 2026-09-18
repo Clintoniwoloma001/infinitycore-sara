@@ -1,16 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 // ------------------------------------------------------------------
-// SARA client-side settings — persisted in localStorage only. Nothing
-// here is sensitive; the browser never holds server secrets.
+// SARA client-side settings — persisted in per-user localStorage only.
+// Nothing here is sensitive; the browser never holds server secrets.
 // ------------------------------------------------------------------
 
-const SETTINGS_KEY = 'sara_settings_v1'
-// Legacy single-toggle key kept so existing users keep their choice.
-const LEGACY_VOICE_KEY = 'sara_voice_enabled'
+const SETTINGS_KEY = 'sara_settings_v2'
 
 export const DEFAULT_SETTINGS = {
-  voiceOn: true,          // master voice mode (wake word + spoken replies)
+  voiceOn: false,         // explicit opt-in: wake word + spoken replies
   micMuted: false,        // blocks mic capture, spoken replies still on
   volume: 1,              // 0..1 TTS volume
   voiceAlerts: true,      // speak proactive alerts
@@ -22,9 +20,14 @@ export const DEFAULT_SETTINGS = {
   alertCategories: { leave: true, loan: true, attendance: false, payroll: false, system: true },
 }
 
-function safeRead() {
+function settingsKey(userId) {
+  return userId ? `${SETTINGS_KEY}:${userId}` : SETTINGS_KEY
+}
+
+function safeRead(userId) {
   try {
-    const raw = localStorage.getItem(SETTINGS_KEY)
+    const key = settingsKey(userId)
+    const raw = localStorage.getItem(key)
     const stored = raw ? JSON.parse(raw) : {}
     return { ...DEFAULT_SETTINGS, ...stored }
   } catch {
@@ -32,20 +35,13 @@ function safeRead() {
   }
 }
 
-export function loadSettings() {
-  const s = safeRead()
-  // Back-compat: respect the old master voice toggle if present.
-  try {
-    if (localStorage.getItem(LEGACY_VOICE_KEY) === 'off') s.voiceOn = false
-  } catch { /* no-op */ }
-  return s
+export function loadSettings(userId = null) {
+  return safeRead(userId)
 }
 
-export function persistSettings(next) {
+export function persistSettings(next, userId = null) {
   try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(next))
-    // Keep writing the legacy key so nothing that reads it drifts.
-    try { localStorage.setItem(LEGACY_VOICE_KEY, next.voiceOn ? 'on' : 'off') } catch { /* no-op */ }
+    localStorage.setItem(settingsKey(userId), JSON.stringify(next))
   } catch { /* quota/private-mode safe */ }
 }
 
@@ -63,9 +59,12 @@ export function isQuietHours(settings, now = new Date()) {
   return start < end ? cur >= start && cur < end : cur >= start || cur < end
 }
 
-export function useSaraSettings() {
-  const [settings, setSettings] = useState(loadSettings)
-  useEffect(() => { persistSettings(settings) }, [settings])
+export function useSaraSettings(userId = null) {
+  const [settings, setSettings] = useState(() => loadSettings(userId))
+  useEffect(() => { setSettings(loadSettings(userId)) }, [userId])
+  useEffect(() => {
+    if (userId) persistSettings(settings, userId)
+  }, [settings, userId])
   const update = (patch) => setSettings((prev) => ({ ...prev, ...patch }))
   return { settings, update }
 }

@@ -1,6 +1,12 @@
 import { supabase } from '../supabaseClient'
 import { logAction } from './supabaseService'
 import { sendInAppNotification } from './notificationService'
+import { calculateWorkedHours, calculateWorkedMinutes } from './attendanceCalculations'
+
+// Kept as a service-level export for the existing attendance views.  The
+// calculation itself lives in attendanceCalculations so it can be tested
+// without a Supabase client.
+export { formatWorkedHours } from './attendanceCalculations'
 
 // ------------------------------------------------------------------
 // Attendance — clock in/out with server-authoritative timestamps
@@ -98,6 +104,37 @@ export function formatAttendanceTime(value, timeZone = DEFAULT_ATTENDANCE_TIMEZO
   }
 }
 
+export { calculateWorkedHours, calculateWorkedMinutes }
+
+async function attachLocationEvents(records) {
+  const rows = records || []
+  const ids = rows.map((row) => row.id).filter(Boolean)
+  if (ids.length === 0) return rows
+
+  const { data, error } = await supabase
+    .from('attendance_events')
+    .select('id, attendance_record_id, event_type, event_time, latitude, longitude, geofence_id, geofence_distance, location_status, metadata')
+    .in('attendance_record_id', ids)
+    .in('event_type', ['CLOCK_IN', 'CLOCK_OUT'])
+    .order('event_time', { ascending: true })
+  if (error) return rows
+
+  const byRecord = new Map()
+  for (const event of data || []) {
+    const entry = byRecord.get(event.attendance_record_id) || {}
+    if (event.event_type === 'CLOCK_IN') entry.clock_in_event = event
+    if (event.event_type === 'CLOCK_OUT') entry.clock_out_event = event
+    byRecord.set(event.attendance_record_id, entry)
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    ...(byRecord.get(row.id) || {}),
+    computed_work_hours: calculateWorkedHours(row),
+    computed_total_minutes: calculateWorkedMinutes(row),
+  }))
+}
+
 /**
  * Canonical attendance interpretation. Server-stored values win when
  * present (late_minutes / early_departure_minutes / status), otherwise
@@ -108,9 +145,9 @@ export function formatAttendanceTime(value, timeZone = DEFAULT_ATTENDANCE_TIMEZO
  */
 export function calculateAttendanceState(record, schedule = {}) {
   const timezone = schedule.timezone || DEFAULT_ATTENDANCE_TIMEZONE
-  const startMin = parseHHMM(schedule.workStartTime || '08:00') ?? 480
-  const endMin = parseHHMM(schedule.workEndTime || '17:00') ?? 1020
-  const grace = Number.isFinite(schedule.graceMinutes) ? schedule.graceMinutes : 15
+  const startMin = parseHHMM(schedule.workStartTime)
+  const endMin = parseHHMM(schedule.workEndTime)
+  const grace = Number.isFinite(schedule.graceMinutes) ? schedule.graceMinutes : 0
 
   const base = {
     state: 'not_clocked_in',
@@ -129,7 +166,7 @@ export function calculateAttendanceState(record, schedule = {}) {
   }
   if (!record || !record.clock_in) return base
 
-  const derivedLate = Math.max(0, (timeZoneMinutes(record.clock_in, timezone) ?? startMin) - (startMin + grace))
+  const derivedLate = startMin == null ? 0 : Math.max(0, (timeZoneMinutes(record.clock_in, timezone) ?? startMin) - (startMin + grace))
   const lateMinutes = Number.isFinite(record.late_minutes) && record.late_minutes != null ? record.late_minutes : derivedLate
 
   if (!record.clock_out) {
@@ -143,7 +180,7 @@ export function calculateAttendanceState(record, schedule = {}) {
     }
   }
 
-  const derivedEarly = Math.max(0, endMin - (timeZoneMinutes(record.clock_out, timezone) ?? endMin))
+  const derivedEarly = endMin == null ? 0 : Math.max(0, endMin - (timeZoneMinutes(record.clock_out, timezone) ?? endMin))
   const earlyMinutes = Number.isFinite(record.early_departure_minutes) && record.early_departure_minutes != null
     ? record.early_departure_minutes
     : derivedEarly
@@ -209,6 +246,7 @@ export function getPosition() {
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
         accuracy: pos.coords.accuracy,
+        timestamp: pos.timestamp,
       }),
       (err) => {
         if (err.code === 1) reject(new Error('Location access is required to verify your workplace attendance. Please enable location access and try again.'))
@@ -226,7 +264,7 @@ export function getPosition() {
  */
 export function normalizeAttendanceError(message) {
   const msg = message || 'Attendance action failed. Please try again.'
-  if (msg.startsWith('OUTSIDE_GEOFENCE:')) return 'Not within bank or branch allowed clocking radius.'
+  if (msg.startsWith('OUTSIDE_GEOFENCE:')) return msg.replace('OUTSIDE_GEOFENCE:', '')
   if (msg.startsWith('GEOFENCE_NOT_CONFIGURED:')) return msg.replace('GEOFENCE_NOT_CONFIGURED:', '')
   if (msg.startsWith('LOCATION_REQUIRED:')) return msg.replace('LOCATION_REQUIRED:', '')
   if (msg.startsWith('LOCATION_INVALID:')) return msg.replace('LOCATION_INVALID:', '')
@@ -261,20 +299,21 @@ export const attendanceService = {
       defaultGeofenceRadius: data?.default_geofence_radius ?? 150,
       lateThresholdMinutes: data?.late_threshold_minutes ?? 15,
       earlyDepartureThresholdMinutes: data?.early_departure_threshold_minutes ?? 30,
-      defaultWorkStartTime: data?.default_work_start_time || '08:00',
-      defaultWorkEndTime: data?.default_work_end_time || '17:00',
-      defaultGracePeriodMinutes: data?.default_grace_period_minutes ?? 15,
-      appTimezone: DEFAULT_ATTENDANCE_TIMEZONE,
+      defaultWorkStartTime: data?.default_work_start_time || null,
+      defaultWorkEndTime: data?.default_work_end_time || null,
+      defaultGracePeriodMinutes: data?.default_grace_period_minutes ?? null,
+      defaultWorkingDays: data?.default_working_days || [],
+      appTimezone: data?.app_timezone || DEFAULT_ATTENDANCE_TIMEZONE,
     }
   },
 
   /** Build the canonical schedule object for calculateAttendanceState(). */
   scheduleFor(employee, requirements) {
-    const branch = employee?.branches
     return {
-      workStartTime: branch?.work_start_time || requirements?.defaultWorkStartTime || '08:00',
-      workEndTime: branch?.work_end_time || requirements?.defaultWorkEndTime || '17:00',
-      graceMinutes: branch?.grace_period_minutes ?? requirements?.defaultGracePeriodMinutes ?? 15,
+      workStartTime: requirements?.defaultWorkStartTime || null,
+      workEndTime: requirements?.defaultWorkEndTime || null,
+      graceMinutes: requirements?.defaultGracePeriodMinutes,
+      workingDays: requirements?.defaultWorkingDays || [],
       timezone: requirements?.appTimezone || DEFAULT_ATTENDANCE_TIMEZONE,
     }
   },
@@ -290,7 +329,8 @@ export const attendanceService = {
       .eq('attendance_date', today)
       .limit(1)
     if (error) throw error
-    return data?.[0] || null
+    const rows = await attachLocationEvents(data?.[0] ? [data[0]] : [])
+    return rows[0] || null
   },
 
   async reconcileAutoClockouts() {
@@ -310,7 +350,7 @@ export const attendanceService = {
     q = q.limit(limit)
     const { data, error } = await q
     if (error) throw error
-    return data || []
+    return attachLocationEvents(data || [])
   },
 
   /**
@@ -319,10 +359,9 @@ export const attendanceService = {
    * @param {{ lat: number, lng: number, accuracy: number }=} geo optional
    */
   async clockIn(geo) {
-    const req = await this.getAttendanceRequirements()
-    let coords = geo || null
-    if ((req.requireGpsClockIn || req.geofenceEnabled) && !coords) {
-      coords = await getPosition()
+    let coords = geo || await getPosition()
+    if (!coords || !Number.isFinite(Number(coords.lat)) || !Number.isFinite(Number(coords.lng))) {
+      throw new Error('A valid location is required to clock in.')
     }
     const { data, error } = await supabase.rpc('clock_in_secure', {
       p_lat: coords?.lat ?? null,
@@ -355,10 +394,9 @@ export const attendanceService = {
    * @param {{ lat: number, lng: number, accuracy: number }=} geo optional
    */
   async clockOut(attendanceId, geo) {
-    const req = await this.getAttendanceRequirements()
-    let coords = geo || null
-    if ((req.requireGpsClockOut || req.geofenceEnabled) && !coords) {
-      coords = await getPosition()
+    let coords = geo || await getPosition()
+    if (!coords || !Number.isFinite(Number(coords.lat)) || !Number.isFinite(Number(coords.lng))) {
+      throw new Error('A valid location is required to clock out.')
     }
     const { data, error } = await supabase.rpc('clock_out_secure', {
       p_attendance_id: attendanceId,
@@ -387,7 +425,7 @@ export const attendanceService = {
   async listAll({ startDate, endDate, branchId, department, employeeId, status } = {}) {
     let q = supabase
       .from('attendance_records')
-      .select('*, employees(full_name, department, position, branch, branch_id, user_id), branches(id, branch_name)')
+      .select('*, employees(full_name, department, position, branch, branch_id, user_id, employee_number, staff_id, employee_code, branches(id, branch_name)), branches(id, branch_name)')
       .order('attendance_date', { ascending: false })
       .limit(500)
     if (startDate) q = q.gte('attendance_date', startDate)
@@ -397,18 +435,94 @@ export const attendanceService = {
     if (status) q = q.eq('status', status)
     const { data, error } = await q
     if (error) throw error
-    // Department filter (on joined employee)
-    return (data || []).filter((r) => !department || r.employees?.department === department)
+    // Department filter (on joined employee). Location details are read from
+    // the central event ledger, which preserves different clock-in/out sites.
+    const filtered = (data || []).filter((r) => !department || r.employees?.department === department)
+    return attachLocationEvents(filtered)
   },
 
   async listEmployees() {
     const { data, error } = await supabase
       .from('employees')
-      .select('id, full_name, department, position, branch, branch_id, user_id')
+      .select('id, full_name, department, position, branch, branch_id, user_id, employee_number, staff_id, employee_code')
+      .eq('employment_status', 'active')
+      .eq('is_archived', false)
       .order('full_name')
       .limit(500)
     if (error) throw error
     return data || []
+  },
+
+  async getManagementSummary() {
+    const { data, error } = await supabase.rpc('get_attendance_management_summary')
+    if (error) throw error
+    return data || null
+  },
+
+  // Uses the same role and organizational scope as the aware dashboard.
+  // This avoids a global management summary being shown for a scoped manager
+  // and keeps the card aligned with the dashboard filters.
+  async getDashboardToday({ branchId = null, department = null, employeeId = null, area = null } = {}) {
+    const { data, error } = await supabase.rpc('get_dashboard_attendance_today', {
+      p_branch_id: branchId || null,
+      p_department: department || null,
+      p_employee_id: employeeId || null,
+      p_area: area || null,
+    })
+    if (error) throw error
+    return data || null
+  },
+
+  async listTerminalDevices() {
+    const { data, error } = await supabase
+      .from('attendance_devices')
+      .select('id, device_name, device_type, status, active, branch_id, last_seen_at, updated_at')
+      .eq('device_type', 'attendance_terminal')
+      .order('created_at', { ascending: true })
+    if (error) throw error
+    return data || []
+  },
+
+  async generateTerminalToken(deviceId = null) {
+    const { data, error } = await supabase.rpc('create_attendance_terminal_token', {
+      p_device_id: deviceId,
+      p_device_name: 'QR Attendance Terminal',
+    })
+    if (error) throw error
+    return data
+  },
+
+  async revokeTerminal(deviceId) {
+    const { data, error } = await supabase.rpc('revoke_attendance_terminal', { p_device_id: deviceId })
+    if (error) throw error
+    return data
+  },
+
+  async validatePublicTerminalEmployee(token, employeeIdentifier) {
+    const { data, error } = await supabase.rpc('validate_attendance_terminal_employee', {
+      p_token: token,
+      p_employee_identifier: employeeIdentifier,
+    })
+    if (error) throw error
+    return data
+  },
+
+  async clockPublicTerminal({ token, employeeIdentifier, eventType, geo }) {
+    const coords = geo || await getPosition()
+    if (!coords || !Number.isFinite(Number(coords.lat)) || !Number.isFinite(Number(coords.lng))) {
+      throw new Error('A valid location is required to record attendance.')
+    }
+    const { data, error } = await supabase.rpc('clock_attendance_terminal', {
+      p_token: token,
+      p_employee_identifier: employeeIdentifier,
+      p_event_type: eventType,
+      p_lat: coords.lat,
+      p_lng: coords.lng,
+      p_accuracy: coords.accuracy ?? null,
+    })
+    if (error) throw new Error(normalizeAttendanceError(error.message))
+    if (data?.success === false) throw new Error(normalizeAttendanceError(data.error))
+    return data
   },
 
   async listBranches() {

@@ -21,13 +21,15 @@ export default function ApplicationManagement() {
   const [error, setError] = useState('')
   const [jobFilter, setJobFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [category, setCategory] = useState('all')
+  const [sortBy, setSortBy] = useState('newest')
 
   const load = async () => {
     setLoading(true)
     setError('')
     try {
       const [apps, jobList] = await Promise.all([
-        recruitmentService.listApplications({ jobId: jobFilter || undefined }),
+        recruitmentService.listApplications({ jobId: jobFilter || undefined, status: statusFilter || undefined }),
         recruitmentService.listJobs(),
       ])
       setRows(apps || [])
@@ -47,6 +49,25 @@ export default function ApplicationManagement() {
     return c
   }, [rows])
 
+  const displayRows = useMemo(() => rows.filter((row) => {
+    if (category === 'best_match') return Number(row.match_score ?? row.screening_score ?? 0) >= 70
+    if (category === 'talent_pool') return row.application_status === 'talent_pool'
+    if (category === 'interview') return ['interview', 'interviewed', 'recommended'].includes(row.application_status)
+    if (category === 'offer') return ['offer', 'offer_accepted', 'offer_declined'].includes(row.application_status)
+    if (category === 'hired') return row.application_status === 'hired'
+    if (category === 'blacklisted') return row.application_status === 'blacklisted'
+    if (category === 'rejected') return row.application_status === 'rejected'
+    if (category === 'assessment_pending') return row.application_status === 'assessment'
+    if (category === 'assessment_completed') return ['assessment_passed', 'interview', 'interviewed', 'recommended', 'offer', 'hired'].includes(row.application_status)
+    return true
+  }).sort((a, b) => {
+    if (sortBy === 'match') return Number(b.match_score ?? b.screening_score ?? -1) - Number(a.match_score ?? a.screening_score ?? -1)
+    if (sortBy === 'assessment') return Number(b.assessment_score ?? -1) - Number(a.assessment_score ?? -1)
+    if (sortBy === 'experience') return Number(b.years_experience || 0) - Number(a.years_experience || 0)
+    if (sortBy === 'oldest') return new Date(a.created_at) - new Date(b.created_at)
+    return new Date(b.created_at) - new Date(a.created_at)
+  }), [category, rows, sortBy])
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
@@ -55,6 +76,9 @@ export default function ApplicationManagement() {
           <p className="text-sm text-slate-500 mt-1">Review and manage the recruitment pipeline across all open roles.</p>
         </div>
         <div className="flex items-center gap-2">
+          <select value={category} onChange={(e) => setCategory(e.target.value)} className="h-10 rounded-lg border border-slate-300 px-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#009944]">
+            <option value="all">All candidates</option><option value="best_match">Best match</option><option value="talent_pool">Talent pool</option><option value="interview">Interview</option><option value="offer">Offer</option><option value="hired">Employed</option><option value="blacklisted">Blacklisted</option><option value="rejected">Rejected</option><option value="assessment_pending">Assessment pending</option><option value="assessment_completed">Assessment completed</option>
+          </select>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-10 rounded-lg border border-slate-300 px-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#009944]">
             <option value="">All statuses</option>
             {Object.keys(STAT).map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')} ({counts[s] || 0})</option>)}
@@ -63,6 +87,7 @@ export default function ApplicationManagement() {
             <option value="">All jobs</option>
             {jobs.map((j) => <option key={j.id} value={j.id}>{j.job_title}</option>)}
           </select>
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="h-10 rounded-lg border border-slate-300 px-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#009944]"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="match">Match score</option><option value="assessment">Assessment score</option><option value="experience">Experience</option></select>
         </div>
       </div>
 
@@ -71,7 +96,7 @@ export default function ApplicationManagement() {
       <ModuleTable
         title=""
         subtitle=""
-        rows={rows}
+        rows={displayRows}
         loading={loading}
         error={error}
         searchKeys={['full_name', 'email', 'phone', 'applied_role', 'current_company']}
@@ -87,7 +112,8 @@ export default function ApplicationManagement() {
           { key: 'role', label: 'Role', render: (r) => <div>{r.hr_jobs?.job_title || r.applied_role || '-'}<div className="text-xs text-slate-400">{r.hr_jobs?.department || r.department || ''}</div></div> },
           { key: 'source', label: 'Source', render: (r) => r.application_source || '-' },
           { key: 'application_status', label: 'Status', render: (r) => <StatusBadge label={r.application_status.replace(/_/g, ' ')} color={STAT[r.application_status] || 'slate'} /> },
-          { key: 'screening_score', label: 'Screen', render: (r) => r.screening_score != null ? <span className="font-medium">{Number(r.screening_score).toFixed(1)}</span> : '—' },
+          { key: 'screening_score', label: 'Match', render: (r) => (r.match_score ?? r.screening_score) != null ? <span className="font-medium">{Number(r.match_score ?? r.screening_score).toFixed(1)}%</span> : '—' },
+          { key: 'assessment_score', label: 'Assessment', render: (r) => r.assessment_score != null ? `${Number(r.assessment_score).toFixed(1)}%` : '—' },
           { key: 'created_at', label: 'Applied', render: (r) => date(r.created_at) },
           {
             key: 'actions', label: '', render: (r) => (

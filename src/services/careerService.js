@@ -29,14 +29,22 @@ export const careerService = {
   },
 
   // Upload a CV under career/cvs/... (anonymous insert policy).
-  async uploadCV(file, folder = 'anon') {
+  async uploadCV(file, folder = 'anon', onProgress) {
+    if (!file) throw new Error('Please select a CV or resume.')
+    if (file.size <= 0 || file.size > 10 * 1024 * 1024) throw new Error('CV must be between 1 byte and 10 MB.')
+    if (!/\.(pdf|doc|docx)$/i.test(file.name || '')) throw new Error('CV must be a PDF, DOC, or DOCX file.')
     const safeName = file.name.replace(/[^\w.\- ]+/g, '_')
-    const filePath = `cvs/${folder}/${Date.now()}-${safeName}`
+    const randomFolder = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const filePath = `cvs/${folder}-${randomFolder}/${Date.now()}-${safeName}`
+    const mime = file.type || (/\.docx$/i.test(file.name) ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : /\.doc$/i.test(file.name) ? 'application/msword' : 'application/pdf')
+    onProgress?.(10)
     const { data, error } = await supabase.storage.from('career').upload(filePath, file, {
-      contentType: file.type || 'application/octet-stream',
+      contentType: mime,
+      upsert: false,
     })
     if (error) throw error
-    return { path: data?.path || filePath, name: file.name, size: file.size, mime: file.type }
+    onProgress?.(100)
+    return { path: data?.path || filePath, name: file.name, size: file.size, mime }
   },
 
   // Submit an application. application may include full_name*, email*,
@@ -52,7 +60,7 @@ export const careerService = {
       p_cv_mime: cv?.mime || null,
     })
     if (error) throw error
-    return data // { ok, candidate_id, portal_token, job_url }
+    return data // { ok, candidate_id, application_id, portal_token, job_url }
   },
 
   // ---- Candidate portal (token-gated) ----------------------------------

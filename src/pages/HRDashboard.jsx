@@ -7,6 +7,7 @@ import medicalScreeningService from '../services/medicalScreeningService'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
 import DrillDownModal from '../components/DrillDownModal'
 import { formatDate } from '../lib/utils'
+import { trainingService } from '../services/trainingService'
 
 const safeList = async (table, orderBy = 'created_at') => {
   let query = supabase.from(table).select('*')
@@ -42,6 +43,8 @@ export default function HRDashboard() {
       // HR metrics
       let hrMetrics = null
       try { hrMetrics = await attendanceEngineService.getHRMetrics() } catch { hrMetrics = null }
+      let trainingDashboard = null
+      try { trainingDashboard = await trainingService.getDashboard({ startDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10) }) } catch { trainingDashboard = null }
 
       if (!active) return
       const data = {}
@@ -51,6 +54,7 @@ export default function HRDashboard() {
         if (result.error) errors.push(`${key}: ${result.error.message}`)
       })
       data.hrMetrics = hrMetrics
+      data.trainingDashboard = trainingDashboard
       setState({ loading: false, data, errors })
       // Opportunistic expiry alarms for the medical screening workflow.
       medicalScreeningService.notifyExpiring().catch(() => {})
@@ -61,7 +65,7 @@ export default function HRDashboard() {
 
   if (state.loading) return <LoadingState label="Loading HR dashboard..." />
 
-  const { employees: allEmployees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [], submissions = [], verifications = [], workTasks = [], targets = [], kpis = [], medicalReferrals = [], hrMetrics = null } = state.data
+  const { employees: allEmployees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [], submissions = [], verifications = [], workTasks = [], targets = [], kpis = [], medicalReferrals = [], hrMetrics = null, trainingDashboard = null } = state.data
 
   // Deleted employees are archived (is_archived = true). Exclude them so a
   // deleted record never appears in any count or drill-down row.
@@ -326,6 +330,23 @@ export default function HRDashboard() {
           ))}
         </div>
       </div>
+
+      {trainingDashboard?.summary && (
+        <div className="rounded-xl border border-slate-200 overflow-hidden mb-6 bg-white">
+          <div className="bg-gradient-to-r from-[#007a4a] to-[#00a85a] px-5 py-3 flex items-center justify-between gap-3">
+            <span className="text-white font-semibold text-sm tracking-wide">Training &amp; Development</span>
+            <button onClick={() => navigate('/training')} className="text-xs text-white/80 hover:text-white">Open training dashboard →</button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-slate-100">
+            {[
+              ['Training hours', `${trainingDashboard.summary.training_hours || 0}h`],
+              ['Training man-hours', `${trainingDashboard.summary.training_man_hours || 0}h`],
+              ['Employees trained', trainingDashboard.summary.employees_trained || 0],
+              ['Completion', `${trainingDashboard.summary.completion_percentage || 0}%`],
+            ].map(([label, value]) => <button key={label} onClick={() => navigate('/training')} className="px-4 py-4 text-left hover:bg-slate-50"><div className="text-2xl font-bold text-[#007a4a]">{value}</div><div className="text-xs text-slate-500 mt-0.5">{label}</div></button>)}
+          </div>
+        </div>
+      )}
 
       {/* Medical Screening */}
       {medicalReferrals.length > 0 && (

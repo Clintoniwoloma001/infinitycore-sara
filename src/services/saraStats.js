@@ -49,6 +49,48 @@ export async function getWorkforceStats() {
   return { exceptions, issues, taskReports, kpiSubs, pendingUsers }
 }
 
+// Attendance management and SARA use the same server-derived daily summary.
+// A null result is intentionally returned when the caller is outside the
+// authorized operational scope or the migration is not deployed yet.
+export async function getAttendanceManagementSummary() {
+  try {
+    const { data, error } = await supabase.rpc('get_attendance_management_summary')
+    if (error) return null
+    return data || null
+  } catch {
+    return null
+  }
+}
+
+// Training/man-hour reads go through the scoped database read model. SARA
+// never computes or invents a number from an incomplete client-side dataset.
+export async function getTrainingIntelligence(filters = {}) {
+  try {
+    const params = {
+      p_start_date: filters.startDate || null,
+      p_end_date: filters.endDate || null,
+      p_area: filters.area || null,
+      p_branch_id: filters.branchId || null,
+      p_department: filters.department || null,
+      p_employee_id: filters.employeeId || null,
+    }
+    const [manHours, training] = await Promise.all([
+      supabase.rpc('get_man_hour_intelligence', params),
+      supabase.rpc('get_training_dashboard', params),
+    ])
+    if (manHours.error || training.error) return null
+    return {
+      ...(manHours.data || {}),
+      summary: { ...(training.data?.summary || {}), ...(manHours.data?.summary || {}) },
+      monthly: training.data?.monthly || [],
+      by_area: training.data?.by_area || [],
+      mandatory: training.data?.mandatory || [],
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function countRows(table, filters = null, _ctx = {}) {
   try {
     let q = supabase.from(table).select('id', { count: 'exact', head: true })

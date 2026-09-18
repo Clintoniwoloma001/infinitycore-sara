@@ -6,26 +6,12 @@ import { getPosition } from '../../services/attendanceService'
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 
-const DAYS = [
-  { key: 'mon', label: 'Mon' },
-  { key: 'tue', label: 'Tue' },
-  { key: 'wed', label: 'Wed' },
-  { key: 'thu', label: 'Thu' },
-  { key: 'fri', label: 'Fri' },
-  { key: 'sat', label: 'Sat' },
-  { key: 'sun', label: 'Sun' },
-]
-
 export default function GeofenceEditor({ branch, onSave, busy }) {
   const [form, setForm] = useState({
     latitude: branch?.latitude || '',
     longitude: branch?.longitude || '',
     geofence_radius: branch?.geofence_radius || 150,
     geofence_active: branch?.geofence_active || false,
-    work_start_time: branch?.work_start_time || '08:00',
-    work_end_time: branch?.work_end_time || '17:00',
-    grace_period_minutes: branch?.grace_period_minutes || 15,
-    working_days: branch?.working_days || ['mon', 'tue', 'wed', 'thu', 'fri'],
   })
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState(null)
@@ -33,15 +19,6 @@ export default function GeofenceEditor({ branch, onSave, busy }) {
   const [geoLoading, setGeoLoading] = useState(false)
 
   const update = (k, v) => setForm((p) => ({ ...p, [k]: v }))
-
-  const toggleDay = (day) => {
-    setForm((p) => ({
-      ...p,
-      working_days: p.working_days.includes(day)
-        ? p.work_days?.filter((d) => d !== day)
-        : [...p.working_days, day],
-    }))
-  }
 
   const useMyLocation = async () => {
     setGeoLoading(true)
@@ -82,10 +59,6 @@ export default function GeofenceEditor({ branch, onSave, busy }) {
       longitude: form.longitude ? parseFloat(form.longitude) : null,
       geofence_radius: parseInt(form.geofence_radius) || 150,
       geofence_active: form.geofence_active,
-      work_start_time: form.work_start_time,
-      work_end_time: form.work_end_time,
-      grace_period_minutes: parseInt(form.grace_period_minutes) || 15,
-      working_days: form.working_days,
     })
   }
 
@@ -107,26 +80,14 @@ export default function GeofenceEditor({ branch, onSave, busy }) {
         Use My Current Location
       </button>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelCls}>Geofence Radius (metres)</label>
-          <input type="number" className={inputCls} value={form.geofence_radius} onChange={(e) => update('geofence_radius', e.target.value)} />
-        </div>
-        <div>
-          <label className={labelCls}>Work Start Time</label>
-          <input type="time" className={inputCls} value={form.work_start_time} onChange={(e) => update('work_start_time', e.target.value)} />
-        </div>
-        <div>
-          <label className={labelCls}>Work End Time</label>
-          <input type="time" className={inputCls} value={form.work_end_time} onChange={(e) => update('work_end_time', e.target.value)} />
+          <input type="number" min="1" className={inputCls} value={form.geofence_radius} onChange={(e) => update('geofence_radius', e.target.value)} />
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <label className={labelCls}>Grace Period (minutes)</label>
-          <input type="number" className={inputCls} value={form.grace_period_minutes} onChange={(e) => update('grace_period_minutes', e.target.value)} />
-        </div>
         <div>
           <label className={labelCls}>Geofence Status</label>
           <div className="flex items-center gap-3 mt-2">
@@ -138,19 +99,8 @@ export default function GeofenceEditor({ branch, onSave, busy }) {
         </div>
       </div>
 
-      <div>
-        <label className={labelCls}>Working Days</label>
-        <div className="flex flex-wrap gap-2 mt-1">
-          {DAYS.map((d) => (
-            <button
-              key={d.key}
-              onClick={() => toggleDay(d.key)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${form.working_days?.includes(d.key) ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-500 border-slate-200'}`}
-            >
-              {d.label}
-            </button>
-          ))}
-        </div>
+      <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800">
+        Working days, start/end time, and grace period are managed only in Platform Settings → Working Hours. This editor controls this branch's attendance location and radius.
       </div>
 
       {/* Test location */}

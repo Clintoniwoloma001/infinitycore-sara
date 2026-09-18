@@ -1,25 +1,23 @@
-// Central site/redirect configuration for Supabase auth flows.
-//
-// Production app: https://infinitymfbcore.vercel.app
-// Local development: http://localhost:5173 (Vite default)
-//
-// Using `window.location.origin` as the fallback means auth redirects always
-// return the user to wherever the app is actually running (localhost in dev,
-// the Vercel domain in production, or a preview domain) with zero per-env
-// configuration. `VITE_SITE_URL` exists only as an explicit override for
-// cases where the rendered origin is not the canonical app URL.
-//
-// NOTE: The Supabase Dashboard must have BOTH origins in the Auth > URL
-// Configuration redirect allowlist for confirmations to work in every
-// environment (see docs/supabase-auth-settings.md).
+// One application URL source for all client-side auth redirects.
+// VITE_APP_URL should be set to the canonical production URL in Vercel. The
+// browser-origin fallback keeps local Vite development on its actual port.
+export const PRODUCTION_APP_URL = 'https://infinitymfbcore.vercel.app'
 
-const configureSiteUrl = () => {
-  const configured = import.meta.env.VITE_SITE_URL
-  if (configured) return configured.replace(/\/+$/, '')
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin
-  }
-  return 'https://infinitymfbcore.vercel.app'
+function normalizeUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '')
 }
 
-export const SITE_URL = configureSiteUrl()
+function configureAppUrl() {
+  const configured = normalizeUrl(import.meta.env.VITE_APP_URL)
+  if (configured) return configured
+
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return normalizeUrl(window.location.origin)
+  }
+
+  return PRODUCTION_APP_URL
+}
+
+export const APP_URL = configureAppUrl()
+export const AUTH_REDIRECT_URL = `${APP_URL}/#/activate-account`
+export const SIGNUP_REDIRECT_URL = `${APP_URL}/#/login`

@@ -14,6 +14,10 @@
 //     official Qore/BankOne Channel API documentation.
 // ============================================================================
 
+import { isAmountKoboString, isDateValidYYYYMMDD } from './bankone-validation.mjs'
+
+export { isAmountKoboString, isDateValidYYYYMMDD } from './bankone-validation.mjs'
+
 export const PROVIDER = 'bankone'
 export const BANKONE_ENV_STAGING = 'sandbox' // DB environment value for the staging surface
 export const BANKONE_ENV_LIVE = 'live'
@@ -28,7 +32,7 @@ export const CHANNELS_API_PATH = '/thirdpartyapiservice/apiservice'
 // Query; Channels API category). Do not add undocumented peers here.
 export const BANKONE_STATUS_ENDPOINT = `${CHANNELS_API_PATH}/CoreTransactions/TransactionStatusQuery`
 
-export const DEFAULT_TIMEOUT_MS = 15000
+export const DEFAULT_TIMEOUT_MS = 30000
 export const MAX_TIMEOUT_MS = 60000
 
 export function isAllowedBankOneHost(baseUrl) {
@@ -53,9 +57,6 @@ export function resolveBankoneEnvironment(baseUrl) {
 // authorization system.
 export const BANKONE_QUERY_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer', 'operations_manager']
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
-const AMOUNT_RE = /^\d+(\.\d{1,2})?$/
-
 export function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -64,25 +65,17 @@ export function isPlainObject(value) {
 // Validation — malformed requests must never reach the provider.
 // ---------------------------------------------------------------------------
 
-// Validates a true calendar date, not just the YYYY-MM-DD shape.
-export function isDateValidYYYYMMDD(value) {
-  if (typeof value !== 'string') return false
-  if (!DATE_RE.test(value)) return false
-  const [y, m, d] = value.split('-').map(Number)
-  if (y < 1900 || y > 2200 || m < 1 || m > 12 || d < 1 || d > 31) return false
-  const dt = new Date(Date.UTC(y, m - 1, d))
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
-}
-
-// Numeric string that BankOne interprets as an amount in kobo/CENT units.
-// Kept as a string and forwarded unchanged — we never convert currency.
-export function isAmountKoboString(value) {
-  if (typeof value !== 'string') return false
-  return AMOUNT_RE.test(value)
-}
-
 export function cleanString(value, maxLength) {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : ''
+}
+
+// Transaction references are useful for correlation, but should not be copied
+// into general audit text in full.
+export function maskReference(value) {
+  const reference = cleanString(value, 64)
+  if (!reference) return null
+  if (reference.length <= 4) return '*'.repeat(reference.length)
+  return `${reference.slice(0, 2)}...${reference.slice(-2)}`
 }
 
 // Validation for the transaction status query. The Qore docs mark all five
@@ -96,12 +89,15 @@ export function validateTransactionStatusRequest(body) {
   const RetrievalReference = cleanString(raw.RetrievalReference, 64)
   const TransactionDate = cleanString(raw.TransactionDate, 10)
   const TransactionType = cleanString(raw.TransactionType, 64)
-  const Amount = cleanString(raw.Amount, 32)
+  const amountProvided = raw.Amount !== undefined && raw.Amount !== null && String(raw.Amount).trim() !== ''
+  const Amount = typeof raw.Amount === 'number' && Number.isFinite(raw.Amount)
+    ? String(raw.Amount)
+    : cleanString(raw.Amount, 32)
 
   if (!RetrievalReference) errors.push('RetrievalReference is required')
   if (!TransactionDate) errors.push('TransactionDate is required')
   else if (!isDateValidYYYYMMDD(TransactionDate)) errors.push('TransactionDate must be a valid YYYY-MM-DD date')
-  if (Amount && !isAmountKoboString(Amount)) errors.push('Amount must be a numeric kobo/CENT amount (digits, optionally with up to two decimals)')
+  if (amountProvided && (!Amount || !isAmountKoboString(Amount))) errors.push('Amount must be a numeric kobo/CENT amount (digits, optionally with up to two decimals)')
 
   if (errors.length > 0) return { ok: false, errors }
 
@@ -117,14 +113,14 @@ export function validateTransactionStatusRequest(body) {
 
 export function buildTransactionStatusRequest({ baseUrl, token, input }) {
   const cleanBase = cleanString(baseUrl, 200).replace(/\/+$/, '')
-  if (!cleanBase || !token) throw new Error('missing_bankone_credentials')
+  if (!cleanBase || !token || !isAllowedBankOneHost(cleanBase)) throw new Error('missing_bankone_credentials')
   const body = {
     RetrievalReference: input.RetrievalReference,
     TransactionDate: input.TransactionDate,
     Token: token,
   }
   if (input.TransactionType) body.TransactionType = input.TransactionType
-  if (input.Amount) body.Amount = input.Amount
+  if (input.Amount) body.Amount = String(input.Amount)
   return {
     url: `${cleanBase}${BANKONE_STATUS_ENDPOINT}`,
     headers: {
@@ -229,6 +225,7 @@ export function classifyProviderStatus(status) {
   if (status === 401) return safeError({ category: ERROR_CATEGORIES.UNAUTHORIZED, status })
   if (status === 403) return safeError({ category: ERROR_CATEGORIES.FORBIDDEN, status })
   if (status === 404) return safeError({ category: ERROR_CATEGORIES.UPSTREAM_ERROR, status, providerMessage: 'BankOne could not find the resource (HTTP 404).' })
+  if (status === 408) return safeError({ category: ERROR_CATEGORIES.TIMEOUT, status })
   if (status === 429) return safeError({ category: ERROR_CATEGORIES.RATE_LIMITED, status })
   if (status >= 500) return safeError({ category: ERROR_CATEGORIES.UPSTREAM_ERROR, status })
   return null
@@ -241,27 +238,53 @@ export function classifyProviderStatus(status) {
 // Returns a normalized InfinityCore envelope. Provider responses are retained
 // for operator visibility, but credential-shaped fields and any configured
 // secret are scrubbed before they can reach the browser.
-export function normalizeResponse({ raw, operation, requestId, httpStatus = 200, durationMs, secret = '' }) {
+export function normalizeResponse({
+  raw,
+  operation,
+  requestId,
+  httpStatus = 200,
+  durationMs,
+  secret = '',
+  request = null,
+  timestamp = null,
+  environment = null,
+  providerRequestSent = true,
+  providerResponseReceived = true,
+}) {
   const safeRaw = sanitizeProviderValue(raw, secret)
   const isObject = isPlainObject(safeRaw)
   const meta = isObject ? safeRaw : null
-  const providerStatus = isObject ? extractProviderStatus(meta) : null
+  const providerResult = projectProviderResult(safeRaw)
+  const result = classifyProviderResult(safeRaw)
   return {
-    success: httpStatus >= 200 && httpStatus < 300,
+    success: result.success,
     provider: PROVIDER,
     operation,
     status: httpStatus,
+    providerStatus: httpStatus,
+    providerHttpStatus: httpStatus,
+    providerReached: true,
     requestId,
-    providerStatus,
+    correlationId: requestId,
     responseCode: isObject ? String(meta?.ResponseCode ?? meta?.responseCode ?? '') : null,
     responseMessage: isObject ? String(meta?.ResponseMessage ?? meta?.responseMessage ?? '') : null,
-    data: isObject ? safeRaw : null,
-    raw: isObject ? safeRaw : null,
+    transactionStatus: isObject ? extractProviderStatus(meta) : null,
+    providerResult,
+    providerResultClassification: result.classification,
+    errorCode: result.success ? null : result.errorCode,
+    error: result.success ? null : result.message,
+    data: providerResult,
+    raw: providerResult,
+    request,
+    environment,
+    requestTimestamp: timestamp,
     durationMs,
+    providerRequestSent,
+    providerResponseReceived,
   }
 }
 
-function sanitizeProviderValue(value, secret = '') {
+export function sanitizeProviderValue(value, secret = '') {
   if (Array.isArray(value)) return value.map((item) => sanitizeProviderValue(item, secret))
   if (isPlainObject(value)) {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => {
@@ -282,6 +305,102 @@ export function extractProviderStatus(meta) {
     if (v !== undefined && v !== null && v !== '') return String(v)
   }
   return null
+}
+
+// Provider error schemas vary. Only known, short message fields are surfaced
+// after recursive secret redaction; the complete provider error is not copied
+// into an audit row.
+export function extractProviderMessage(value) {
+  if (!isPlainObject(value)) return null
+  for (const key of ['ResponseMessage', 'responseMessage', 'ErrorMessage', 'errorMessage', 'Message', 'message', 'Description', 'description']) {
+    const candidate = value[key]
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim().slice(0, 500)
+  }
+  for (const key of ['Error', 'error', 'Response', 'response', 'Data', 'data']) {
+    const nested = value[key]
+    const message = extractProviderMessage(nested)
+    if (message) return message
+  }
+  return null
+}
+
+const PROVIDER_RESULT_KEYS = new Set([
+  'amount',
+  'code',
+  'description',
+  'message',
+  'responsecode',
+  'responsemessage',
+  'result',
+  'resultcode',
+  'resultmessage',
+  'retrievalreference',
+  'status',
+  'success',
+  'transactionstatus',
+  'transactionstatuscode',
+])
+
+const SUCCESS_MARKERS = new Set(['0', '00', '000', '200', 'OK', 'SUCCESS', 'SUCCESSFUL', 'COMPLETED'])
+const FAILURE_MARKERS = new Set(['1', '01', '99', 'ERROR', 'FAILED', 'FAILURE', 'REJECTED', 'DECLINED', 'DENIED'])
+
+// Only return fields needed to classify/display a transaction-status result.
+// Unknown provider fields are intentionally not copied to the browser.
+export function projectProviderResult(value, depth = 0) {
+  if (depth > 3) return '[TRUNCATED]'
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return value
+  if (typeof value === 'string') return value.slice(0, 500)
+  if (Array.isArray(value)) return value.slice(0, 10).map((item) => projectProviderResult(item, depth + 1))
+  if (!isPlainObject(value)) return null
+
+  const projected = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (!PROVIDER_RESULT_KEYS.has(key.toLowerCase())) continue
+    projected[key] = projectProviderResult(item, depth + 1)
+  }
+  return projected
+}
+
+function providerMarker(value) {
+  if (value === undefined || value === null || value === '') return null
+  return String(value).trim().toUpperCase()
+}
+
+function providerResultOutcome(value) {
+  if (!isPlainObject(value)) return null
+  const booleanSuccess = value.Success ?? value.success
+  if (typeof booleanSuccess === 'boolean') return booleanSuccess
+
+  const code = providerMarker(value.ResponseCode ?? value.responseCode ?? value.ResultCode ?? value.resultCode ?? value.Code ?? value.code)
+  if (code) return SUCCESS_MARKERS.has(code) ? true : FAILURE_MARKERS.has(code) || code.length > 0 ? false : null
+
+  const marker = providerMarker(value.TransactionStatus ?? value.Status ?? value.status)
+  if (marker && SUCCESS_MARKERS.has(marker)) return true
+  if (marker && FAILURE_MARKERS.has(marker)) return false
+
+  const message = providerMarker(value.ResponseMessage ?? value.responseMessage ?? value.ResultMessage ?? value.resultMessage ?? value.Message ?? value.message)
+  if (message === 'OK' || message === 'SUCCESS' || message === 'SUCCESSFUL' || message === 'COMPLETED') return true
+  if (message === 'ERROR' || message === 'FAILED' || message === 'FAILURE' || message === 'REJECTED' || message === 'DECLINED') return false
+  return null
+}
+
+export function classifyProviderResult(value) {
+  const outcome = providerResultOutcome(value)
+  if (outcome === true) return { success: true, classification: 'success', errorCode: null, message: null }
+  if (outcome === false) {
+    return {
+      success: false,
+      classification: 'business_failure',
+      errorCode: 'BANKONE_PROVIDER_RESULT_FAILED',
+      message: 'BankOne was reached, but the provider rejected/failed the transaction query.',
+    }
+  }
+  return {
+    success: false,
+    classification: 'unconfirmed',
+    errorCode: 'BANKONE_PROVIDER_RESULT_UNCONFIRMED',
+    message: 'BankOne was reached, but no explicit successful transaction result was returned.',
+  }
 }
 
 // ---------------------------------------------------------------------------

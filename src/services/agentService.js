@@ -4,7 +4,7 @@ import { parseSaraCommand } from './saraCommandParser'
 import { analyzeIntent, canExecuteIntent } from './saraNlu'
 import { myQueue as computeMyQueue, currentStage, executeLeaveDecision } from './leaveApprovalsService'
 import { LEAVE_TYPE_LABELS } from './leaveBalanceService'
-import { countRows } from './saraStats'
+import { countRows, getTrainingIntelligence } from './saraStats'
 import { protectedRoutes, canAccessRoute } from '../config/navigation'
 import { employeeService } from './employeeService'
 import { canTerminateEmployee, employeeLabel } from './terminationAuthorization'
@@ -168,7 +168,8 @@ export async function runSaraCommand({ command, pool, ctx }) {
       return { type: 'text', message: "I can't change your role. Role elevation requires an authorized administrator using User Management." }
 
     case 'HELP':
-      return { type: 'text', message: 'Try: "show pending onboarding reviews", "how many active employees", "what interviews are scheduled today", "how many pending user approvals", "show my pending leave approvals", "approve annual leave 3 days or less", "what announcements did I miss", "search messages for payroll", or "open employees".' }
+      if (parsed.source === 'ai') return { type: 'unknown' }
+      return { type: 'text', message: 'Try: "how many training hours did Lagos Area complete this month?", "how many training man-hours did we invest in KSS?", "which branches have incomplete mandatory training?", "show employees with fewer than 10 training hours", "generate the monthly training report", or "open training".' }
 
     case 'NAVIGATE': {
       const nav = resolveNavigationTarget(parsed.filters.target, ctx)
@@ -203,6 +204,33 @@ export async function runSaraCommand({ command, pool, ctx }) {
     case 'PENDING_USERS': {
       const data = await queryPendingUsers()
       return { type: 'text', message: formatPendingUsersResponse(data) }
+    }
+
+    case 'TRAINING_STATS':
+    case 'TRAINING_MAN_HOURS':
+    case 'TRAINING_REPORT':
+    case 'TRAINING_LOW_HOURS':
+    case 'TRAINING_MANDATORY': {
+      const intelligence = await getTrainingIntelligence(parsed.filters || {})
+      if (!intelligence) return { type: 'text', message: "I couldn't fetch training intelligence right now. No number has been inferred." }
+      const summary = intelligence.summary || {}
+      if (parsed.intent === 'TRAINING_LOW_HOURS') {
+        const threshold = Number(parsed.filters?.threshold || 10)
+        const rows = (intelligence.by_employee || []).filter((row) => Number(row.training_hours || 0) < threshold)
+        return { type: 'text', message: rows.length ? `${rows.length} employee${rows.length === 1 ? '' : 's'} have fewer than ${threshold} training hours: ${rows.slice(0, 10).map((row) => `${row.full_name} (${row.training_hours || 0}h)`).join(', ')}.` : `No employees in your permitted scope have fewer than ${threshold} training hours.` }
+      }
+      if (parsed.intent === 'TRAINING_MANDATORY') {
+        const mandatory = intelligence.mandatory || []
+        const incomplete = mandatory.filter((row) => Number(row.completion_percentage || 0) < 100)
+        return { type: 'text', message: incomplete.length ? `${incomplete.length} mandatory training session${incomplete.length === 1 ? '' : 's'} are incomplete: ${incomplete.slice(0, 8).map((row) => `${row.title} (${row.completion_percentage || 0}%)`).join(', ')}.` : 'All mandatory training sessions in your permitted scope are complete.' }
+      }
+      if (parsed.intent === 'TRAINING_MAN_HOURS') return { type: 'text', message: `Training investment for this period is ${summary.training_man_hours || 0} training man-hours, including ${summary.kss_hours || 0} individual KSS hours. These figures are derived from recorded participants and completed training records.` }
+      if (parsed.intent === 'TRAINING_REPORT') {
+        const monthly = (intelligence.monthly || []).map((row) => `${row.month}: ${row.hours || 0}h`).join(', ') || 'no monthly records'
+        const areas = (intelligence.by_area || []).slice(0, 8).map((row) => `${row.area}: ${row.hours || 0}h`).join(', ') || 'no area records'
+        return { type: 'text', message: `Monthly training report: ${summary.training_hours || 0} employee training hours, ${summary.training_man_hours || 0} training man-hours, ${summary.employees_trained || 0} employees trained, ${summary.certificates_issued || 0} certificates, and ${summary.completion_percentage || 0}% completion. By month: ${monthly}. By area: ${areas}.` }
+      }
+      return { type: 'text', message: `Training intelligence for this period: ${summary.training_hours || 0} employee training hours, ${summary.training_man_hours || 0} training man-hours, ${summary.employees_trained || 0} employees trained, and ${summary.completion_percentage || 0}% completion.` }
     }
 
     case 'COMMS_PENDING_ACK': {
@@ -338,8 +366,12 @@ export async function runSaraCommand({ command, pool, ctx }) {
       }
     }
 
+    case 'UNKNOWN':
+      // Non-command questions use the conversational server path in SARA.
+      return { type: 'unknown' }
+
     default:
-      return { type: 'text', message: "I didn't catch that. Try \"show pending onboarding reviews\", \"how many active employees\", \"what interviews are scheduled today\", or \"help\"." }
+      return { type: 'unknown' }
   }
 }
 

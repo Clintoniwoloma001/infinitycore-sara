@@ -1,7 +1,7 @@
 import { supabase } from '../../supabaseClient'
 import { invokeBankoneFunction } from './bankoneClient'
 import { rpcWithRetry } from '../rpcHelper'
-import { isAmountKoboString, isDateValidYYYYMMDD } from '../../../supabase/functions/_shared/bankone-core.mjs'
+import { isAmountKoboString, isDateValidYYYYMMDD } from '../../../supabase/functions/_shared/bankone-validation.mjs'
 
 // ---------------------------------------------------------------------------
 // BankOne transaction/health service. Frontend → Edge Functions only.
@@ -11,7 +11,6 @@ import { isAmountKoboString, isDateValidYYYYMMDD } from '../../../supabase/funct
 
 const TRANSACTION_STATUS_FN = 'bankone-transaction-status'
 const HEALTH_FN = 'bankone-health'
-const TEST_CONNECTION_FN = 'bankone-test-connection'
 
 // Convert the user's form input into the Qore-documented body field names.
 export function toStatusPayload(input) {
@@ -58,15 +57,24 @@ export const bankoneTransactionService = {
       provider: res.provider || 'bankone',
       operation: res.operation || 'transaction_status',
       status: res.status ?? 200,
-      httpStatus: res.status ?? 200,
+      httpStatus: res.providerStatus ?? res.status ?? 200,
       requestId: res.requestId || null,
       providerStatus: res.providerStatus ?? null,
+      transactionStatus: res.transactionStatus ?? null,
       responseCode: res.responseCode ?? null,
       responseMessage: res.responseMessage ?? null,
       data: res.data ?? null,
       raw: res.raw ?? null,
+      request: res.request ?? null,
+      environment: res.environment || 'staging',
+      endpoint: res.endpoint || null,
+      requestTimestamp: res.requestTimestamp || null,
       durationMs: res.durationMs ?? null,
+      providerRequestSent: res.providerRequestSent ?? true,
+      providerResponseReceived: res.providerResponseReceived ?? true,
       error: res.error || null,
+      errorCode: res.errorCode || null,
+      details: res.details ?? null,
     }
   },
 
@@ -75,17 +83,6 @@ export const bankoneTransactionService = {
   // Internal configuration health (never a provider call).
   async providerHealth() {
     return invokeBankoneFunction(HEALTH_FN, {})
-  },
-
-  // Safe capability/configuration diagnostic. This is intentionally separate
-  // from the passive overview health check and from transaction_status.
-  async testConnection() {
-    try {
-      return await invokeBankoneFunction(TEST_CONNECTION_FN, {})
-    } catch (error) {
-      if (error?.envelope) return error.envelope
-      throw error
-    }
   },
 
   // Phase 15 integration overview for the configured environment.

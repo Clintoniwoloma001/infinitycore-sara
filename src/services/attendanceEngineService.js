@@ -25,9 +25,9 @@ function formatTimeHHMM(t) {
 }
 
 function formatLateThreshold(startTimeStr, graceMins) {
-  if (!startTimeStr) return '08:16'
+  if (!startTimeStr || graceMins == null) return ''
   const parts = startTimeStr.split(':').map(Number)
-  if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) return '08:16'
+  if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) return ''
   const totalMins = parts[0] * 60 + parts[1] + (Number(graceMins) || 0) + 1
   const thH = Math.floor((totalMins / 60) % 24)
   const thM = totalMins % 60
@@ -127,7 +127,7 @@ export const attendanceEngineService = {
   async listDevices() {
     const { data, error } = await supabase
       .from('attendance_devices')
-      .select('*, attendance_geofences(name, location_name)')
+      .select('id, device_name, device_type, manufacturer, model, serial_number, branch_id, location_id, api_endpoint, integration_type, status, last_seen_at, active, created_by, created_at, updated_at, attendance_geofences(name, location_name)')
       .order('created_at', { ascending: false })
     if (error) throw error
     return data || []
@@ -231,19 +231,20 @@ export const attendanceEngineService = {
     const { data: requirements, error: requirementsError } = await supabase.rpc('get_attendance_requirements')
     if (requirementsError) throw requirementsError
 
-    const actionRequiresLocation = eventType === 'CLOCK_OUT' || eventType === 'DEVICE_CLOCK_OUT'
-      ? requirements?.require_gps_clock_out !== false
-      : requirements?.require_gps_clock_in !== false
-    const needsLocation = requirements?.geofence_enabled !== false || actionRequiresLocation
+    // Location is mandatory for every attendance action. Platform Settings
+    // controls whether being outside a geofence is allowed, not whether GPS
+    // evidence may be omitted.
+    const needsLocation = true
     let locationMetadata = { ...metadata }
     if (needsLocation) {
       const position = await getPosition()
       locationMetadata = {
         ...locationMetadata,
-        latitude: position.lat,
-        longitude: position.lng,
-        accuracy: position.accuracy,
-        location_source: 'browser_geolocation',
+         latitude: position.lat,
+         longitude: position.lng,
+         accuracy: position.accuracy,
+         captured_at: position.timestamp || Date.now(),
+         location_source: 'browser_geolocation',
       }
     }
 
@@ -263,40 +264,45 @@ export const attendanceEngineService = {
   async getConfig() {
     let cfg = null
     let ps = null
-
-    try {
-      const [cfgRes, psRes] = await Promise.all([
-        supabase.from('attendance_config').select('*').eq('id', 1).maybeSingle(),
-        supabase.from('hr_platform_settings').select('*').eq('id', 1).maybeSingle(),
-      ])
-      cfg = cfgRes?.data || null
-      ps = psRes?.data || null
-    } catch {
-      try {
-        const { data } = await supabase.from('attendance_config').select('*').eq('id', 1).maybeSingle()
-        cfg = data
-      } catch {
-        cfg = null
-      }
-    }
+    const [cfgRes, requirementsRes, platformRes] = await Promise.all([
+      supabase.from('attendance_config').select('*').eq('id', 1).maybeSingle(),
+      supabase.rpc('get_attendance_requirements'),
+      supabase.from('hr_platform_settings').select('*').eq('id', 1).maybeSingle(),
+    ])
+    cfg = cfgRes?.data || null
+    const platform = platformRes?.data || null
+    const requirements = requirementsRes?.data || null
+    ps = platform || (requirements ? {
+      default_work_start_time: requirements.default_work_start_time,
+      default_work_end_time: requirements.default_work_end_time,
+      default_grace_period_minutes: requirements.default_grace_period_minutes,
+      default_working_days: requirements.default_working_days,
+      geofence_enabled: requirements.geofence_enabled,
+      early_departure_threshold_minutes: requirements.early_departure_threshold_minutes,
+    } : null)
 
     if (!cfg && !ps) return null
 
-    const startTime = (ps?.default_work_start_time ? formatTimeHHMM(ps.default_work_start_time) : null) || (cfg?.expected_start_time ? formatTimeHHMM(cfg.expected_start_time) : '08:00')
-    const graceMins = ps?.default_grace_period_minutes ?? cfg?.grace_period_minutes ?? 15
+    const startTime = ps?.default_work_start_time
+      ? formatTimeHHMM(ps.default_work_start_time)
+      : (cfg?.expected_start_time ? formatTimeHHMM(cfg.expected_start_time) : null)
+    const graceMins = ps?.default_grace_period_minutes ?? cfg?.grace_period_minutes ?? null
 
     return {
       ...(cfg || {}),
       expected_start_time: startTime,
-      expected_end_time: (ps?.default_work_end_time ? formatTimeHHMM(ps.default_work_end_time) : null) || (cfg?.expected_end_time ? formatTimeHHMM(cfg.expected_end_time) : '17:00'),
+      expected_end_time: ps?.default_work_end_time
+        ? formatTimeHHMM(ps.default_work_end_time)
+        : (cfg?.expected_end_time ? formatTimeHHMM(cfg.expected_end_time) : null),
       grace_period_minutes: graceMins,
-      late_threshold_time: (cfg?.late_threshold_time ? formatTimeHHMM(cfg.late_threshold_time) : null) || formatLateThreshold(startTime, graceMins),
-      break_duration_minutes: ps?.default_break_duration_minutes ?? cfg?.break_duration_minutes ?? 60,
+      late_threshold_time: (cfg?.late_threshold_time ? formatTimeHHMM(cfg.late_threshold_time) : null) || (startTime && graceMins != null ? formatLateThreshold(startTime, graceMins) : null),
+      working_days: ps?.default_working_days || cfg?.working_days || [],
+      break_duration_minutes: ps?.default_break_duration_minutes ?? cfg?.break_duration_minutes ?? null,
       overtime_threshold_hours: ps?.overtime_threshold_minutes != null
         ? Number((Number(ps.overtime_threshold_minutes) / 60).toFixed(2))
-        : (cfg?.overtime_threshold_hours ?? 8.0),
+        : (cfg?.overtime_threshold_hours ?? null),
       geofence_enabled: ps?.geofence_enabled ?? cfg?.geofence_enabled ?? false,
-      early_departure_threshold_minutes: ps?.early_departure_threshold_minutes ?? cfg?.early_departure_threshold_minutes ?? 30,
+      early_departure_threshold_minutes: ps?.early_departure_threshold_minutes ?? cfg?.early_departure_threshold_minutes ?? null,
       break_allowed: cfg?.break_allowed !== false,
       manual_correction_requires_reason: cfg?.manual_correction_requires_reason !== false,
       allow_admin_override: cfg?.allow_admin_override !== false,
@@ -304,68 +310,52 @@ export const attendanceEngineService = {
   },
 
   async updateConfig(payload) {
-    const updates = { ...payload, updated_at: new Date().toISOString() }
+    const platformUpdates = {}
+    const configUpdates = {}
+    const canonicalKeys = new Set(['expected_start_time', 'expected_end_time', 'grace_period_minutes', 'working_days'])
 
-    // UPDATE first so the normal path only needs the existing UPDATE policy.
-    // The singleton is seeded by the schema, but insert it if an older
-    // environment is missing the row.
-    let data
-    const { data: updated, error: updateErr } = await supabase
-      .from('attendance_config')
-      .update(updates)
-      .eq('id', 1)
-      .select()
-      .maybeSingle()
-    if (updateErr) throw updateErr
-    data = updated
+    if (payload.expected_start_time != null) platformUpdates.default_work_start_time = formatTimeHHMM(payload.expected_start_time)
+    if (payload.expected_end_time != null) platformUpdates.default_work_end_time = formatTimeHHMM(payload.expected_end_time)
+    if (payload.grace_period_minutes != null) {
+      platformUpdates.default_grace_period_minutes = Number(payload.grace_period_minutes)
+      platformUpdates.late_threshold_minutes = Number(payload.grace_period_minutes)
+    }
+    if (payload.working_days != null) {
+      platformUpdates.default_working_days = (Array.isArray(payload.working_days) ? payload.working_days : [])
+        .map((day) => String(day).toLowerCase().slice(0, 3))
+    }
+    if (payload.break_duration_minutes != null) platformUpdates.default_break_duration_minutes = Number(payload.break_duration_minutes)
+    if (payload.overtime_threshold_hours != null) platformUpdates.overtime_threshold_minutes = Math.round(Number(payload.overtime_threshold_hours) * 60)
+    if (payload.geofence_enabled != null) platformUpdates.geofence_enabled = Boolean(payload.geofence_enabled)
+    if (payload.early_departure_threshold_minutes != null) platformUpdates.early_departure_threshold_minutes = Number(payload.early_departure_threshold_minutes)
 
-    if (!data) {
-      const { data: inserted, error: insertErr } = await supabase
+    for (const [key, value] of Object.entries(payload || {})) {
+      if (!canonicalKeys.has(key) && !['late_threshold_time', 'break_duration_minutes', 'overtime_threshold_hours', 'geofence_enabled', 'early_departure_threshold_minutes', 'updated_at'].includes(key)) {
+        configUpdates[key] = value
+      }
+    }
+
+    // Platform Settings owns all global timing/policy values. Its RPC and
+    // database trigger update attendance_config atomically and audit both
+    // surfaces using their existing schemas.
+    if (Object.keys(platformUpdates).length > 0) {
+      const { error } = await supabase.rpc('update_hr_settings', { p_settings: platformUpdates })
+      if (error) throw error
+    }
+
+    if (Object.keys(configUpdates).length > 0) {
+      const { data: { user } } = await supabase.auth.getUser()
+      const updates = { ...configUpdates, updated_at: new Date().toISOString(), updated_by: user?.id || null }
+      const { error: updateErr } = await supabase
         .from('attendance_config')
-        .insert({ id: 1, ...updates })
-        .select()
-        .single()
-      if (insertErr) throw insertErr
-      data = inserted
+        .update(updates)
+        .eq('id', 1)
+      if (updateErr) throw updateErr
     }
 
-    // Mirror changes to hr_platform_settings so Platform Settings working hours stay in sync
-    try {
-      const psUpdates = {}
-      if (payload.expected_start_time != null) {
-        psUpdates.default_work_start_time = formatTimeHHMM(payload.expected_start_time)
-      }
-      if (payload.expected_end_time != null) {
-        psUpdates.default_work_end_time = formatTimeHHMM(payload.expected_end_time)
-      }
-      if (payload.grace_period_minutes != null) {
-        psUpdates.default_grace_period_minutes = Number(payload.grace_period_minutes)
-        psUpdates.late_threshold_minutes = Number(payload.grace_period_minutes)
-      }
-      if (payload.break_duration_minutes != null) {
-        psUpdates.default_break_duration_minutes = Number(payload.break_duration_minutes)
-      }
-      if (payload.overtime_threshold_hours != null) {
-        psUpdates.overtime_threshold_minutes = Math.round(Number(payload.overtime_threshold_hours) * 60)
-      }
-      if (payload.geofence_enabled != null) {
-        psUpdates.geofence_enabled = Boolean(payload.geofence_enabled)
-      }
-      if (payload.early_departure_threshold_minutes != null) {
-        psUpdates.early_departure_threshold_minutes = Number(payload.early_departure_threshold_minutes)
-      }
-
-      if (Object.keys(psUpdates).length > 0) {
-        const { error: rpcErr } = await supabase.rpc('update_hr_settings', { p_settings: psUpdates })
-        if (rpcErr) {
-          await supabase.from('hr_platform_settings').update(psUpdates).eq('id', 1)
-        }
-      }
-    } catch (mirrorErr) {
-      console.warn('Mirroring attendance config to hr_platform_settings warning:', mirrorErr)
-    }
-
-    logAction({ action: 'ATTENDANCE_CONFIG_UPDATE', entityType: 'AttendanceConfig', entityId: 1, details: 'Attendance config updated and mirrored to platform settings' })
+    const { data, error } = await supabase.from('attendance_config').select('*').eq('id', 1).maybeSingle()
+    if (error) throw error
+    logAction({ action: 'ATTENDANCE_CONFIG_UPDATE', entityType: 'AttendanceConfig', entityId: 1, details: 'Attendance policy updated through Platform Settings source of truth' })
     return data
   },
 

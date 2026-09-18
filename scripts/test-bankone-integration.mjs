@@ -132,22 +132,33 @@ test('4b. Request builder adds the token ONLY into the outgoing provider body', 
 })
 
 // --- 5. Successful response normalization -------------------------------------
-test('5. Successful BankOne response normalized without field destruction', () => {
+test('5. Successful BankOne response is safely projected and classified', () => {
   const mock = { TransactionStatus: 'FULFILLED', ResponseCode: '00', ResponseMessage: 'OK', Amount: 150000, extra: { nested: true } }
-  const out = core.normalizeResponse({ raw: mock, operation: 'transaction_status', requestId: 'req-1', httpStatus: 200, durationMs: 120 })
+  const out = core.normalizeResponse({ raw: mock, operation: 'transaction_status', requestId: 'req-1', httpStatus: 200, durationMs: 120, secret: TOKEN, request: { retrievalReference: 'RE...23', transactionDate: '2026-09-18' } })
   expectEq(out.success, true, 'success true')
   expectEq(out.provider, 'bankone', 'provider label')
   expectEq(out.status, 200, 'http status preserved')
-  expectEq(out.providerStatus, 'FULFILLED', 'provider status extracted')
-  expectEq(out.data.Amount, 150000, 'raw amount preserved')
-  expectEq(out.raw.extra.nested, true, 'raw provider response preserved')
+  expectEq(out.providerStatus, 200, 'provider HTTP status preserved')
+  expectEq(out.transactionStatus, 'FULFILLED', 'transaction status extracted')
+  expectEq(out.data.Amount, 150000, 'safe amount preserved')
+  expect(!('extra' in out.raw), 'unknown provider fields are not exposed')
+  expectEq(out.request.retrievalReference, 'RE...23', 'masked request reference preserved')
   expect(!JSON.stringify(out).includes(TOKEN), 'token never in normalized response')
 })
 
-test('5b. Bare 200 with empty body is handled', () => {
+test('5b. Bare 200 with empty body is not mistaken for a successful query', () => {
   const out = core.normalizeResponse({ raw: null, operation: 'transaction_status', requestId: 'r', httpStatus: 200 })
-  expectEq(out.success, true, '200 null body is success')
+  expectEq(out.success, false, '200 null body is unconfirmed')
+  expectEq(out.errorCode, 'BANKONE_PROVIDER_RESULT_UNCONFIRMED', 'unconfirmed result has a safe classification')
   expect(out.data === null, 'null body stays null')
+})
+
+test('5c. Provider business failure stays failed even when HTTP is 200', () => {
+  const out = core.normalizeResponse({ raw: { ResponseCode: '99', ResponseMessage: 'Rejected' }, operation: 'transaction_status', requestId: 'r', httpStatus: 200 })
+  expectEq(out.success, false, 'business failure must not become success')
+  expectEq(out.providerReached, true, 'provider response confirms reachability')
+  expectEq(out.providerHttpStatus, 200, 'provider HTTP status is preserved')
+  expectEq(out.errorCode, 'BANKONE_PROVIDER_RESULT_FAILED', 'business failure is classified')
 })
 
 // --- 6-8. Provider HTTP classification (preserve status, never leak body) -------
@@ -171,6 +182,12 @@ test('7b. 404 handled safely (required by spec)', () => {
   const e404 = core.classifyProviderStatus(404)
   expectEq(e404.status, 404, '404 preserved')
   expectEq(e404.code, 'upstream_error', '404 classified as upstream error')
+})
+
+test('7c. 408 is preserved as a provider timeout', () => {
+  const e408 = core.classifyProviderStatus(408)
+  expectEq(e408.status, 408, '408 preserved')
+  expectEq(e408.code, 'timeout', '408 classified as timeout')
 })
 
 test('8. BankOne 500 → upstream_error, status preserved', () => {
@@ -208,12 +225,10 @@ test('10. Malformed JSON provider body is detected', () => {
 // --- 11. Token never returned --------------------------------------------------
 test('11. Token never appears in any output envelope', () => {
   const mock = { TransactionStatus: 'OK', Token: 'INJECTED', token: TOKEN, ResponseCode: '00', inner: { Token: TOKEN } }
-  const out = core.normalizeResponse({ raw: mock, operation: 'transaction_status', requestId: 'req-2', httpStatus: 200 })
-  // The provider response might echo a token back — our envelope preserves the
-  // raw provider body, so strip/detect is done in the UI layer. But the edge
-  // function's OWN security contract is that InfinityCore never generates one.
+  const out = core.normalizeResponse({ raw: mock, operation: 'transaction_status', requestId: 'req-2', httpStatus: 200, secret: TOKEN })
   const err = core.safeError({ category: core.ERROR_CATEGORIES.UPSTREAM_ERROR, status: 502 })
   const log = core.maskedLogSummary({ operation: 'transaction_status', status: 'error', httpStatus: 502, requestId: 'req-2', errorCode: 'upstream_error', durationMs: 10 })
+  expect(!JSON.stringify(out).includes(TOKEN), 'normalized provider data must redact the token')
   expect(!JSON.stringify(err).includes(TOKEN), 'error payload has no token')
   expect(!log.includes(TOKEN), 'log summary has no token')
   const red = core.redactText(`request failed token=${TOKEN}`, TOKEN)
@@ -272,16 +287,14 @@ test('13c. Frontend invokes the Supabase Edge Function, never BankOne directly',
   expect(!src.includes('fetch('), 'client must not fetch any URL directly')
 })
 
-test('14. Test Connection is separate, safe, and does not fabricate a transaction query', () => {
+test('14. Test Connection reuses the authenticated transaction-status flow', () => {
   const service = readFileSync(join(root, 'src', 'services', 'bankone', 'bankoneTransactionService.js'), 'utf8')
-  const fn = readFileSync(join(root, 'supabase', 'functions', 'bankone-test-connection', 'index.ts'), 'utf8')
   const page = readFileSync(join(root, 'src', 'pages', 'BankOneIntegration.jsx'), 'utf8')
-  expect(service.includes("'bankone-test-connection'"), 'service must invoke the dedicated test function')
-  expect(page.includes('testConnection()'), 'page must use the dedicated test connection service')
-  expect(!page.includes('BANKONE_STATUS_SMOKE_TEST'), 'page must not use a transaction smoke fixture')
-  expect(fn.includes("providerCallMade: false"), 'diagnostic must report that no provider call was made')
-  expect(fn.includes("endpointAvailability"), 'diagnostic must report endpoint availability')
-  expect(!fn.includes('BANKONE_API_TOKEN='), 'function must not embed a token')
+  expect(!service.includes('bankone-test-connection'), 'service must not invoke the configuration-only test function')
+  expect(page.includes('onClick={testConnection}'), 'page must expose the Test Connection action')
+  expect(page.includes('bankoneTransactionService.queryTransactionStatus'), 'Test Connection must reuse transaction status')
+  expect(page.includes('Connection testing requires a valid BankOne staging transaction reference.'), 'page must explain the real-reference requirement')
+  expect(!page.includes('Not available'), 'page must not report the documented endpoint as unavailable')
 })
 
 test('13d. Frontend verifies the current Supabase session before invoking', () => {

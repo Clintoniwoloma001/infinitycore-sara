@@ -46,6 +46,16 @@ export default function LocationAuditModal({ record, onClose }) {
 
           {!loading && (
             <>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-1.5"><MapPin className="w-4 h-4 text-slate-400" /> Attendance Location Summary</p>
+                <div className="space-y-2 text-sm">
+                  <AuditRow icon={MapPin} label="Assigned Branch" value={record.employees?.branches?.branch_name || record.branches?.branch_name || record.employees?.branch || '—'} />
+                  <AuditRow icon={MapPin} label="Clock-in Location" value={record.clock_in_event?.metadata?.actual_location_name || '—'} />
+                  <AuditRow icon={MapPin} label="Clock-out Location" value={record.clock_out_event?.metadata?.actual_location_name || '—'} />
+                  <AuditRow icon={MapPin} label="Location Difference" value={locationDifferenceLabel(record)} />
+                  <AuditRow icon={CheckCircle2} label="Location Status" value={record.clock_out_event?.location_status || record.clock_in_event?.location_status || record.location_status || 'unknown'} />
+                </div>
+              </div>
               {/* Clock-in verification */}
               <div className={`rounded-xl border p-4 ${geoInside ? 'border-emerald-200 bg-emerald-50' : geoOutside ? 'border-rose-200 bg-rose-50' : 'border-slate-200 bg-slate-50'}`}>
                 <p className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-1.5">
@@ -140,4 +150,11 @@ function AuditRow({ icon: Icon, iconColor = 'text-slate-400', label, value }) {
       <span className="font-medium text-slate-800">{value}</span>
     </div>
   )
+}
+
+function locationDifferenceLabel(record) {
+  const value = record.clock_out_event?.metadata?.location_difference ?? record.clock_in_event?.metadata?.location_difference
+  if (value === true || value === 'true') return 'Different from assigned branch'
+  if (value === false || value === 'false') return 'Assigned branch'
+  return 'Not available'
 }

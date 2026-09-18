@@ -1,13 +1,12 @@
 // Supabase Edge Function: create-user
 //
-// Creates a new user account via the Supabase admin API.
-// Only authenticated super_admin/admin/hr_manager can call this.
-// The new user gets a pending profile with the specified role.
-//
-// Secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY
-// (all auto-provided by Supabase runtime)
+// Keeps the legacy manual Create User modal working, but uses the same
+// invitation destination and password activation flow as employee accounts.
+// Employee-backed calls must provide employeeId so the source record remains
+// authoritative.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { getAuthRedirectUrl } from '../_shared/appUrl.ts'
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -22,10 +21,16 @@ function json(body, status = 200) {
   })
 }
 
+function text(value) {
+  return String(value || '').trim()
+}
+
+function validEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text(value))
+}
+
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: CORS_HEADERS })
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS })
   if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
 
   const authHeader = req.headers.get('Authorization') || ''
@@ -34,10 +39,8 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
-
   if (!supabaseUrl || !serviceRoleKey || !anonKey) return json({ error: 'env_missing' }, 500)
 
-  // Authenticate caller and check role
   const userClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
     auth: { persistSession: false },
@@ -45,117 +48,85 @@ Deno.serve(async (req) => {
   const { data: { user }, error: authError } = await userClient.auth.getUser()
   if (authError || !user) return json({ error: 'unauthorized' }, 401)
 
-  // Check caller's role
-  const { data: profile } = await userClient
-    .from('profiles')
-    .select('role, full_name')
-    .eq('id', user.id)
-    .single()
-
-  const actorRole = profile?.role || 'customer'
+  const { data: actor } = await userClient.from('profiles').select('role, full_name').eq('id', user.id).single()
+  const actorRole = actor?.role || 'customer'
   if (!['super_admin', 'admin', 'hr_manager'].includes(actorRole)) {
     return json({ error: 'forbidden', message: 'Not authorized to create users' }, 403)
   }
 
-  const body = await req.json()
-  const { email, fullName, phone, role, department, branch, userType, sendInvite = true } = body
-
-  if (!email) return json({ error: 'email_required' }, 400)
-
-  // Validate role assignment permissions
-  const safeRole = role || 'staff'
-  if (safeRole === 'super_admin' && actorRole !== 'super_admin') {
-    return json({ error: 'forbidden', message: 'Only super_admin can assign super_admin role' }, 403)
-  }
+  const body = await req.json().catch(() => ({}))
+  const email = text(body?.email)
+  const fullName = text(body?.fullName)
+  const phone = text(body?.phone) || null
+  const safeRole = text(body?.role) || 'staff'
+  const department = text(body?.department) || null
+  const branch = text(body?.branch) || null
+  const userType = text(body?.userType) || 'staff'
+  const employeeId = body?.employeeId || null
+  if (!validEmail(email)) return json({ error: 'email_required', message: 'A valid email address is required.' }, 400)
+  if (safeRole === 'super_admin' && actorRole !== 'super_admin') return json({ error: 'forbidden', message: 'Only super_admin can assign super_admin' }, 403)
   if (['admin', 'area_manager', 'head_of_business'].includes(safeRole) && !['super_admin', 'admin'].includes(actorRole)) {
     return json({ error: 'forbidden', message: 'Not authorized to assign this role' }, 403)
   }
 
-  // Use admin client to create user
-  const admin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
-
+  const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } })
+  let authUserId = null
   try {
-    // Check if user already exists
-    const { data: existing } = await admin
-      .from('profiles')
-      .select('id, email, status')
-      .eq('email', email)
-      .maybeSingle()
-
-    if (existing) {
-      return json({ error: 'duplicate', message: 'A user with this email already exists', existingId: existing.id }, 200)
-    }
-
-    // Create the user via admin invite
-    const { data: authData, error: createError } = await admin.auth.admin.inviteUserByEmail(email, {
-      data: { full_name: fullName || '' },
-    })
-
-    if (createError) {
-      // If invite fails (e.g. email rate limit), try createUser
-      const { data: createData, error: createErr2 } = await admin.auth.admin.createUser({
-        email,
-        emailConfirm: true,
-        userMetadata: { full_name: fullName || '' },
-      })
-
-      if (createErr2) {
-        return json({ error: 'create_failed', message: createErr2.message }, 200)
+    let employee = null
+    if (employeeId) {
+      const { data, error: employeeError } = await admin.from('employees').select('*').eq('id', employeeId).single()
+      if (employeeError || !data) return json({ error: 'employee_not_found', message: 'Employee record not found.' }, 200)
+      employee = data
+      if (text(employee.email).toLowerCase() !== email.toLowerCase()) {
+        return json({ error: 'email_mismatch', message: 'The account email must exactly match the employee email.' }, 200)
       }
-
-      // Update profile with role/department/branch
-      await admin.from('profiles').update({
-        role: safeRole,
-        full_name: fullName || '',
-        phone: phone || null,
-        department: department || null,
-        branch: branch || null,
-        user_type: userType || 'staff',
-        status: 'active',
-        approved: true,
-        approved_by: user.id,
-        approved_at: new Date().toISOString(),
-      }).eq('id', createData.user.id)
-
-      await admin.from('audit_logs').insert({
-        action: 'USER_CREATED',
-        entity_type: 'User',
-        entity_id: createData.user.id,
-        user_name: profile?.full_name || user.email,
-        details: `User ${email} created by ${actorRole} with role ${safeRole}`,
-        severity: 'warning',
-      })
-
-      return json({ ok: true, userId: createData.user.id, method: 'create' }, 200)
+      if (!validEmail(employee.email)) {
+        return json({ error: 'invalid_employee_email', message: 'This employee does not have a valid email address. Update the employee record before creating the user account.' }, 200)
+      }
     }
 
-    // Update profile with role/department/branch
-    await admin.from('profiles').update({
-      role: safeRole,
-      full_name: fullName || '',
-      phone: phone || null,
-      department: department || null,
-      branch: branch || null,
-      user_type: userType || 'staff',
-      status: 'active',
-      approved: true,
-      approved_by: user.id,
-      approved_at: new Date().toISOString(),
-    }).eq('id', authData.user.id)
+    const { data: existing } = await admin.from('profiles').select('id, email, status').ilike('email', email).maybeSingle()
+    if (existing) return json({ error: 'duplicate', message: 'A user with this email already exists', existingId: existing.id }, 200)
 
-    await admin.from('audit_logs').insert({
-      action: 'USER_CREATED',
-      entity_type: 'User',
-      entity_id: authData.user.id,
-      user_name: profile?.full_name || user.email,
-      details: `User ${email} invited by ${actorRole} with role ${safeRole}`,
-      severity: 'warning',
+    const redirectTo = getAuthRedirectUrl()
+    const { data: authData, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
+      data: { full_name: fullName },
+      redirectTo,
     })
+    if (inviteError || !authData?.user?.id) throw inviteError || new Error('Supabase did not return the invited auth user')
+    authUserId = authData.user.id
 
-    return json({ ok: true, userId: authData.user.id, method: 'invite' }, 200)
+    let configured
+    if (employeeId) {
+      const { data, error } = await userClient.rpc('provision_employee_account', {
+        p_employee_id: employeeId,
+        p_auth_user_id: authUserId,
+        p_role: safeRole,
+        p_user_type: 'staff',
+        p_reason: 'Employee account created from the employee record',
+      })
+      if (error) throw error
+      configured = data
+    } else {
+      const { data, error } = await userClient.rpc('configure_invited_user', {
+        p_user_id: authUserId,
+        p_role: safeRole,
+        p_full_name: fullName || null,
+        p_phone: phone,
+        p_department: department,
+        p_branch: branch,
+        p_user_type: userType,
+      })
+      if (error) throw error
+      configured = data
+    }
+
+    return json({ ok: true, userId: authUserId, employeeId, redirect_to: redirectTo, configuration: configured })
   } catch (e) {
-    return json({ error: 'exception', message: String(e.message || e) }, 200)
+    if (authUserId) {
+      const { error: cleanupError } = await admin.auth.admin.deleteUser(authUserId)
+      if (cleanupError) console.warn('Failed to clean up incomplete auth user:', cleanupError.message)
+    }
+    return json({ error: 'create_failed', message: String(e?.message || e) }, 200)
   }
 })

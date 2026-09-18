@@ -4,6 +4,8 @@ import { supabase } from '../supabaseClient'
 import { formatDate } from '../lib/utils'
 import { Briefcase, Plus, Search, Loader2, Copy, ExternalLink, Send, Archive, RotateCcw, Users, MapPin, CheckCircle2, XCircle } from 'lucide-react'
 import { StatusBadge } from '../lib/utils'
+import { screeningService } from '../services/screeningService'
+import { QRCodeCanvas } from 'qrcode.react'
 
 const STATUS_COLOR = { draft: 'amber', published: 'emerald', closed: 'slate' }
 
@@ -31,6 +33,13 @@ const EMPTY_FORM = {
   screening_min_score: 60,
   required_skills: '',
   preferred_skills: '',
+  required_qualifications: '',
+  required_certifications: '',
+  criteria_notes: '',
+  weight_cv: 30,
+  weight_skills: 25,
+  weight_assessment: 25,
+  weight_interview: 20,
 }
 
 const inputCls = 'w-full rounded-lg border border-slate-300 px-3 h-10 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944] bg-white'
@@ -54,6 +63,7 @@ export default function HRJobs() {
   const [submitting, setSubmitting] = useState(false)
   const [busyId, setBusyId] = useState('')
   const [copiedId, setCopiedId] = useState('')
+  const [qrJob, setQrJob] = useState(null)
 
   const load = async () => {
     try {
@@ -158,6 +168,8 @@ export default function HRJobs() {
     if (salaryMin !== null && isNaN(salaryMin)) { setFormError('Minimum salary must be a valid number.'); return }
     if (salaryMax !== null && isNaN(salaryMax)) { setFormError('Maximum salary must be a valid number.'); return }
     if (salaryMin !== null && salaryMax !== null && salaryMin > salaryMax) { setFormError('Minimum salary cannot exceed maximum salary.'); return }
+    const weightTotal = Number(formData.weight_cv || 0) + Number(formData.weight_skills || 0) + Number(formData.weight_assessment || 0) + Number(formData.weight_interview || 0)
+    if (weightTotal !== 100) { setFormError(`SARA match criteria weights must total 100 (currently ${weightTotal}).`); return }
 
     setSubmitting(true)
     try {
@@ -188,17 +200,49 @@ export default function HRJobs() {
           interview_required: formData.interview_required !== false,
           ai_screening_enabled: formData.ai_screening_enabled !== false,
           screening_min_score: Number(formData.screening_min_score || 60),
-          required_skills: (formData.required_skills || '').split(',').map((s) => s.trim()).filter(Boolean),
-          preferred_skills: (formData.preferred_skills || '').split(',').map((s) => s.trim()).filter(Boolean),
-          created_by: user.id,
+           required_skills: (formData.required_skills || '').split(',').map((s) => s.trim()).filter(Boolean),
+           preferred_skills: (formData.preferred_skills || '').split(',').map((s) => s.trim()).filter(Boolean),
+           recruitment_criteria: {
+             weights: {
+               cv_relevance: Number(formData.weight_cv || 0),
+               technical_skills: Number(formData.weight_skills || 0),
+               assessment_score: Number(formData.weight_assessment || 0),
+               interview_score: Number(formData.weight_interview || 0),
+             },
+             required_qualifications: (formData.required_qualifications || '').split(',').map((s) => s.trim()).filter(Boolean),
+             required_certifications: (formData.required_certifications || '').split(',').map((s) => s.trim()).filter(Boolean),
+             experience_threshold: expYears || 0,
+             criteria_notes: formData.criteria_notes || null,
+           },
+           created_by: user.id,
           status: 'draft',
         }])
         .select()
 
       if (error) throw error
+      let criteriaWarning = ''
+      try {
+        await screeningService.saveConfig(data?.[0]?.id, {
+          weights: {
+            cv_relevance: Number(formData.weight_cv || 0),
+            technical_skills: Number(formData.weight_skills || 0),
+            assessment_score: Number(formData.weight_assessment || 0),
+            interview_score: Number(formData.weight_interview || 0),
+          },
+          min_overall: Number(formData.screening_min_score || 60),
+          required_qualifications: (formData.required_qualifications || '').split(',').map((s) => s.trim()).filter(Boolean),
+          required_certifications: (formData.required_certifications || '').split(',').map((s) => s.trim()).filter(Boolean),
+          required_skills: (formData.required_skills || '').split(',').map((s) => s.trim()).filter(Boolean),
+          preferred_skills: (formData.preferred_skills || '').split(',').map((s) => s.trim()).filter(Boolean),
+          experience_threshold: expYears || 0,
+          criteria_notes: formData.criteria_notes || null,
+        })
+      } catch (criteriaError) {
+        criteriaWarning = ` Criteria could not be saved: ${criteriaError?.message || 'check your HR permissions'}`
+      }
       setFormData(EMPTY_FORM)
       setShowForm(false)
-      setFormSuccess('Job posting saved as draft. Publish it to open applications.')
+      setFormSuccess(`Job posting saved as draft. Publish it to open applications.${criteriaWarning}`)
       setTimeout(() => setFormSuccess(''), 4000)
       await load()
     } catch (err) {
@@ -327,6 +371,14 @@ export default function HRJobs() {
                       {busyId === job.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />} Reopen
                     </button>
                   )}
+                  {url && (
+                    <>
+                      <button onClick={() => window.open(url, '_blank', 'noopener,noreferrer')} className="flex-1 min-w-28 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 border border-slate-300 hover:bg-slate-50 rounded-lg">
+                        <ExternalLink className="w-3.5 h-3.5" /> Open public page
+                      </button>
+                      <button onClick={() => setQrJob(job)} className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 border border-slate-300 hover:bg-slate-50 rounded-lg">QR</button>
+                    </>
+                  )}
                   <Link to={`/applications`} className="flex-1 min-w-28 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 border border-slate-300 hover:bg-slate-50 rounded-lg">
                     <Users className="w-3.5 h-3.5" /> View applications
                   </Link>
@@ -435,6 +487,36 @@ export default function HRJobs() {
                 <input value={formData.preferred_skills} onChange={(e) => setFormData((f) => ({ ...f, preferred_skills: e.target.value }))} className={inputCls} placeholder="Python, Payroll, Supabase" />
               </div>
 
+              <div className="sm:col-span-2 rounded-xl border border-emerald-100 bg-emerald-50/50 p-4">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">SARA match criteria</p>
+                    <p className="text-xs text-slate-500 mt-0.5">Weights must total 100%. SARA uses documented, job-related evidence only and remains advisory.</p>
+                  </div>
+                  <span className={`text-xs font-semibold px-2 py-1 rounded-full ${Number(formData.weight_cv || 0) + Number(formData.weight_skills || 0) + Number(formData.weight_assessment || 0) + Number(formData.weight_interview || 0) === 100 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                    {Number(formData.weight_cv || 0) + Number(formData.weight_skills || 0) + Number(formData.weight_assessment || 0) + Number(formData.weight_interview || 0)} / 100
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    ['weight_cv', 'CV / evidence'],
+                    ['weight_skills', 'Skills'],
+                    ['weight_assessment', 'Assessment'],
+                    ['weight_interview', 'Interview'],
+                  ].map(([key, label]) => (
+                    <div key={key}>
+                      <label className={labelCls}>{label} %</label>
+                      <input type="number" min="0" max="100" value={formData[key]} onChange={(e) => setFormData((f) => ({ ...f, [key]: e.target.value }))} className={inputCls} />
+                    </div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                  <div><label className={labelCls}>Required qualifications</label><input value={formData.required_qualifications} onChange={(e) => setFormData((f) => ({ ...f, required_qualifications: e.target.value }))} className={inputCls} placeholder="Degree, diploma, licence" /></div>
+                  <div><label className={labelCls}>Required certifications</label><input value={formData.required_certifications} onChange={(e) => setFormData((f) => ({ ...f, required_certifications: e.target.value }))} className={inputCls} placeholder="Relevant certifications" /></div>
+                </div>
+                <div className="mt-3"><label className={labelCls}>Criteria notes</label><textarea rows={2} value={formData.criteria_notes} onChange={(e) => setFormData((f) => ({ ...f, criteria_notes: e.target.value }))} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944] bg-white" placeholder="Documented job-related criteria for HR review" /></div>
+              </div>
+
               <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {[
                   ['assessment_required', 'Assessment required'],
@@ -457,6 +539,20 @@ export default function HRJobs() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {qrJob && jobUrl(qrJob) && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4" onClick={() => setQrJob(null)}>
+          <div className="bg-white rounded-xl p-6 text-center shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-slate-900">Share {qrJob.job_title}</h3>
+            <p className="text-xs text-slate-500 mt-1 mb-4">Scan to open the public application page</p>
+            <div className="inline-flex p-3 bg-white border border-slate-200 rounded-lg"><QRCodeCanvas value={jobUrl(qrJob)} size={220} includeMargin /></div>
+            <div className="flex gap-2 justify-center mt-4">
+              <button onClick={() => copyUrl(qrJob)} className="px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium">Copy link</button>
+              <button onClick={() => setQrJob(null)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600">Close</button>
+            </div>
           </div>
         </div>
       )}

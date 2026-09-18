@@ -362,7 +362,7 @@ function CreateUserModal({ onClose, onCreated, actorRole, showToast }) {
       if (error) throw error
       if (data?.error === 'duplicate') { setError(data.message || 'User already exists'); return }
       if (data?.error) { setError(data.message || data.error); return }
-      showToast(`User ${form.email} created successfully`)
+      showToast(`Invitation sent successfully to ${form.email}.`)
       onCreated()
     } catch (e) {
       setError(e?.message || 'Failed to create user. Edge function may not be deployed.')
@@ -507,10 +507,11 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
   const [employees, setEmployees] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [selected, setSelected] = useState({})
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState('')
   const [role, setRole] = useState('staff')
   const [reason, setReason] = useState('')
   const [sending, setSending] = useState(false)
+  const [resending, setResending] = useState(false)
   const [results, setResults] = useState(null)
   const [error, setError] = useState('')
   const myRoles = assignableRoles(actorRole)
@@ -533,37 +534,47 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
     !q ||
     (e.full_name || '').toLowerCase().includes(q) ||
     (e.email || '').toLowerCase().includes(q) ||
-    (e.department || '').toLowerCase().includes(q)
+    (e.department || '').toLowerCase().includes(q) ||
+    (e.resolved_branch || e.branch || '').toLowerCase().includes(q)
   )
 
-  const allSelected = filtered.length > 0 && filtered.every((e) => selected[e.id])
-  const selectedList = employees.filter((e) => selected[e.id])
-  const count = selectedList.length
-
-  const toggle = (id) => setSelected((s) => ({ ...s, [id]: !s[id] }))
-  const toggleAll = () => {
-    const next = { ...selected }
-    filtered.forEach((e) => { if (allSelected) delete next[e.id]; else next[e.id] = true })
-    setSelected(next)
-  }
+  const selectedEmployee = employees.find((employee) => employee.id === selectedEmployeeId) || null
 
   const send = async () => {
-    if (count === 0) return
+    if (!selectedEmployee) return
     setSending(true)
     setError('')
     setResults(null)
     try {
-      const res = await userProvisioningService.inviteEmployees(selectedList, { role, reason })
+      const res = await userProvisioningService.inviteEmployees([selectedEmployee], { role, reason })
       const list = res?.results || []
       setResults({ list, summary: userProvisioningService.summarizeResults(list) })
-      setSelected({})
-      const ok = list.filter((r) => r.result === 'SUCCESS').length
-      showToast(ok ? `${ok} invitation(s) sent` : 'Invitations processed — check results below')
+      const ok = list.filter((r) => ['SUCCESS', 'RESENT'].includes(r.result)).length
+      showToast(ok ? `Invitation sent successfully to ${selectedEmployee.email}.` : 'Invitation processed — check the result below')
       if (ok) onProvisioned()
     } catch (e) {
       setError(e?.message || `Invitation request failed. Confirm the invite-employees Edge Function is deployed (HTTP ${e?.context?.status || e?.status || 'unknown'}).`)
     } finally {
       setSending(false)
+    }
+  }
+
+  const resend = async () => {
+    if (!selectedEmployee) return
+    setResending(true)
+    setError('')
+    try {
+      const res = await userProvisioningService.resendInvitation(selectedEmployee, { role, reason })
+      const list = res?.results || []
+      setResults({ list, summary: userProvisioningService.summarizeResults(list) })
+      if (list.some((result) => result.result === 'RESENT')) {
+        showToast(`Invitation resent successfully to ${selectedEmployee.email}.`)
+        onProvisioned()
+      }
+    } catch (e) {
+      setError(e?.message || 'Unable to resend the invitation.')
+    } finally {
+      setResending(false)
     }
   }
 
@@ -577,8 +588,8 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
 
         <div className="p-6 space-y-4">
           <p className="text-sm text-slate-500">
-            Select employees from the staff record (active, with an email, and no linked InfinityCore account — so invites are never duplicated).
-            Account creation happens server-side; each employee then receives a setup invitation.
+            Select an employee from the staff record. Their HR information is the source of truth and is copied to the linked InfinityCore profile server-side.
+            The invitation is sent only to the email stored on that employee record.
           </p>
 
           {error && <div className="rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-sm p-3">{error}</div>}
@@ -592,13 +603,31 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
                   return <span key={k} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full font-medium ${meta.color}`}>{meta.label} • {n}</span>
                 })}
               </div>
+              {results.list.some((result) => ['SUCCESS', 'RESENT'].includes(result.result)) && selectedEmployee && (
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 mb-3">
+                  <p><strong>Invitation status:</strong> Sent</p>
+                  <p><strong>Employee:</strong> {selectedEmployee.full_name || '—'}</p>
+                  <p><strong>Account:</strong> Pending activation</p>
+                  {results.list.find((result) => result.expires_at)?.expires_at && <p><strong>Expires:</strong> {new Date(results.list.find((result) => result.expires_at).expires_at).toLocaleString()}</p>}
+                </div>
+              )}
               <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
                 {results.list.map((r, i) => {
                   const meta = userProvisioningService.resultMeta(r.result)
                   return (
-                    <div key={i} className="flex items-center justify-between px-3 py-2 text-sm">
-                      <span className="text-slate-700">{r.employee_name || r.id || r.email || '—'}</span>
-                      <span className={`text-xs font-medium ${meta.color}`}>{meta.label}</span>
+                    <div key={i} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                      <div className="min-w-0">
+                        <p className="text-slate-700 truncate">{r.employee_name || r.id || '—'}</p>
+                        {r.email && <p className="text-xs text-slate-400 truncate">{r.email}</p>}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={`text-xs font-medium ${meta.color}`}>{meta.label}</span>
+                        {['SUCCESS', 'RESENT'].includes(r.result) && selectedEmployee && (
+                          <button onClick={resend} disabled={resending} className="text-xs text-[#009944] hover:underline disabled:opacity-50">
+                            {resending ? 'Sending…' : 'Resend'}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -606,18 +635,13 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
             </div>
           )}
 
-          {/* Search + select all */}
+          {/* Search */}
           {!results && (
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input className={`${inputCls} pl-9`} placeholder="Search employees..." value={search} onChange={(e) => setSearch(e.target.value)} />
               </div>
-              {filtered.length > 0 && (
-                <button onClick={toggleAll} className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">
-                  <UserCheck className="w-4 h-4" /> {allSelected ? 'Clear all' : 'Select all'}
-                </button>
-              )}
             </div>
           )}
 
@@ -629,36 +653,71 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
           ) : (
             <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100 bg-white">
               {filtered.map((e) => (
-                <div key={e.id} className="flex items-center gap-3 px-4 py-3">
-                  <input type="checkbox" checked={!!selected[e.id]} onChange={() => toggle(e.id)} className="w-4 h-4 accent-[#009944]" />
+                <button key={e.id} type="button" onClick={() => { setSelectedEmployeeId(e.id); setResults(null); setError('') }} className={`w-full text-left flex items-center gap-3 px-4 py-3 transition ${selectedEmployeeId === e.id ? 'bg-emerald-50 ring-1 ring-inset ring-[#009944]' : 'hover:bg-slate-50'}`}>
+                  <span className={`w-4 h-4 rounded-full border-2 shrink-0 ${selectedEmployeeId === e.id ? 'border-[#009944] bg-[#009944] shadow-[inset_0_0_0_3px_white]' : 'border-slate-300'}`} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-slate-900 truncate">{e.full_name || '—'}</p>
                     <p className="text-xs text-slate-400 truncate">
-                      {e.email || 'no email'} {e.department ? `• ${e.department}` : ''} {e.employee_number || e.staff_id || e.employee_code ? `• ${e.employee_number || e.staff_id || e.employee_code}` : ''}
+                      {e.email || 'No email on record'} {e.department ? `• ${e.department}` : ''} {e.resolved_branch || e.branch ? `• ${e.resolved_branch || e.branch}` : ''}
                     </p>
                   </div>
-                </div>
+                  {selectedEmployeeId === e.id && <CheckCircle2 className="w-4 h-4 text-[#009944] shrink-0" />}
+                </button>
               ))}
             </div>
           ))}
 
-          {/* Assignment + send */}
+          {/* Selected employee source-of-truth record and account configuration */}
           {!results && (
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end border-t border-slate-100 pt-4">
-              <div className="sm:w-44">
-                <label className={labelCls}>Default Role</label>
-                <select className={inputCls} value={role} onChange={(e) => setRole(e.target.value)}>
-                  {myRoles.map((r) => <option key={r} value={r}>{ROLE_METADATA[r]?.label || r}</option>)}
-                </select>
-              </div>
-              <div className="flex-1">
-                <label className={labelCls}>Reason (optional, recorded in audit)</label>
-                <input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Phase 2 onboarding — new joiners" />
-              </div>
-              <div className="flex items-center gap-2">
+            <div className="border-t border-slate-100 pt-4 space-y-4">
+              {!selectedEmployee ? (
+                <p className="text-sm text-slate-400 text-center py-2">Select an employee to review their account details.</p>
+              ) : (
+                <>
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-900 mb-2">Employee Information</h4>
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                      <div><p className="text-xs text-slate-400 uppercase font-semibold">Name</p><p className="text-slate-800 font-medium">{selectedEmployee.full_name || '—'}</p></div>
+                      <div><p className="text-xs text-slate-400 uppercase font-semibold">Email</p><p className="text-slate-800 break-all">{selectedEmployee.email || 'No valid email'}</p></div>
+                      <div><p className="text-xs text-slate-400 uppercase font-semibold">Phone</p><p className="text-slate-800">{selectedEmployee.phone || '—'}</p></div>
+                      <div><p className="text-xs text-slate-400 uppercase font-semibold">Employee ID</p><p className="text-slate-800 break-all">{selectedEmployee.id || '—'}</p></div>
+                      <div><p className="text-xs text-slate-400 uppercase font-semibold">Employee Code</p><p className="text-slate-800">{selectedEmployee.employee_number || selectedEmployee.staff_id || selectedEmployee.employee_code || '—'}</p></div>
+                      <div><p className="text-xs text-slate-400 uppercase font-semibold">Department</p><p className="text-slate-800">{selectedEmployee.department || 'Not recorded'}</p></div>
+                      <div><p className="text-xs text-slate-400 uppercase font-semibold">Branch</p><p className="text-slate-800">{selectedEmployee.resolved_branch || selectedEmployee.branch || 'Not recorded'}</p></div>
+                      <div><p className="text-xs text-slate-400 uppercase font-semibold">Area</p><p className="text-slate-800">{selectedEmployee.resolved_area || selectedEmployee.area || 'Not recorded'}</p></div>
+                      <div><p className="text-xs text-slate-400 uppercase font-semibold">Designation</p><p className="text-slate-800">{selectedEmployee.position || selectedEmployee.designation || selectedEmployee.designation_title || '—'}</p></div>
+                      <div><p className="text-xs text-slate-400 uppercase font-semibold">Employment</p><p className="text-slate-800">{selectedEmployee.employment_type || '—'}{selectedEmployee.employment_status ? ` • ${selectedEmployee.employment_status}` : ''}</p></div>
+                      {(selectedEmployee.manager_name || selectedEmployee.supervisor_name || selectedEmployee.reporting_manager) && <div><p className="text-xs text-slate-400 uppercase font-semibold">Manager / Supervisor</p><p className="text-slate-800">{selectedEmployee.manager_name || selectedEmployee.supervisor_name || selectedEmployee.reporting_manager}{selectedEmployee.supervisor_title ? ` • ${selectedEmployee.supervisor_title}` : ''}</p></div>}
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-3 text-xs">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 px-2 py-1"><CheckCircle2 className="w-3.5 h-3.5" /> Employee found</span>
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 ${selectedEmployee.email ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}><Mail className="w-3.5 h-3.5" /> {selectedEmployee.email ? 'Email available' : 'Email required'}</span>
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 ${selectedEmployee.department ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}><Building2 className="w-3.5 h-3.5" /> {selectedEmployee.department ? 'Department detected' : 'Department not recorded'}</span>
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 ${selectedEmployee.resolved_branch || selectedEmployee.branch ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}><Building2 className="w-3.5 h-3.5" /> {selectedEmployee.resolved_branch || selectedEmployee.branch ? 'Branch detected' : 'Branch not recorded'}</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-900 mb-2">Account Configuration</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="sm:col-span-2"><label className={labelCls}>Email</label><input className={`${inputCls} bg-slate-50`} value={selectedEmployee.email || 'No valid email'} readOnly /></div>
+                      <div><label className={labelCls}>Role</label><select className={inputCls} value={role} onChange={(e) => setRole(e.target.value)} disabled={sending || resending}>{myRoles.map((r) => <option key={r} value={r}>{ROLE_METADATA[r]?.label || r}</option>)}</select></div>
+                      <div><label className={labelCls}>User Type</label><input className={`${inputCls} bg-slate-50`} value="Staff" readOnly /></div>
+                      <div><label className={labelCls}>Department</label><input className={`${inputCls} bg-slate-50`} value={selectedEmployee.department || 'Not recorded'} readOnly /></div>
+                      <div><label className={labelCls}>Branch</label><input className={`${inputCls} bg-slate-50`} value={selectedEmployee.resolved_branch || selectedEmployee.branch || 'Not recorded'} readOnly /></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className={labelCls}>Reason (optional, recorded in audit)</label>
+                    <input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. New employee account activation" disabled={sending || resending} />
+                  </div>
+                </>
+              )}
+              <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2">
                 <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
-                <button onClick={send} disabled={sending || count === 0} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
-                  {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Send Invitations ({count})
+                <button onClick={send} disabled={sending || !selectedEmployee} className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+                  {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Send InfinityCore Invitation
                 </button>
               </div>
             </div>

@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { LogIn, LogOut, MapPin, Loader2, CheckCircle2, AlertTriangle, Clock, RefreshCw } from 'lucide-react'
 import { DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, getPosition } from '../../services/attendanceService'
-import { haversine } from '../../services/geofenceService'
 import { useNetworkTime } from '../../hooks/useNetworkTime'
 
 /**
@@ -28,12 +27,9 @@ export default function ClockCard({
   const { now, synced: networkTimeSynced } = useNetworkTime()
 
   const branch = employee?.branches || null
-  const branchHasCoordinates = branch?.latitude != null && branch?.longitude != null
-  const hasGeofence = branch?.geofence_active && branchHasCoordinates
   const isOpen = record && !record.clock_out
   const isComplete = record && record.clock_out
-  const needsLocation = !isComplete && (geofenceEnabled || (isOpen ? requireGpsClockOut : requireGpsClockIn))
-  const radius = branch?.geofence_radius ?? defaultGeofenceRadius ?? 150
+  const needsLocation = !isComplete
 
   // Auto-request location whenever the server policy requires it.
   useEffect(() => {
@@ -49,12 +45,6 @@ export default function ClockCard({
       const pos = await getPosition()
       setGeo(pos)
       setGeoStatus('ok')
-      // Preview geofence
-      if (hasGeofence) {
-        const dist = haversine(pos.lat, pos.lng, branch.latitude, branch.longitude)
-        const inside = dist <= radius
-        setGeofencePreview({ distance: Math.round(dist), inside, radius })
-      }
     } catch (e) {
       setGeoStatus('denied')
       setGeoMsg(e.message || 'Unable to get location.')
@@ -144,19 +134,12 @@ export default function ClockCard({
 
         {/* Geofence status */}
         {!isComplete && (geofenceEnabled || needsLocation) && (
-          <div className={`rounded-xl border p-3 mb-5 ${geofencePreview?.inside ? 'border-emerald-200 bg-emerald-50' : geofencePreview ? 'border-rose-200 bg-rose-50' : 'border-slate-200 bg-slate-50'}`}>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 mb-5">
             <div className="flex items-center gap-2 text-sm">
-              <MapPin className={`w-4 h-4 ${geofencePreview?.inside ? 'text-emerald-600' : geofencePreview ? 'text-rose-600' : 'text-slate-400'}`} />
+              <MapPin className="w-4 h-4 text-slate-400" />
               {geoStatus === 'fetching' && <span className="text-slate-500 flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Getting your location…</span>}
               {geoStatus === 'denied' && <span className="text-rose-600">{geoMsg}</span>}
-              {geoStatus === 'ok' && geofencePreview && (
-                <span className={geofencePreview.inside ? 'text-emerald-700' : 'text-rose-700'}>
-                  {geofencePreview.inside
-                    ? `Inside geofence — ${geofencePreview.distance}m from branch center`
-                    : 'Not within bank or branch allowed clocking radius.'}
-                </span>
-              )}
-              {geoStatus === 'ok' && !geofencePreview && !hasGeofence && <span className="text-amber-700">Your branch geofence is not configured. Contact HR.</span>}
+              {geoStatus === 'ok' && <span className="text-emerald-700">Location captured. InfinityCore will check all registered company locations.</span>}
               {geoStatus === 'idle' && <span className="text-slate-400">Location needed for attendance verification</span>}
             </div>
             {geoStatus === 'ok' && geo?.accuracy && (
@@ -220,7 +203,7 @@ export default function ClockCard({
         )}
 
         <p className="text-xs text-slate-400 mt-4 text-center">
-          {!networkTimeSynced ? 'Official network time is synchronizing. Clocking is disabled until it is available.' : hasGeofence ? 'Branch geofence verification is active.' : 'Official timestamps are set by the server.'}
+          {!networkTimeSynced ? 'Official network time is synchronizing. Clocking is disabled until it is available.' : 'Location is compulsory; the server checks the assigned branch and approved alternative locations.'}
         </p>
       </div>
     </div>

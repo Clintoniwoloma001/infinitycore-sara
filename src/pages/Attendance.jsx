@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react'
-import { Calendar, TrendingUp, Clock, Clock3, CheckCircle2, AlertTriangle, AlertCircle, XCircle, Activity, X, Loader2, Send, Building2, Users, Search, ArrowRight, Shield } from 'lucide-react'
+import { Calendar, TrendingUp, Clock, Clock3, CheckCircle2, AlertTriangle, AlertCircle, XCircle, Activity, X, Loader2, Send, Building2, Users, Search, ArrowRight, Shield, Plus } from 'lucide-react'
 import { useNavigate, Link } from 'react-router-dom'
-import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, getNetworkTime, platformDateKey } from '../services/attendanceService'
+import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, formatWorkedHours, getNetworkTime, platformDateKey } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState } from '../components/PageStates'
@@ -188,7 +188,7 @@ export default function Attendance() {
         setLateModal({
           attendanceId: r.attendance_id,
           employeeId: employee.id,
-          expectedTime: config?.expected_start_time || schedule?.workStartTime || '08:00',
+           expectedTime: config?.expected_start_time || schedule?.workStartTime || 'configured time',
           actualTime: formatAttendanceTime(r.clock_in_at, schedule.timezone),
         })
       }
@@ -263,8 +263,8 @@ export default function Attendance() {
     const late = history.filter((r) => r.status === 'late' || (r.late_minutes || 0) > 0).length
     const onTime = history.filter((r) => r.clock_in && !(r.status === 'late' || (r.late_minutes || 0) > 0)).length
     const earlyDep = history.filter((r) => r.status === 'early_exit').length
-    const withHours = history.filter((r) => r.work_hours != null)
-    const avgHours = withHours.length > 0 ? (withHours.reduce((s, r) => s + parseFloat(r.work_hours), 0) / withHours.length).toFixed(1) : 0
+    const withHours = history.filter((r) => r.clock_in && r.clock_out)
+    const avgHours = withHours.length > 0 ? (withHours.reduce((s, r) => s + (r.computed_work_hours ?? (Number(r.work_hours) || 0)), 0) / withHours.length).toFixed(1) : 0
     const workingDays = history.length
     const pct = workingDays > 0 ? Math.round((present / workingDays) * 100) : 0
     // Streak: consecutive days with clock_in, most recent first
@@ -420,7 +420,8 @@ export default function Attendance() {
                     <th className="px-5 py-3 font-medium">Branch</th>
                     <th className="px-5 py-3 font-medium">Clock In</th>
                     <th className="px-5 py-3 font-medium">Clock Out</th>
-                    <th className="px-5 py-3 font-medium">Hours</th>
+                     <th className="px-5 py-3 font-medium">Hours</th>
+                     <th className="px-5 py-3 font-medium">Clocking Location</th>
                     <th className="px-5 py-3 font-medium">Status</th>
                     <th className="px-5 py-3 font-medium">Late</th>
                   </tr>
@@ -440,7 +441,8 @@ export default function Attendance() {
                       <td className="px-5 py-3 text-slate-700 tabular-nums">
                          {r.clock_out ? formatAttendanceTime(r.clock_out, schedule.timezone) : '—'}
                       </td>
-                      <td className="px-5 py-3 text-slate-700 tabular-nums">{r.work_hours || '—'}</td>
+                       <td className="px-5 py-3 text-slate-700 tabular-nums">{formatWorkedHours(r)}</td>
+                       <td className="px-5 py-3 text-slate-600">{r.clock_in_event?.metadata?.actual_location_name || r.clock_out_event?.metadata?.actual_location_name || '—'}</td>
                       <td className="px-5 py-3"><StatusPill status={r.status} /></td>
                       <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
                     </tr>
@@ -525,23 +527,29 @@ export default function Attendance() {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-left">
               <tr>
-                <th className="px-5 py-3 font-medium">Date</th>
+                    <th className="px-5 py-3 font-medium">Assigned Branch</th>
+                    <th className="px-5 py-3 font-medium">Date</th>
                 <th className="px-5 py-3 font-medium">Clock In</th>
                 <th className="px-5 py-3 font-medium">Clock Out</th>
                 <th className="px-5 py-3 font-medium">Hours</th>
                 <th className="px-5 py-3 font-medium">Status</th>
-                <th className="px-5 py-3 font-medium">Late</th>
+                    <th className="px-5 py-3 font-medium">Late</th>
+                    <th className="px-5 py-3 font-medium">Clocking Location</th>
+                    <th className="px-5 py-3 font-medium">Location Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {history.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-5 py-3 text-slate-700">{new Date(r.attendance_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                   <td className="px-5 py-3 text-slate-700">{employee.branches?.branch_name || employee.branch || '—'}</td>
+                   <td className="px-5 py-3 text-slate-700">{new Date(r.attendance_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
                    <td className="px-5 py-3 text-slate-700 tabular-nums">{r.clock_in ? formatAttendanceTime(r.clock_in, schedule.timezone) : '—'}</td>
                    <td className="px-5 py-3 text-slate-700 tabular-nums">{r.clock_out ? formatAttendanceTime(r.clock_out, schedule.timezone) : '—'}</td>
-                  <td className="px-5 py-3 text-slate-700 tabular-nums">{r.work_hours || '—'}</td>
+                   <td className="px-5 py-3 text-slate-700 tabular-nums">{formatWorkedHours(r)}</td>
                   <td className="px-5 py-3"><StatusPill status={r.status} /></td>
-                  <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
+                   <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
+                   <td className="px-5 py-3 text-slate-600">{r.clock_in_event?.metadata?.actual_location_name || r.clock_out_event?.metadata?.actual_location_name || '—'}</td>
+                   <td className="px-5 py-3 text-slate-600 capitalize">{r.clock_out_event?.location_status || r.clock_in_event?.location_status || r.location_status || 'unknown'}</td>
                 </tr>
               ))}
             </tbody>

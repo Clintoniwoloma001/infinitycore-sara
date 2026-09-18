@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon } from 'lucide-react'
-import { attendanceService, platformDateKey } from '../services/attendanceService'
+import { QRCodeCanvas } from 'qrcode.react'
+import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw } from 'lucide-react'
+import { attendanceService, platformDateKey, formatWorkedHours } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
+import { platformSettingsService } from '../services/platformSettingsService'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import SaraBriefing from '../components/attendance/SaraBriefing'
 import TrendChart from '../components/attendance/TrendChart'
@@ -19,6 +21,7 @@ export default function AttendanceManagement() {
     { id: 'exceptions', label: 'Late Exceptions' },
     { id: 'issues', label: 'Attendance Issues' },
     { id: 'config', label: 'Configuration' },
+    { id: 'qr', label: 'QR Attendance' },
   ]
 
   return (
@@ -50,6 +53,7 @@ export default function AttendanceManagement() {
       {tab === 'exceptions' && <ExceptionsTab setNotice={setNotice} />}
       {tab === 'issues' && <IssuesTab setNotice={setNotice} />}
       {tab === 'config' && <ConfigTab setNotice={setNotice} />}
+      {tab === 'qr' && <QrTerminalTab setNotice={setNotice} />}
     </div>
   )
 }
@@ -61,6 +65,7 @@ function RecordsTab({ setNotice }) {
   const [rows, setRows] = useState([])
   const [employees, setEmployees] = useState([])
   const [branches, setBranches] = useState([])
+  const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filters, setFilters] = useState({ date: '', branchId: '', department: '', employeeId: '', status: '' })
@@ -73,14 +78,16 @@ function RecordsTab({ setNotice }) {
     setLoading(true)
     setError('')
     try {
-      const [data, emps, brs] = await Promise.all([
+      const [data, emps, brs, todaySummary] = await Promise.all([
         attendanceService.listAll(filters),
         attendanceService.listEmployees(),
         attendanceService.listBranches(),
+        attendanceService.getManagementSummary().catch(() => null),
       ])
       setRows(data)
       setEmployees(emps)
       setBranches(brs)
+      setSummary(todaySummary)
     } catch (e) {
       setError(e?.message || 'Unable to load attendance records')
     } finally {
@@ -88,7 +95,7 @@ function RecordsTab({ setNotice }) {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [filters.date, filters.branchId, filters.department, filters.employeeId, filters.status])
 
   // Apply filters
   const filtered = useMemo(() => {
@@ -106,15 +113,22 @@ function RecordsTab({ setNotice }) {
   const kpis = useMemo(() => {
     const today = platformDateKey()
     const todayRows = rows.filter((r) => String(r.attendance_date) === today)
-    const totalEmps = employees.length
+    const totalEmps = summary?.total_employees ?? employees.length
     const present = todayRows.filter((r) => r.clock_in).length
     const late = todayRows.filter((r) => r.status === 'late' || (r.late_minutes || 0) > 0).length
     const absent = totalEmps - present
-    const withHours = todayRows.filter((r) => r.work_hours != null)
-    const avgHours = withHours.length > 0 ? (withHours.reduce((s, r) => s + parseFloat(r.work_hours), 0) / withHours.length).toFixed(1) : 0
+    const withHours = todayRows.filter((r) => r.clock_in && r.clock_out)
+    const avgHours = withHours.length > 0 ? (withHours.reduce((s, r) => s + (r.computed_work_hours ?? (Number(r.work_hours) || 0)), 0) / withHours.length).toFixed(1) : 0
     const pct = totalEmps > 0 ? Math.round((present / totalEmps) * 100) : 0
-    return { totalEmps, present, late, absent, avgHours, pct }
-  }, [rows, employees])
+    return {
+      totalEmps: summary?.total_employees ?? totalEmps,
+      present: summary?.present_today ?? present,
+      late: summary?.late_today ?? late,
+      absent: summary?.absent_today ?? Math.max(0, absent),
+      avgHours: summary?.average_hours ?? avgHours,
+      pct: summary?.attendance_percent ?? pct,
+    }
+  }, [rows, employees, summary])
 
   // Trend data
   const trendData = useMemo(() => {
@@ -184,7 +198,7 @@ function RecordsTab({ setNotice }) {
         <>
           {/* SARA Briefing */}
           <div className="mb-6">
-            <SaraBriefing records={rows} employees={employees} isManager={true} />
+            <SaraBriefing records={rows} employees={employees} isManager={true} summary={summary} />
           </div>
 
           {/* KPI cards */}
@@ -250,12 +264,18 @@ function RecordsTab({ setNotice }) {
                 <thead className="bg-slate-50 text-slate-500 text-left">
                   <tr>
                     <th className="px-5 py-3 font-medium whitespace-nowrap">Employee</th>
+                    <th className="px-5 py-3 font-medium whitespace-nowrap">Employee Number</th>
+                    <th className="px-5 py-3 font-medium whitespace-nowrap">Assigned Branch</th>
                     <th className="px-5 py-3 font-medium whitespace-nowrap">Date</th>
                     <th className="px-5 py-3 font-medium whitespace-nowrap">Clock In</th>
                     <th className="px-5 py-3 font-medium whitespace-nowrap">Clock Out</th>
                     <th className="px-5 py-3 font-medium whitespace-nowrap">Hours</th>
                     <th className="px-5 py-3 font-medium whitespace-nowrap">Status</th>
                     <th className="px-5 py-3 font-medium whitespace-nowrap">Late</th>
+                    <th className="px-5 py-3 font-medium whitespace-nowrap">Clocking Location</th>
+                    <th className="px-5 py-3 font-medium whitespace-nowrap">Geofence</th>
+                    <th className="px-5 py-3 font-medium whitespace-nowrap">Location Difference</th>
+                    <th className="px-5 py-3 font-medium whitespace-nowrap">Location Status</th>
                     <th className="px-5 py-3 font-medium whitespace-nowrap text-right">Actions</th>
                   </tr>
                 </thead>
@@ -266,12 +286,18 @@ function RecordsTab({ setNotice }) {
                         <div className="font-medium text-slate-900">{r.employees?.full_name || r.employee_id}</div>
                         {r.employees?.department && <div className="text-xs text-slate-400">{r.employees.department} · {r.employees.position || ''}</div>}
                       </td>
+                      <td className="px-5 py-3 text-slate-600 font-mono text-xs">{r.employees?.employee_number || r.employees?.staff_id || r.employees?.employee_code || '—'}</td>
+                      <td className="px-5 py-3 text-slate-600">{r.employees?.branches?.branch_name || r.branches?.branch_name || r.employees?.branch || '—'}</td>
                       <td className="px-5 py-3 text-slate-600">{new Date(r.attendance_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
                       <td className="px-5 py-3 text-slate-600 tabular-nums">{r.clock_in ? new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                       <td className="px-5 py-3 text-slate-600 tabular-nums">{r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                      <td className="px-5 py-3 text-slate-600 tabular-nums">{r.work_hours || '—'}</td>
+                      <td className="px-5 py-3 text-slate-600 tabular-nums">{formatWorkedHours(r)}</td>
                       <td className="px-5 py-3"><StatusPill status={r.status} /></td>
                       <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
+                      <td className="px-5 py-3 text-slate-600">{locationName(r) || '—'}</td>
+                      <td className="px-5 py-3 text-slate-600">{geofenceName(r) || '—'}</td>
+                      <td className="px-5 py-3">{locationDifference(r)}</td>
+                      <td className="px-5 py-3"><LocationStatusPill record={r} /></td>
                       <td className="px-5 py-3 text-right">
                         <div className="inline-flex gap-1.5">
                           {(r.clock_in_lat || r.clock_out_lat || r.geofence_status !== 'no_geofence') && (
@@ -344,6 +370,40 @@ function KpiCard({ icon: Icon, label, value, color }) {
       <div className="text-xs text-slate-400 mt-0.5">{label}</div>
     </div>
   )
+}
+
+function eventMetadata(record) {
+  return record?.clock_in_event?.metadata || record?.clock_out_event?.metadata || {}
+}
+
+function locationName(record) {
+  const inName = record?.clock_in_event?.metadata?.actual_location_name
+  const outName = record?.clock_out_event?.metadata?.actual_location_name
+  if (inName && outName && inName !== outName) return `In: ${inName} / Out: ${outName}`
+  return inName || outName || null
+}
+
+function geofenceName(record) {
+  const metadata = eventMetadata(record)
+  return metadata.actual_location_name || (record?.geofence_status ? record.geofence_status.replace(/_/g, ' ') : null)
+}
+
+function locationDifference(record) {
+  const metadata = eventMetadata(record)
+  const differs = record?.clock_in_event?.metadata?.location_difference || record?.clock_out_event?.metadata?.location_difference
+  if (differs === true || differs === 'true') return <span className="text-amber-700">Different from assigned branch</span>
+  if (differs === false || differs === 'false') return <span className="text-emerald-700">Assigned branch</span>
+  return <span className="text-slate-400">{metadata.actual_location_name ? 'Recorded' : '—'}</span>
+}
+
+function LocationStatusPill({ record }) {
+  const status = record?.clock_out_event?.location_status || record?.clock_in_event?.location_status || record?.location_status
+  const tone = status === 'inside'
+    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+    : status === 'outside'
+      ? 'bg-rose-50 text-rose-700 border-rose-200'
+      : 'bg-slate-100 text-slate-600 border-slate-200'
+  return <span className={`inline-flex px-2 py-0.5 rounded-full border text-xs capitalize ${tone}`}>{status || 'unknown'}</span>
 }
 
 function StatusPill({ status }) {
@@ -533,20 +593,25 @@ function ConfigTab({ setNotice }) {
   const load = async () => {
     setLoading(true)
     try {
-      const cfg = await attendanceEngineService.getConfig()
+      const [cfg, settings] = await Promise.all([
+        attendanceEngineService.getConfig(),
+        platformSettingsService.get(),
+      ])
       if (cfg) {
         setForm({
-          expected_start_time: cfg.expected_start_time || '08:00',
-          expected_end_time: cfg.expected_end_time || '17:00',
-          grace_period_minutes: cfg.grace_period_minutes ?? 15,
-          late_threshold_time: cfg.late_threshold_time || '08:16',
-          early_departure_threshold_minutes: cfg.early_departure_threshold_minutes ?? 0,
-          overtime_threshold_hours: cfg.overtime_threshold_hours ?? 0,
+          expected_start_time: settings?.default_work_start_time?.slice(0, 5) || cfg.expected_start_time || '',
+          expected_end_time: settings?.default_work_end_time?.slice(0, 5) || cfg.expected_end_time || '',
+          grace_period_minutes: settings?.default_grace_period_minutes ?? cfg.grace_period_minutes,
+          late_threshold_time: cfg.late_threshold_time || '',
+          early_departure_threshold_minutes: settings?.early_departure_threshold_minutes ?? cfg.early_departure_threshold_minutes,
+          overtime_threshold_hours: settings?.overtime_threshold_minutes != null
+            ? Number((Number(settings.overtime_threshold_minutes) / 60).toFixed(2))
+            : cfg.overtime_threshold_hours,
           break_allowed: cfg.break_allowed ?? false,
-          break_duration_minutes: cfg.break_duration_minutes ?? 0,
-          geofence_enabled: cfg.geofence_enabled ?? false,
+          break_duration_minutes: settings?.default_break_duration_minutes ?? cfg.break_duration_minutes,
+          geofence_enabled: settings?.geofence_enabled ?? cfg.geofence_enabled ?? false,
           manual_correction_requires_reason: cfg.manual_correction_requires_reason ?? true,
-          working_days: cfg.working_days || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+          working_days: (settings?.default_working_days || cfg.working_days || []).map((day) => String(day).toLowerCase().slice(0, 3)),
         })
       }
     } catch (e) {
@@ -561,8 +626,9 @@ function ConfigTab({ setNotice }) {
   const save = async () => {
     setBusy(true)
     try {
-      await attendanceEngineService.updateConfig(form)
-      setNotice({ kind: 'ok', text: 'Attendance configuration updated and synchronized with Platform Settings.' })
+      const { expected_start_time, expected_end_time, grace_period_minutes, late_threshold_time, working_days, ...policy } = form
+      await attendanceEngineService.updateConfig(policy)
+      setNotice({ kind: 'ok', text: 'Attendance policy updated. Work hours remain controlled by Platform Settings → Working Hours.' })
       await load()
     } catch (e) {
       setNotice({ kind: 'error', text: e?.message || 'Update failed' })
@@ -573,11 +639,11 @@ function ConfigTab({ setNotice }) {
 
   if (loading) return <LoadingState label="Loading configuration..." />
 
-  const ALL_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+  const ALL_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 
   return (
     <div className="max-w-2xl">
-      <p className="text-sm text-slate-500 mb-4">Configure the expected work schedule. These values determine late detection and attendance status. Working hours and grace period mirror <strong>Platform Settings → Working Hours</strong> and stay synchronized when saved here.</p>
+      <p className="text-sm text-slate-500 mb-4">Review attendance policy and location behavior. Platform Settings → Working Hours is the single source of truth for start time, end time, working days, grace period, and lateness calculations.</p>
       <div className="bg-white rounded-xl border border-slate-200 p-6">
         <div className="flex items-center gap-2 mb-4">
           <SettingsIcon className="w-5 h-5 text-slate-400" />
@@ -587,21 +653,21 @@ function ConfigTab({ setNotice }) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>Expected Start Time</label>
-              <input type="time" className={inputCls} value={form.expected_start_time || ''} onChange={(e) => setForm({ ...form, expected_start_time: e.target.value })} />
+               <input type="time" className={`${inputCls} bg-slate-50`} value={form.expected_start_time || ''} readOnly />
             </div>
             <div>
               <label className={labelCls}>Expected End Time</label>
-              <input type="time" className={inputCls} value={form.expected_end_time || ''} onChange={(e) => setForm({ ...form, expected_end_time: e.target.value })} />
+               <input type="time" className={`${inputCls} bg-slate-50`} value={form.expected_end_time || ''} readOnly />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>Grace Period (minutes)</label>
-              <input type="number" min="0" className={inputCls} value={form.grace_period_minutes ?? ''} onChange={(e) => setForm({ ...form, grace_period_minutes: Number(e.target.value) })} />
+               <input type="number" min="0" className={`${inputCls} bg-slate-50`} value={form.grace_period_minutes ?? ''} readOnly />
             </div>
             <div>
               <label className={labelCls}>Late Threshold Time</label>
-              <input type="time" className={inputCls} value={form.late_threshold_time || ''} onChange={(e) => setForm({ ...form, late_threshold_time: e.target.value })} />
+               <input type="time" className={`${inputCls} bg-slate-50`} value={form.late_threshold_time || ''} readOnly />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -623,11 +689,8 @@ function ConfigTab({ setNotice }) {
                   <button
                     key={d}
                     type="button"
-                    onClick={() => {
-                      const days = active ? (form.working_days || []).filter((w) => w !== d) : [...(form.working_days || []), d]
-                      setForm({ ...form, working_days: days })
-                    }}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition ${active ? 'bg-[#009944] text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                    disabled
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium uppercase transition ${active ? 'bg-[#009944] text-white' : 'bg-slate-100 text-slate-500'}`}
                   >
                     {d}
                   </button>
@@ -659,6 +722,126 @@ function ConfigTab({ setNotice }) {
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function buildTerminalUrl(token) {
+  return `${window.location.origin}${window.location.pathname}#/attendance-terminal?token=${encodeURIComponent(token)}`
+}
+
+function QrTerminalTab({ setNotice }) {
+  const [devices, setDevices] = useState([])
+  const [selectedId, setSelectedId] = useState('')
+  const [terminalLink, setTerminalLink] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const rows = await attendanceService.listTerminalDevices()
+      setDevices(rows)
+      setSelectedId((current) => current || rows[0]?.id || '')
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Failed to load attendance terminals' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const generate = async () => {
+    setBusy(true)
+    try {
+      const result = await attendanceService.generateTerminalToken(selectedId || null)
+      setSelectedId(result.device_id)
+      setTerminalLink(buildTerminalUrl(result.token))
+      setNotice({ kind: 'ok', text: 'QR attendance terminal generated. The raw token is shown only in this link.' })
+      await load()
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Could not generate terminal QR' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const revoke = async () => {
+    if (!selectedId) return
+    setBusy(true)
+    try {
+      await attendanceService.revokeTerminal(selectedId)
+      setTerminalLink('')
+      setNotice({ kind: 'ok', text: 'Terminal link revoked. Existing QR codes will no longer work.' })
+      await load()
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Could not revoke terminal' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const copyLink = async () => {
+    if (!terminalLink) return
+    await navigator.clipboard?.writeText(terminalLink)
+    setNotice({ kind: 'ok', text: 'Terminal link copied.' })
+  }
+
+  const downloadQr = () => {
+    const canvas = document.getElementById('attendance-terminal-qr')
+    if (!canvas) return
+    const anchor = document.createElement('a')
+    anchor.href = canvas.toDataURL('image/png')
+    anchor.download = 'infinitycore-attendance-terminal.png'
+    anchor.click()
+  }
+
+  if (loading) return <LoadingState label="Loading QR attendance terminals..." />
+
+  return (
+    <div className="max-w-3xl space-y-5">
+      <div>
+        <p className="text-sm text-slate-500">Generate a public QR terminal link for reception or an office entrance. The QR contains only a revocable random terminal token, never employee credentials or employee data.</p>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-5">
+        <div className="flex items-center gap-2">
+          <QrCode className="w-5 h-5 text-[#009944]" />
+          <h3 className="font-semibold text-slate-900">QR Attendance Terminal</h3>
+        </div>
+        <div>
+          <label className={labelCls}>Terminal device</label>
+          <select className={inputCls} value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+            <option value="">Create or use the default QR terminal</option>
+            {devices.map((device) => <option key={device.id} value={device.id}>{device.device_name} · {device.status}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={generate} disabled={busy} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />} {terminalLink ? 'Regenerate QR' : 'Generate QR'}
+          </button>
+          {selectedId && <button onClick={revoke} disabled={busy} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-rose-200 text-rose-700 text-sm font-medium hover:bg-rose-50 disabled:opacity-50">Revoke QR</button>}
+        </div>
+
+        {terminalLink && (
+          <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-6 items-center border-t border-slate-100 pt-5">
+            <div className="bg-white border border-slate-200 rounded-xl p-4 w-fit">
+              <QRCodeCanvas id="attendance-terminal-qr" value={terminalLink} size={240} level="H" includeMargin />
+            </div>
+            <div className="space-y-3 min-w-0">
+              <p className="text-sm font-medium text-slate-800">Scan to open Attendance Terminal</p>
+              <p className="text-xs text-slate-500 break-all">{terminalLink}</p>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={copyLink} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Copy className="w-3.5 h-3.5" /> Copy link</button>
+                <button onClick={downloadQr} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Download className="w-3.5 h-3.5" /> Download</button>
+                <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Printer className="w-3.5 h-3.5" /> Print</button>
+              </div>
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">Regenerating or revoking invalidates the previous QR link. Employees still provide their own employee number and device location at the terminal.</p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

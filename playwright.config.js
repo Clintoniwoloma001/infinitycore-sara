@@ -45,7 +45,7 @@ export default defineConfig({
           },
         ]
       : []),
-    { name: 'chromium', testMatch: /(smoke|medical-public)\.spec\.js/, use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium', testMatch: /(smoke|medical-public|camera)\.spec\.js/, use: { ...devices['Desktop Chrome'] } },
   ],
   webServer: process.env.E2E_BASE_URL
     ? undefined

@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Settings, Clock, Calendar, MapPin, Shield, Loader2, CheckCircle2, History, Coins, Save } from 'lucide-react'
 import { platformSettingsService } from '../services/platformSettingsService'
-import { attendanceEngineService } from '../services/attendanceEngineService'
 import { geofenceService } from '../services/geofenceService'
 import { LoadingState, ErrorState } from '../components/PageStates'
 import GeofenceEditor from '../components/attendance/GeofenceEditor'
@@ -90,33 +89,15 @@ export default function PlatformSettings() {
       // Build settings diff
       const updates = {}
       Object.keys(form).forEach((k) => {
-        if (form[k] !== settings[k] && k !== 'id' && k !== 'updated_at' && k !== 'updated_by') {
+        const equal = Array.isArray(form[k]) || Array.isArray(settings[k])
+          ? JSON.stringify(form[k] || []) === JSON.stringify(settings[k] || [])
+          : form[k] === settings[k]
+        if (!equal && k !== 'id' && k !== 'updated_at' && k !== 'updated_by') {
           updates[k] = form[k]
         }
       })
       if (Object.keys(updates).length > 0) {
         await platformSettingsService.update(updates)
-
-        // Mirror working hours and attendance policies to attendance_config
-        try {
-          const cfgUpdates = {}
-          if (updates.default_work_start_time != null) cfgUpdates.expected_start_time = updates.default_work_start_time
-          if (updates.default_work_end_time != null) cfgUpdates.expected_end_time = updates.default_work_end_time
-          if (updates.default_grace_period_minutes != null) cfgUpdates.grace_period_minutes = Number(updates.default_grace_period_minutes)
-          if (updates.default_break_duration_minutes != null) cfgUpdates.break_duration_minutes = Number(updates.default_break_duration_minutes)
-          if (updates.overtime_threshold_minutes != null) {
-            cfgUpdates.overtime_threshold_hours = Number((Number(updates.overtime_threshold_minutes) / 60).toFixed(2))
-          }
-          if (updates.geofence_enabled != null) cfgUpdates.geofence_enabled = Boolean(updates.geofence_enabled)
-          if (updates.early_departure_threshold_minutes != null) cfgUpdates.early_departure_threshold_minutes = Number(updates.early_departure_threshold_minutes)
-          if (updates.allow_manual_correction != null) cfgUpdates.manual_correction_requires_reason = Boolean(updates.allow_manual_correction)
-
-          if (Object.keys(cfgUpdates).length > 0) {
-            await attendanceEngineService.updateConfig(cfgUpdates)
-          }
-        } catch (syncErr) {
-          console.warn('Mirroring platform settings to attendance_config warning:', syncErr)
-        }
 
         setSaved(true)
         setTimeout(() => setSaved(false), 2000)
@@ -259,7 +240,27 @@ export default function PlatformSettings() {
             <NumField label="Break Duration (minutes)" value={form.default_break_duration_minutes} onChange={(v) => update('default_break_duration_minutes', v)} />
             <NumField label="Overtime Threshold (minutes)" value={form.overtime_threshold_minutes} onChange={(v) => update('overtime_threshold_minutes', v)} />
           </div>
-          <p className="text-xs text-slate-400">Branch-specific overrides can be configured in the Geofence tab.</p>
+          <div>
+            <label className={labelCls}>Working Days</label>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map((day) => {
+                const active = (form.default_working_days || []).map((value) => String(value).slice(0, 3).toLowerCase()).includes(day)
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => update('default_working_days', active
+                      ? (form.default_working_days || []).filter((value) => String(value).slice(0, 3).toLowerCase() !== day)
+                      : [...(form.default_working_days || []), day])}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium uppercase transition ${active ? 'bg-[#009944] text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                  >
+                    {day}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <p className="text-xs text-slate-400">These global working hours, days, and grace settings are consumed by every attendance channel. Branch geofences configure location only.</p>
           <SaveButton onClick={saveSettings} saving={saving} />
         </div>
       )}

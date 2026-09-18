@@ -11,6 +11,7 @@ import { userInvitationService } from './userInvitationService'
 
 const RESULT_META = {
   SUCCESS: { label: 'Invited', color: 'text-emerald-600 bg-emerald-50' },
+  RESENT: { label: 'Invitation resent', color: 'text-emerald-600 bg-emerald-50' },
   ALREADY_EXISTS: { label: 'Already has account', color: 'text-amber-600 bg-amber-50' },
   INVALID_EMAIL: { label: 'No email', color: 'text-slate-500 bg-slate-100' },
   FAILED: { label: 'Failed', color: 'text-rose-600 bg-rose-50' },
@@ -54,7 +55,15 @@ export const userProvisioningService = {
   // Returns the server result payload: { ok, results }.
   async inviteEmployees(employees, { role = 'staff', reason = null } = {}) {
     if (!Array.isArray(employees) || employees.length === 0) throw new Error('Select at least one employee.')
+    const invalid = employees.find((employee) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(employee?.email || '').trim()))
+    if (invalid) throw new Error('This employee does not have a valid email address. Update the employee record before creating the user account.')
     return userInvitationService.inviteEmployees(employees.map((e) => e.id), role, reason)
+  },
+
+  async resendInvitation(employee, { role = 'staff', reason = null } = {}) {
+    if (!employee?.id) throw new Error('Select an employee to resend the invitation.')
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(employee.email || '').trim())) throw new Error('This employee does not have a valid email address. Update the employee record before creating the user account.')
+    return userInvitationService.resendInvitation(employee.id, role, reason)
   },
 
   resultMeta(result) {
@@ -63,7 +72,7 @@ export const userProvisioningService = {
 
   // Helpers for the provisioning modal
   summarizeResults(results) {
-    const summary = { SUCCESS: 0, ALREADY_EXISTS: 0, INVALID_EMAIL: 0, FAILED: 0 }
+    const summary = { SUCCESS: 0, RESENT: 0, ALREADY_EXISTS: 0, INVALID_EMAIL: 0, FAILED: 0 }
     ;(results || []).forEach((r) => { summary[r.result] = (summary[r.result] || 0) + 1 })
     return summary
   },

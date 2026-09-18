@@ -199,6 +199,9 @@ export const ROLE_PERMISSIONS = {
     'hr.org.manage',
     'medical.read',
     'medical.manage',
+    'hr.training.read',
+    'hr.training.manage',
+    'workforce.manhour.read',
   ],
   [ROLES.ADMIN]: [
     'customers.read',
@@ -265,6 +268,9 @@ export const ROLE_PERMISSIONS = {
     'hr.org.manage',
     'medical.read',
     'medical.manage',
+    'hr.training.read',
+    'hr.training.manage',
+    'workforce.manhour.read',
   ],
   [ROLES.BRANCH_MANAGER]: [
     'customers.read',
@@ -285,6 +291,8 @@ export const ROLE_PERMISSIONS = {
     'work.plans.manage',
     'work.reports.review',
     'work.team.performance',
+    'hr.training.read',
+    'workforce.manhour.read',
   ],
   [ROLES.AREA_MANAGER]: [
     'customers.read',
@@ -295,6 +303,8 @@ export const ROLE_PERMISSIONS = {
     'branches.read',
     'reports.read',
     'hr.attendance.self',
+    'hr.training.read',
+    'workforce.manhour.read',
   ],
   [ROLES.HEAD_OF_BUSINESS]: [
     'customers.read',
@@ -305,6 +315,13 @@ export const ROLE_PERMISSIONS = {
     'branches.read',
     'reports.read',
     'hr.attendance.self',
+    'hr.training.read',
+    'workforce.manhour.read',
+  ],
+  [ROLES.OPERATIONS_MANAGER]: [
+    'hr.attendance.self',
+    'reports.read',
+    'workforce.manhour.read',
   ],
   [ROLES.LOAN_OFFICER]: [
     'customers.read',
@@ -376,6 +393,9 @@ export const ROLE_PERMISSIONS = {
     'hr.org.manage',
     'medical.read',
     'medical.manage',
+    'hr.training.read',
+    'hr.training.manage',
+    'workforce.manhour.read',
   ],
   [ROLES.HR_OFFICER]: [
     'hr.applications.read',
@@ -393,6 +413,7 @@ export const ROLE_PERMISSIONS = {
     'performance.read',
     'appraisal.read',
     'medical.read',
+    'hr.training.read',
   ],
   [ROLES.STAFF]: [
     'customers.read',
@@ -421,6 +442,7 @@ export const ROLE_MODULES = {
     'reports',
     'audit-logs',
     'users',
+    'my_training',
   ],
   [ROLES.ADMIN]: [
     'dashboard',
@@ -432,6 +454,7 @@ export const ROLE_MODULES = {
     'reports',
     'audit-logs',
     'users',
+    'my_training',
   ],
   [ROLES.BRANCH_MANAGER]: [
     'dashboard',
@@ -439,6 +462,7 @@ export const ROLE_MODULES = {
     'customers',
     'loans',
     'support',
+    'my_training',
   ],
   [ROLES.AREA_MANAGER]: [
     'dashboard',
@@ -446,6 +470,7 @@ export const ROLE_MODULES = {
     'customers',
     'loans',
     'support',
+    'my_training',
   ],
   [ROLES.HEAD_OF_BUSINESS]: [
     'dashboard',
@@ -454,39 +479,47 @@ export const ROLE_MODULES = {
     'loans',
     'support',
     'reports',
+    'my_training',
   ],
   [ROLES.OPERATIONS_MANAGER]: [
     'dashboard',
     'my-work',
     'customers',
     'loans',
+    'my_training',
   ],
   [ROLES.LOAN_OFFICER]: [
     'my-work',
     'loans',
     'customers',
+    'my_training',
   ],
   [ROLES.RELATIONSHIP_MANAGER]: [
     'my-work',
     'customers',
     'loans',
+    'my_training',
   ],
   [ROLES.CUSTOMER_SERVICE]: [
     'my-work',
     'support',
     'customers',
+    'my_training',
   ],
   [ROLES.HR_MANAGER]: [
     'hr',
     'dashboard',
+    'my_training',
   ],
   [ROLES.HR_OFFICER]: [
     'hr',
+    'my_training',
   ],
   [ROLES.STAFF]: [
     'dashboard',
     'customers',
     'loans',
+    'my_training',
   ],
   [ROLES.CUSTOMER]: [
     'customer-dashboard',

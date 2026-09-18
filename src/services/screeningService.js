@@ -45,16 +45,24 @@ export const screeningService = {
   },
 
   async saveConfig(jobId, config) {
+    const weights = config.weights || {}
+    const total = Object.values(weights).reduce((sum, value) => sum + Number(value || 0), 0)
+    if (Math.round(total * 100) / 100 !== 100) {
+      throw new Error(`Recruitment criteria weights must total 100 (currently ${total}).`)
+    }
     const { data, error } = await supabase.rpc('upsert_screening_config', {
       p_job_id: jobId,
       p_config: {
-        weights: config.weights || {},
+        weights,
         min_overall: Number(config.min_overall || 60),
         min_components: config.min_components || {},
         mandatory_requirements: config.mandatory_requirements || [],
         preferred_requirements: config.preferred_requirements || [],
         required_qualifications: config.required_qualifications || [],
         required_certifications: config.required_certifications || [],
+        required_skills: config.required_skills || [],
+        preferred_skills: config.preferred_skills || [],
+        criteria_notes: config.criteria_notes || null,
         assessment_threshold: config.assessment_threshold != null ? Number(config.assessment_threshold) : null,
         experience_threshold: Number(config.experience_threshold || 2),
         assessment_flag_tolerance: Number(config.assessment_flag_tolerance || 0),

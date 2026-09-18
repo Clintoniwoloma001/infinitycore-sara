@@ -64,6 +64,11 @@ import CandidateProfile from './pages/CandidateProfile'
 import AssessmentBuilder from './pages/AssessmentBuilder'
 import SalaryStructure from './pages/SalaryStructure'
 import PlatformReset from './pages/PlatformReset'
+import Training from './pages/Training'
+import MyTraining from './pages/MyTraining'
+import ManHourIntelligence from './pages/ManHourIntelligence'
+import CertificateVerification from './pages/CertificateVerification'
+import ActivateAccount from './pages/ActivateAccount'
 
 const pageComponents = {
   Dashboard,
@@ -113,6 +118,9 @@ const pageComponents = {
   CandidateProfile,
   AssessmentBuilder,
   SalaryStructure,
+  Training,
+  MyTraining,
+  ManHourIntelligence,
 }
 
 function Protected({ children }) {
@@ -208,6 +216,8 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/activate-account" element={<ActivateAccount />} />
+      <Route path="/certificate/verify/:certificateNumber" element={<CertificateVerification />} />
       <Route path="/attendance-terminal" element={<AttendanceTerminal />} />
       <Route path="/" element={<Protected><Home /></Protected>} />
       <Route path="/onboarding/:token" element={<OnboardingForm />} />

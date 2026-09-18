@@ -31,6 +31,8 @@ import {
   Stethoscope,
   Landmark,
   Eraser,
+  GraduationCap,
+  Gauge,
 } from 'lucide-react'
 import { PERMISSIONS } from '../constants/permissions'
 
@@ -84,6 +86,8 @@ export const routeConfig = [
       { label: 'Payroll & BankOne', path: '/payroll-bankone', icon: Wallet, element: 'PayrollBankOne', permissions: [PERMISSIONS.PAYROLL_PUSH] },
       { label: 'Settings', path: '/settings', icon: Settings, element: 'Settings', permissions: [PERMISSIONS.HR_SETTINGS_MANAGE] },
       { label: 'Data Import', path: '/data-import', icon: Database, element: 'DataImport', permissions: [PERMISSIONS.DATA_IMPORT_VIEW] },
+      { label: 'Training & Development', path: '/training', icon: GraduationCap, element: 'Training', permissions: [PERMISSIONS.HR_TRAINING_READ] },
+      { label: 'Man-Hour Intelligence', path: '/man-hour-intelligence', icon: Gauge, element: 'ManHourIntelligence', permissions: [PERMISSIONS.WORKFORCE_MANHOUR_READ] },
     ],
   },
   {
@@ -106,6 +110,7 @@ export const routeConfig = [
     items: [
       { label: 'My Work', path: '/my-work', icon: ListChecks, element: 'MyWork', permissions: [] },
       { label: 'Work Management', path: '/work-management', icon: Target, element: 'WorkManagement', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
+      { label: 'My Training', path: '/my-training', icon: GraduationCap, element: 'MyTraining', permissions: [] },
     ],
   },
 ]
