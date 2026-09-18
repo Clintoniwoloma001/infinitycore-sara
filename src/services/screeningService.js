@@ -95,8 +95,7 @@ export const screeningService = {
     return data // { ok, candidates }
   },
 
-  // AI screening for one candidate. cvText is optional (CV body extraction
-  // happens upstream — the function falls back to cover letter + skills).
+  // AI screening securely retrieves the CV in the Edge Function when one is attached.
   async runAI({ candidateId, jobId, cvText = null }) {
     const result = await invoke({
       action: 'screen_candidate',
@@ -104,6 +103,14 @@ export const screeningService = {
       job_id: jobId,
       cv_text: cvText || null,
     })
+    return result
+  },
+
+  // Requires a stored CV and produces a detailed, job-specific CV analysis.
+  // The browser never receives or submits the CV bytes for this operation.
+  async analyzeCV({ candidateId, jobId }) {
+    const result = await invoke({ action: 'analyze_cv', candidate_id: candidateId, job_id: jobId })
+    if (!result?.ok) throw new Error(result?.error === 'cv_not_found' ? 'No CV is attached to this candidate.' : result?.error || 'CV analysis failed.')
     return result
   },
 

@@ -82,7 +82,10 @@ export const bankoneTransactionService = {
 
   // Internal configuration health (never a provider call).
   async providerHealth() {
-    return invokeBankoneFunction(HEALTH_FN, {})
+    // Configuration absence is a safe, expected diagnostic returned by the
+    // health function. Preserve it for the UI instead of mislabelling it as an
+    // unreachable Edge Function.
+    return invokeBankoneFunction(HEALTH_FN, {}, { allowFailureEnvelope: true })
   },
 
   // Phase 15 integration overview for the configured environment.

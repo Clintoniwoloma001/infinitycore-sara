@@ -197,6 +197,15 @@ export default function CandidateProfile() {
                 {busy === 'ai' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bot className="w-3.5 h-3.5" />} Run AI screening
               </button>
             )}
+            {cand.job_id && (
+              <button onClick={() => run('cv-analysis', async () => {
+                await screeningService.analyzeCV({ candidateId: id, jobId: cand.job_id })
+                setTab('screening')
+                return 'SARA analyzed the CV and compared it with the configured role criteria.'
+              })} disabled={!!busy || !cand.cv_file_path} title={cand.cv_file_path ? 'Securely analyze this candidate’s stored CV against the role' : 'No CV is attached'} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-700 text-white text-xs font-medium hover:bg-violet-800 disabled:opacity-50">
+                {busy === 'cv-analysis' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />} Analyse CV with SARA
+              </button>
+            )}
             {cand.job_id && <button onClick={() => setShowGenerateAssessment(true)} disabled={!!busy} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-violet-300 text-violet-700 text-xs font-medium hover:bg-violet-50 disabled:opacity-50"><Sparkles className="w-3.5 h-3.5" /> Generate Assessment</button>}
             <button onClick={() => setShowInterview(true)} disabled={!!busy || ['hired', 'blacklisted', 'rejected'].includes(cand.application_status)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-cyan-300 text-cyan-700 text-xs font-medium hover:bg-cyan-50 disabled:opacity-50"><CalendarPlus className="w-3.5 h-3.5" /> Invite to Interview</button>
             {cand.application_status !== 'talent_pool' && !['hired', 'blacklisted'].includes(cand.application_status) && <button onClick={moveToTalentPool} disabled={!!busy} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-amber-300 text-amber-700 text-xs font-medium hover:bg-amber-50 disabled:opacity-50"><UsersRound className="w-3.5 h-3.5" /> Move to Talent Pool</button>}
@@ -247,9 +256,11 @@ export default function CandidateProfile() {
             {!insight ? <p className="mt-4 text-sm text-slate-500">Run SARA screening to generate an explainable match from this candidate's documented profile, role requirements, assessment, and interview evidence.</p> : (
               <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <div className="lg:col-span-2 rounded-lg bg-white/80 border border-violet-100 p-4"><p className="text-xs font-semibold text-slate-500 uppercase">AI analysis</p><p className="text-sm text-slate-700 mt-2 whitespace-pre-line">{insight.summary || 'No summary recorded.'}</p>{insight.detailed_analysis?.reasoning && <p className="text-xs text-slate-500 mt-3">Reasoning: {insight.detailed_analysis.reasoning}</p>}</div>
+                {insight.detailed_analysis?.cv_summary && <div className="lg:col-span-2 rounded-lg bg-white/80 border border-violet-100 p-4"><p className="text-xs font-semibold text-violet-700 uppercase">CV summary</p><p className="text-sm text-slate-700 mt-2 whitespace-pre-line">{insight.detailed_analysis.cv_summary}</p></div>}
                 <div className="rounded-lg bg-white/80 border border-violet-100 p-4"><p className="text-xs font-semibold text-slate-500 uppercase mb-2">Transparent calculation</p><div className="space-y-1.5 text-xs">{Object.entries(weights).map(([key, weight]) => <div key={key} className="flex justify-between gap-2"><span className="text-slate-500">{key.replace(/_/g, ' ')}</span><span className="font-medium text-slate-700">{weight}% · {components[key] ?? components[`${key.replace('_score', '')}_match`] ?? '—'}</span></div>)}</div><p className="text-[11px] text-slate-400 mt-3">Missing evidence is shown as unavailable, not inferred.</p></div>
                 <div className="rounded-lg bg-white/80 border border-emerald-100 p-4"><p className="text-xs font-semibold text-emerald-700 uppercase">Strengths</p><ul className="mt-2 space-y-1 text-sm text-slate-700">{(insight.strengths || []).map((item, index) => <li key={index}>+ {item}</li>)}</ul></div>
                 <div className="rounded-lg bg-white/80 border border-amber-100 p-4"><p className="text-xs font-semibold text-amber-700 uppercase">Skill gaps / focus</p><ul className="mt-2 space-y-1 text-sm text-slate-700">{(insight.detailed_analysis?.missing_skills || insight.concerns || []).map((item, index) => <li key={index}>- {item}</li>)}</ul></div>
+                {insight.detailed_analysis?.suggested_interview_focus?.length > 0 && <div className="rounded-lg bg-white/80 border border-cyan-100 p-4"><p className="text-xs font-semibold text-cyan-700 uppercase">Suggested interview focus</p><ul className="mt-2 space-y-1 text-sm text-slate-700">{insight.detailed_analysis.suggested_interview_focus.map((item, index) => <li key={index}>• {item}</li>)}</ul></div>}
                 <div className="rounded-lg bg-white/80 border border-slate-200 p-4"><p className="text-xs font-semibold text-slate-500 uppercase">Recommendation</p><p className="text-sm font-medium text-slate-800 mt-2">{insight.recommended_action || 'manual_review'}</p><p className="text-xs text-slate-500 mt-1">This does not make or automate a hiring decision.</p></div>
               </div>
             )}

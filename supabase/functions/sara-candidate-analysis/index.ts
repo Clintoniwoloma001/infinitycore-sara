@@ -24,6 +24,7 @@
 //
 // Supported actions:
 //   screen_candidate      — AI screening of a candidate against a job.
+//   analyze_cv            — securely read the stored CV and analyze it against the job.
 //   generate_assessment   — build a question bank for a job/template.
 //   analyze_assessment    — review a completed attempt's answers.
 //   analyze_interview     — review interview feedback and recommend next step.
@@ -31,9 +32,10 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
+const OPENAI_RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses'
 const MODEL = 'gpt-4o-mini'
 
-const ALLOWED_ACTIONS = ['screen_candidate', 'generate_assessment', 'analyze_assessment', 'analyze_interview']
+const ALLOWED_ACTIONS = ['screen_candidate', 'analyze_cv', 'generate_assessment', 'analyze_assessment', 'analyze_interview']
 const HR_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer']
 
 const RECOMMENDED_ACTIONS = ['recommended_interview', 'recommended_offer', 'assessment_needed', 'manual_review', 'not_recommended']
@@ -130,6 +132,9 @@ function sanitizeScreen(raw, cfg) {
     detailed_analysis: {
       skills_found: Array.isArray(raw.skills_found) ? raw.skills_found.map((s) => asString(s, 120)).filter(Boolean).slice(0, 25) : [],
       missing_skills: Array.isArray(raw.missing_skills) ? raw.missing_skills.map((s) => asString(s, 120)).filter(Boolean).slice(0, 25) : [],
+      cv_summary: asString(raw.cv_summary, 4000),
+      relevant_experience: Array.isArray(raw.relevant_experience) ? raw.relevant_experience.map((s) => asString(s, 300)).filter(Boolean).slice(0, 12) : [],
+      suggested_interview_focus: Array.isArray(raw.suggested_interview_focus) ? raw.suggested_interview_focus.map((s) => asString(s, 300)).filter(Boolean).slice(0, 12) : [],
       reasoning: asString(raw.reasoning, 3000),
     },
     match_breakdown: matchBreakdown,
@@ -214,7 +219,60 @@ async function runOpenAI(messages) {
   return JSON.parse(content)
 }
 
-async function screenCandidate(supabase, body) {
+function bytesToBase64(bytes) {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+async function getCandidateCV(supabase, candidate) {
+  if (!candidate.cv_file_path) return null
+  const path = String(candidate.cv_file_path)
+  const bucket = path.startsWith('cvs/') || path.startsWith('recruitment/') ? 'career' : 'documents'
+  const fileName = asString(candidate.cv_file_name || path.split('/').pop(), 180) || 'candidate-cv.pdf'
+  const mime = asString(candidate.cv_file_mime, 120) || (fileName.toLowerCase().endsWith('.docx')
+    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    : fileName.toLowerCase().endsWith('.doc') ? 'application/msword' : 'application/pdf')
+  const allowedMimes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+  if (!allowedMimes.includes(mime)) throw new Error('unsupported_cv_format')
+  const { data, error } = await supabase.storage.from(bucket).download(path)
+  if (error || !data) throw new Error('cv_download_failed')
+  if (data.size <= 0 || data.size > 10 * 1024 * 1024) throw new Error('invalid_cv_size')
+  return { fileName, mime, data: `data:${mime};base64,${bytesToBase64(new Uint8Array(await data.arrayBuffer()))}` }
+}
+
+async function runOpenAIWithCV(systemPrompt, userPrompt, cv) {
+  const openaiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!openaiKey) throw new Error('ai_not_configured')
+  const resp = await fetch(OPENAI_RESPONSES_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openaiKey}` },
+    body: JSON.stringify({
+      model: MODEL,
+      temperature: 0,
+      store: false,
+      text: { format: { type: 'json_object' } },
+      input: [
+        { role: 'developer', content: systemPrompt },
+        { role: 'user', content: [
+          { type: 'input_file', filename: cv.fileName, file_data: cv.data },
+          { type: 'input_text', text: userPrompt },
+        ] },
+      ],
+    }),
+  })
+  if (!resp.ok) throw new Error(`ai_error_${resp.status}`)
+  const payload = await resp.json()
+  const content = payload?.output_text || payload?.output?.flatMap((item) => item.content || [])
+    .find((part) => part.type === 'output_text')?.text
+  if (!content) throw new Error('ai_empty')
+  return JSON.parse(content)
+}
+
+async function screenCandidate(supabase, body, requireCV = false) {
   const candidateId = String(body.candidate_id || '')
   if (!candidateId) return { ok: false, error: 'candidate_id_required' }
   const candidate = await firstRow(supabase, 'hr_candidates', candidateId)
@@ -237,6 +295,8 @@ async function screenCandidate(supabase, body) {
   }
 
   const cvText = asString(body.cv_text, 20000)
+  const cv = await getCandidateCV(supabase, candidate)
+  if (requireCV && !cv) return { ok: false, error: 'cv_not_found' }
   const cover = asString(candidate.cover_letter, 8000)
   const skills = Array.isArray(candidate.skills) ? candidate.skills.map((s) => asString(s, 80)).filter(Boolean).slice(0, 30) : []
   const experience = Array.isArray(candidate.work_experience)
@@ -254,8 +314,8 @@ async function screenCandidate(supabase, body) {
     'Return JSON with this exact shape: ' +
     '{"overall_score": number 0-100, "components": {"experience_match": 0-100, "skills_match": 0-100, "cv_match": 0-100, "education": 0-100, "cover_letter_relevance": 0-100, "assessment_score": number|null, "interview_score": number|null}, ' +
     '"skills_found": string[], "missing_skills": string[], "strengths": string[], "concerns": string[], "flags": string[], ' +
-    '"summary": string, "recommended_action": "recommended_interview"|"recommended_offer"|"assessment_needed"|"manual_review"|"not_recommended", "reasoning": string}. ' +
-    'Score everything 0-100. Be balanced and specific. If the CV text is absent rely on the cover letter and skills. ' +
+    '"cv_summary": string, "relevant_experience": string[], "suggested_interview_focus": string[], "summary": string, "recommended_action": "recommended_interview"|"recommended_offer"|"assessment_needed"|"manual_review"|"not_recommended", "reasoning": string}. ' +
+    'Score everything 0-100. Be balanced and specific. If a CV file is attached, summarize its job-relevant education, certifications, skills, experience, achievements, and evidence before comparing it to the role. If it is absent rely on the cover letter and skills. ' +
     'Use only job-related evidence. Never use or infer race, ethnicity, religion, gender, pregnancy, disability, age, political affiliation, marital status, health status, family status, or any other protected/personal characteristic. SARA is advisory and must not make a hiring decision.'
 
   const criteria = cfg
@@ -290,13 +350,13 @@ async function screenCandidate(supabase, body) {
       work_experience: experience,
       certifications: candidate.certifications,
       cv_text: cvText || null,
+      cv_file_attached: Boolean(cv),
     },
   })
 
-  const parsed = await runOpenAI([
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
-  ])
+  const parsed = cv
+    ? await runOpenAIWithCV(systemPrompt, userPrompt, cv)
+    : await runOpenAI([{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }])
   const clean = sanitizeScreen(parsed, cfg)
   if (!clean) return { ok: false, error: 'ai_bad_shape' }
 
@@ -320,7 +380,7 @@ async function screenCandidate(supabase, body) {
     summary: clean.summary,
     detailed_analysis: clean.detailed_analysis,
     match_breakdown: clean.match_breakdown,
-    evidence_scope: clean.evidence_scope,
+    evidence_scope: cv ? 'job_related_cv_and_recorded_data' : clean.evidence_scope,
     recommended_action: recommended,
     ai_generated: true,
     created_by: body._actor_id || null,
@@ -605,6 +665,8 @@ Deno.serve(async (req) => {
     switch (action) {
       case 'screen_candidate':
         return json(await screenCandidate(supabase, bodyWithActor))
+      case 'analyze_cv':
+        return json(await screenCandidate(supabase, bodyWithActor, true))
       case 'generate_assessment':
         return json(await generateAssessment(supabase, bodyWithActor))
       case 'analyze_assessment':

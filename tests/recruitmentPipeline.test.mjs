@@ -9,6 +9,7 @@ const recruitmentService = read('src/services/recruitmentService.js')
 const careerService = read('src/services/careerService.js')
 const candidateProfile = read('src/pages/CandidateProfile.jsx')
 const publicJob = read('src/pages/careers/CareerJobDetail.jsx')
+const candidateAnalysis = read('supabase/functions/sara-candidate-analysis/index.ts')
 
 for (const required of [
   'recruitment_application_events',
@@ -32,7 +33,11 @@ for (const required of ['uploadCandidateCV', 'attachCandidateCV', 'moveToTalentP
 assert.match(recruitmentService, /RESUME_MAX_BYTES\s*=\s*10 \* 1024 \* 1024/)
 assert.match(careerService, /cvs\/\$\{folder\}-\$\{randomFolder\}/)
 assert.match(candidateProfile, /SARA Candidate Insight/)
+assert.match(candidateProfile, /Analyse CV with SARA/)
 assert.match(candidateProfile, /Immutable recruitment events/)
+assert.match(candidateAnalysis, /analyze_cv/)
+assert.match(candidateAnalysis, /input_file/)
+assert.match(candidateAnalysis, /getCandidateCV/)
 assert.match(publicJob, /Submit application/)
 assert.match(publicJob, /Remove/)
 

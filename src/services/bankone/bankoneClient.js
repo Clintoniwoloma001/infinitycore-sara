@@ -236,12 +236,17 @@ export async function invokeBankoneFunction(functionName, body = {}, options = {
     })
   }
 
-  const invokeOptions = { ...options, body }
-  if (options.headers) {
+  // A configuration-health result can be a successful Edge Function response
+  // whose application payload is { success: false, configured: false }.  That
+  // is not a browser-to-function failure, so callers that need to display the
+  // safe configuration diagnostic can opt into receiving that envelope.
+  const { allowFailureEnvelope = false, ...functionOptions } = options
+  const invokeOptions = { ...functionOptions, body }
+  if (functionOptions.headers) {
     // Never allow a caller to override the current-user JWT. supabase-js adds
     // Bearer <current session access token> through its authenticated fetch.
     invokeOptions.headers = Object.fromEntries(
-      Object.entries(options.headers).filter(([name]) => name.toLowerCase() !== 'authorization'),
+      Object.entries(functionOptions.headers).filter(([name]) => name.toLowerCase() !== 'authorization'),
     )
   }
 
@@ -256,7 +261,7 @@ export async function invokeBankoneFunction(functionName, body = {}, options = {
       })
     }
     // If the function still returned a success:false envelope (rare), surface it.
-    if (data && typeof data === 'object' && data.success === false) {
+    if (!allowFailureEnvelope && data && typeof data === 'object' && data.success === false) {
       const status = data.statusCode || data.providerStatus || data.status || null
       throw makeDiagnosticError({
         code: data.errorCode || data.error?.code || 'bankone_call_failed',
