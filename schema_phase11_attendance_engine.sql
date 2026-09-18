@@ -561,7 +561,8 @@ SELECT
   count(*) FILTER (WHERE employment_status = 'terminated' AND updated_at >= date_trunc('year', now())) AS terminated_this_year,
   count(*) AS total_employees,
   coalesce(avg(salary) FILTER (WHERE employment_status = 'active'), 0) AS avg_salary
-FROM public.employees;
+FROM public.employees
+WHERE coalesce(is_archived, false) = false;
 
 ALTER TABLE public.hr_metrics_view OWNER TO postgres;
 GRANT SELECT ON public.hr_metrics_view TO authenticated;

@@ -1,12 +1,9 @@
-import React, { useEffect, useState } from 'react'
+import React from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth, AuthProvider } from './hooks/useAuth'
-import { supabase } from './supabaseClient'
-import OnboardingFlow from './components/OnboardingFlow'
-import * as onboardingState from './utils/onboardingState'
 import AttendanceTerminal from './pages/AttendanceTerminal'
 import Layout from './components/Layout'
-import { AccessDenied } from './components/PageStates'
+import { AccessDenied, ComingSoonPage } from './components/PageStates'
 import ErrorBoundary from './components/ErrorBoundary'
 import { canAccessRoute, protectedRoutes } from './config/navigation'
 import Login from './pages/Login'
@@ -44,7 +41,10 @@ import Appraisals from './pages/Appraisals'
 import WorkManagement from './pages/WorkManagement'
 import PlatformSettings from './pages/PlatformSettings'
 import Chat from './pages/Chat'
+import MessagesPage from './components/messages/MessagesPage'
+import CommunicationAdmin from './pages/CommunicationAdmin'
 import BankOneImportCenter from './pages/BankOneImportCenter'
+import BankOneIntegration from './pages/BankOneIntegration'
 import Performance from './pages/Performance'
 import Reconciliation from './pages/Reconciliation'
 import Settings from './pages/Settings'
@@ -52,6 +52,18 @@ import OnboardingReview from './pages/OnboardingReview'
 import HROrganisation from './pages/HROrganisation'
 import PerformanceSettings from './pages/PerformanceSettings'
 import Biometrics from './pages/Biometrics'
+import MedicalScreeningPortal from './pages/MedicalScreeningPortal'
+import MedicalManagement from './pages/MedicalManagement'
+import Careers from './pages/careers/Careers'
+import CareerJobDetail from './pages/careers/CareerJobDetail'
+import CandidatePortal from './pages/careers/CandidatePortal'
+import AssessmentTake from './pages/careers/AssessmentTake'
+import OfferAcceptance from './pages/careers/OfferAcceptance'
+import ApplicationManagement from './pages/ApplicationManagement'
+import CandidateProfile from './pages/CandidateProfile'
+import AssessmentBuilder from './pages/AssessmentBuilder'
+import SalaryStructure from './pages/SalaryStructure'
+import PlatformReset from './pages/PlatformReset'
 
 const pageComponents = {
   Dashboard,
@@ -84,7 +96,10 @@ const pageComponents = {
   WorkManagement,
   PlatformSettings,
   Chat,
+  MessagesPage,
+  CommunicationAdmin,
   BankOneImportCenter,
+  BankOneIntegration,
   Performance,
   Reconciliation,
   Settings,
@@ -92,6 +107,12 @@ const pageComponents = {
   HROrganisation,
   PerformanceSettings,
   Biometrics,
+  MedicalManagement,
+  PlatformReset,
+  ApplicationManagement,
+  CandidateProfile,
+  AssessmentBuilder,
+  SalaryStructure,
 }
 
 function Protected({ children }) {
@@ -158,60 +179,16 @@ function ProtectedModule({ route }) {
   const auth = useAuth()
   if (!canAccessRoute(route, auth)) return <AccessDenied />
   const Page = pageComponents[route.element]
-  return Page ? <Page /> : <Navigate to="/" replace />
+  return Page
+    ? <Page />
+    : <ComingSoonPage
+        title={`${route.label || route.element || 'This'} module unavailable`}
+        description="This module is not registered in the application yet."
+      />
 }
 
 function Home() {
-  const { role, user } = useAuth()
-  const [showOnboarding, setShowOnboarding] = useState(false)
-  const [checking, setChecking] = useState(true)
-
-  const dismissOnboarding = () => {
-    if (!onboardingState.isOnboardingDismissed()) onboardingState.dismissOnboarding(30)
-    setShowOnboarding(false)
-    setChecking(false)
-  }
-
-  useEffect(() => {
-    const checkOnboarding = async () => {
-      if (role === 'customer' || !user?.id) { setChecking(false); return }
-      if (onboardingState.isOnboardingDismissed()) { setChecking(false); return }
-      try {
-        // Check if employee record exists and onboarding is complete
-        const { data: emp } = await supabase
-          .from('employees')
-          .select('id')
-          .eq('user_id', user.id)
-          .limit(1)
-        if (!emp || emp.length === 0) {
-          // No employee record — show onboarding for non-customer users
-          setShowOnboarding(true)
-        } else {
-          // Check digital file
-          const { data: file } = await supabase
-            .from('employee_digital_files')
-            .select('onboarding_completed')
-            .eq('employee_id', emp[0].id)
-            .single()
-          if (!file || !file.onboarding_completed) {
-            setShowOnboarding(true)
-          }
-        }
-      } catch {
-        // Tables might not exist yet — don't block the user
-      }
-      setChecking(false)
-    }
-    checkOnboarding()
-  }, [user?.id, role])
-
-  if (checking) return <div className="flex justify-center items-center h-screen"><div className="w-8 h-8 border-4 border-slate-200 border-t-[#009944] rounded-full animate-spin" /></div>
-  if (showOnboarding) return (
-    <OnboardingFlow
-      onComplete={() => { onboardingState.clearOnboardingDismiss(); setShowOnboarding(false) }}
-      onDismiss={dismissOnboarding}
-    />
-  )
+  const { role } = useAuth()
   return role === 'customer' ? <CustomerDashboard /> : <Dashboard />
 }
 
@@ -236,6 +213,13 @@ function AppRoutes() {
       <Route path="/onboarding/:token" element={<OnboardingForm />} />
       <Route path="/guarantor-verification/:token" element={<GuarantorVerificationForm />} />
       <Route path="/fidelity-verification/:token" element={<FidelityBondVerificationForm />} />
+      <Route path="/medical-screening/:token" element={<MedicalScreeningPortal />} />
+      {/* Public career lifecycle (no authentication — token-gated via RPCs) */}
+      <Route path="/careers" element={<Careers />} />
+      <Route path="/careers/jobs/:token" element={<CareerJobDetail />} />
+      <Route path="/careers/portal/:token" element={<CandidatePortal />} />
+      <Route path="/careers/assessment/:token" element={<AssessmentTake />} />
+      <Route path="/careers/offer/:token" element={<OfferAcceptance />} />
       {protectedRoutes.filter((route) => route.path !== '/').map((route) => (
         <Route key={route.path} path={route.path} element={<Protected><ProtectedModule route={route} /></Protected>} />
       ))}
@@ -244,7 +228,8 @@ function AppRoutes() {
       <Route path="/profile" element={<Protected><ProtectedModule route={{ path: '/profile', element: 'Profile', permissions: [] }} /></Protected>} />
       <Route path="/onboarding-review/:id" element={<Protected><ProtectedModule route={{ path: '/onboarding-links', element: 'OnboardingReview', permissions: ['hr.onboarding.read'] }} /></Protected>} />
       <Route path="/biometrics/:employeeId" element={<Protected><ProtectedModule route={{ path: '/employees', element: 'Biometrics', permissions: ['hr.employee.read'] }} /></Protected>} />
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="/candidate/:id" element={<Protected><ProtectedModule route={{ path: '/candidate/:id', element: 'CandidateProfile', permissions: ['hr.applications.read'] }} /></Protected>} />
+      <Route path="*" element={<ComingSoonPage title="Page not found" description="The requested InfinityCore page does not exist." />} />
     </Routes>
   )
 }

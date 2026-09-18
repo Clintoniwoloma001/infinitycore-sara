@@ -2,22 +2,33 @@ import React, { useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Menu, X, LogOut } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
-import { supabase } from '../supabaseClient'
 import Logo from './Logo'
 import { canAccessRoute, routeConfig } from '../config/navigation'
 import NotificationBell from './NotificationBell'
 import Sara from './sara/Sara'
-import EmployeeCompletionModal from './EmployeeCompletionModal'
-import { isOnboardingDismissed, dismissOnboarding } from '../utils/onboardingState'
+import OnboardingFlow from './OnboardingFlow'
+import OnboardingStatusBanner from './OnboardingStatusBanner'
+import onboardingStatusService, { ONBOARDING_STATES } from '../services/onboardingStatusService'
+import {
+  clearOnboardingDismiss,
+  dismissInitialOnboarding,
+  dismissOnboardingBanner,
+  isInitialOnboardingDismissed,
+  isOnboardingBannerDismissed,
+} from '../utils/onboardingState'
 
 export default function Layout({ children }) {
   const [open, setOpen] = useState(false)
-  const [showCompletion, setShowCompletion] = useState(false)
-  const [completionEmpId, setCompletionEmpId] = useState(null)
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [onboardingStatus, setOnboardingStatus] = useState(null)
+  const [onboardingLoading, setOnboardingLoading] = useState(true)
+  const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [onboardingRefreshKey, setOnboardingRefreshKey] = useState(0)
   const location = useLocation()
   const navigate = useNavigate()
   const auth = useAuth()
   const { user, profile, role, roleMetadata, name, email, signOut } = auth
+  const { actualRole } = auth
   const groups = routeConfig
     .map((group) => ({ ...group, items: group.items.filter((item) => canAccessRoute(item, auth)) }))
     .filter((group) => group.items.length > 0)
@@ -32,40 +43,70 @@ export default function Layout({ children }) {
     return location.pathname === path || location.pathname.startsWith(`${path}/`)
   }
 
-  // Check employee profile completion for staff users on login
+  // Onboarding is read once per authenticated user, not once per pathname.
+  // The server-backed status decides whether a wizard is appropriate; local
+  // storage only suppresses a reminder the user has explicitly dismissed.
   useEffect(() => {
-    if (!user || !profile) return
-    // Only check for approved staff (not customers, not pending)
-    if (profile.status !== 'active' || profile.approved !== true) return
-    if (role === 'customer') return
-    // Don't show on onboarding/guarantor pages
-    if (location.pathname.startsWith('/onboarding/') || location.pathname.startsWith('/guarantor-')) return
+    let active = true
+    const load = async () => {
+      setOnboardingLoading(true)
+      setShowOnboarding(false)
+      setOnboardingStatus(null)
+      if (!user?.id || !profile || (profile.status && profile.status !== 'active') || actualRole === 'customer') {
+        setOnboardingLoading(false)
+        return
+      }
 
-    let cancelled = false
-    const checkCompletion = async () => {
-      try {
-        const { data } = await supabase.rpc('get_employee_completion')
-        if (cancelled || !data?.ok) return
-        if (!data.is_complete && data.completion_pct < 100) {
-          // Check if we already dismissed it inside the 30-minute window
-          if (isOnboardingDismissed()) return
-          // Find the employee ID
-          const { data: emp } = await supabase
-            .from('employees')
-            .select('id')
-            .eq('user_id', user.id)
-            .limit(1)
-            .maybeSingle()
-          if (emp?.id) {
-            setCompletionEmpId(emp.id)
-            setShowCompletion(true)
-          }
-        }
-      } catch { /* best-effort */ }
+      const status = await onboardingStatusService.getMyStatus(user.id)
+      if (!active) return
+      setOnboardingStatus(status)
+      setBannerDismissed(isOnboardingBannerDismissed(user.id))
+
+      // Admin identities without an employee record are not candidates for
+      // self-service onboarding. Other working roles may enter it once.
+      const canPromptInitial = !['super_admin', 'admin'].includes(actualRole)
+      if (status?.state === ONBOARDING_STATES.NOT_STARTED && canPromptInitial && !isInitialOnboardingDismissed(user.id)) {
+        setShowOnboarding(true)
+      }
+      setOnboardingLoading(false)
     }
-    checkCompletion()
-    return () => { cancelled = true }
-  }, [user, profile, role, location.pathname]) // eslint-disable-line react-hooks/exhaustive-deps
+    load()
+    return () => { active = false }
+  }, [actualRole, onboardingRefreshKey, profile, user?.id])
+
+  const openOnboarding = () => {
+    if (user?.id) {
+      clearOnboardingDismiss(user.id)
+      setBannerDismissed(false)
+    }
+    setShowOnboarding(true)
+  }
+
+  const closeOnboarding = () => {
+    if (user?.id && onboardingStatus?.state === ONBOARDING_STATES.NOT_STARTED) {
+      dismissInitialOnboarding(user.id)
+    }
+    setShowOnboarding(false)
+  }
+
+  const completeOnboarding = () => {
+    if (user?.id) clearOnboardingDismiss(user.id)
+    setShowOnboarding(false)
+    setOnboardingStatus((current) => current ? { ...current, state: ONBOARDING_STATES.COMPLETED, progress: 100 } : current)
+    setOnboardingRefreshKey((key) => key + 1)
+  }
+
+  const dismissBanner = () => {
+    if (user?.id) dismissOnboardingBanner(user.id)
+    setBannerDismissed(true)
+  }
+
+  const showBanner = !onboardingLoading
+    && !showOnboarding
+    && !bannerDismissed
+    && onboardingStatus
+    && onboardingStatus.state !== ONBOARDING_STATES.COMPLETED
+    && (onboardingStatus.employeeId || !['super_admin', 'admin'].includes(actualRole))
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden">
@@ -118,16 +159,21 @@ export default function Layout({ children }) {
           </div>
         </header>
         <main className="flex-1 overflow-y-auto">
-          <div className="max-w-7xl mx-auto px-4 lg:px-8 py-6">{children}</div>
+          <div className="max-w-7xl mx-auto px-4 lg:px-8 py-6">
+            {showBanner && <OnboardingStatusBanner status={onboardingStatus} onContinue={openOnboarding} onDismiss={dismissBanner} />}
+            {children}
+          </div>
         </main>
       </div>
       <Sara />
-      {showCompletion && completionEmpId && (
-        <EmployeeCompletionModal
-          employeeId={completionEmpId}
-          onClose={() => { setShowCompletion(false); dismissOnboarding(30) }}
-          onSaved={() => {}}
-        />
+      {showOnboarding && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Employee onboarding">
+          <div className="flex min-h-full items-center justify-center">
+            <div className="w-full max-w-2xl overflow-hidden rounded-2xl shadow-2xl">
+              <OnboardingFlow embedded onComplete={completeOnboarding} onDismiss={closeOnboarding} />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -1,36 +1,46 @@
 import React, { useEffect, useState } from 'react'
 import { LogIn, LogOut, MapPin, Loader2, CheckCircle2, AlertTriangle, Clock, RefreshCw } from 'lucide-react'
-import { getPosition } from '../../services/attendanceService'
+import { DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, getPosition } from '../../services/attendanceService'
 import { haversine } from '../../services/geofenceService'
+import { useNetworkTime } from '../../hooks/useNetworkTime'
 
 /**
  * The main clock in/out card with GPS capture and geofence feedback.
  * Modern, clean, with animated status indicators.
  */
-export default function ClockCard({ record, employee, onClockIn, onClockOut, busy, message }) {
+export default function ClockCard({
+  record,
+  employee,
+  onClockIn,
+  onClockOut,
+  busy,
+  message,
+  geofenceEnabled = true,
+  requireGpsClockIn = true,
+  requireGpsClockOut = true,
+  defaultGeofenceRadius = 150,
+  timeZone = DEFAULT_ATTENDANCE_TIMEZONE,
+}) {
   const [geo, setGeo] = useState(null)
   const [geoStatus, setGeoStatus] = useState('idle') // idle | fetching | ok | denied | error
   const [geoMsg, setGeoMsg] = useState('')
-  const [now, setNow] = useState(new Date())
   const [geofencePreview, setGeofencePreview] = useState(null)
+  const { now, synced: networkTimeSynced } = useNetworkTime()
 
   const branch = employee?.branches || null
-  const hasGeofence = branch?.geofence_active && branch?.latitude != null
+  const branchHasCoordinates = branch?.latitude != null && branch?.longitude != null
+  const hasGeofence = branch?.geofence_active && branchHasCoordinates
   const isOpen = record && !record.clock_out
   const isComplete = record && record.clock_out
+  const needsLocation = !isComplete && (geofenceEnabled || (isOpen ? requireGpsClockOut : requireGpsClockIn))
+  const radius = branch?.geofence_radius ?? defaultGeofenceRadius ?? 150
 
-  // Live clock
+  // Auto-request location whenever the server policy requires it.
   useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000)
-    return () => clearInterval(t)
-  }, [])
-
-  // Auto-request location on mount if geofence is active
-  useEffect(() => {
-    if (hasGeofence && !geo) {
+    if (needsLocation && !geo && !isComplete) {
       requestLocation()
     }
-  }, [hasGeofence]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [needsLocation, isComplete]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function requestLocation() {
     setGeoStatus('fetching')
@@ -40,10 +50,10 @@ export default function ClockCard({ record, employee, onClockIn, onClockOut, bus
       setGeo(pos)
       setGeoStatus('ok')
       // Preview geofence
-      if (branch?.latitude && branch?.longitude) {
+      if (hasGeofence) {
         const dist = haversine(pos.lat, pos.lng, branch.latitude, branch.longitude)
-        const inside = dist <= (branch.geofence_radius || 150)
-        setGeofencePreview({ distance: Math.round(dist), inside, radius: branch.geofence_radius || 150 })
+        const inside = dist <= radius
+        setGeofencePreview({ distance: Math.round(dist), inside, radius })
       }
     } catch (e) {
       setGeoStatus('denied')
@@ -52,7 +62,8 @@ export default function ClockCard({ record, employee, onClockIn, onClockOut, bus
   }
 
   const handleClockIn = async () => {
-    if (!geo && hasGeofence) {
+    if (!networkTimeSynced) return
+    if (!geo && needsLocation) {
       await requestLocation()
       return // Let the user see the geo status first
     }
@@ -60,15 +71,20 @@ export default function ClockCard({ record, employee, onClockIn, onClockOut, bus
   }
 
   const handleClockOut = async () => {
-    if (!geo && hasGeofence) {
+    if (!networkTimeSynced) return
+    if (!geo && needsLocation) {
       await requestLocation()
       return
     }
     onClockOut(geo)
   }
 
-  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+  const timeStr = now
+    ? now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone })
+    : 'Syncing official time...'
+  const dateStr = now
+    ? now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone })
+    : 'Official server time'
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
@@ -104,13 +120,13 @@ export default function ClockCard({ record, employee, onClockIn, onClockOut, bus
           <div className="rounded-xl bg-slate-50 p-4">
             <p className="text-xs text-slate-400 flex items-center gap-1"><LogIn className="w-3.5 h-3.5" /> Clock In</p>
             <p className="text-lg font-semibold text-slate-900 mt-1 tabular-nums">
-              {record?.clock_in ? new Date(record.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}
+              {record?.clock_in ? formatAttendanceTime(record.clock_in, timeZone) : '—'}
             </p>
           </div>
           <div className="rounded-xl bg-slate-50 p-4">
             <p className="text-xs text-slate-400 flex items-center gap-1"><LogOut className="w-3.5 h-3.5" /> Clock Out</p>
             <p className="text-lg font-semibold text-slate-900 mt-1 tabular-nums">
-              {record?.clock_out ? new Date(record.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : isOpen ? 'In progress' : '—'}
+              {record?.clock_out ? formatAttendanceTime(record.clock_out, timeZone) : isOpen ? 'In progress' : '—'}
             </p>
           </div>
         </div>
@@ -127,7 +143,7 @@ export default function ClockCard({ record, employee, onClockIn, onClockOut, bus
         )}
 
         {/* Geofence status */}
-        {hasGeofence && (
+        {!isComplete && (geofenceEnabled || needsLocation) && (
           <div className={`rounded-xl border p-3 mb-5 ${geofencePreview?.inside ? 'border-emerald-200 bg-emerald-50' : geofencePreview ? 'border-rose-200 bg-rose-50' : 'border-slate-200 bg-slate-50'}`}>
             <div className="flex items-center gap-2 text-sm">
               <MapPin className={`w-4 h-4 ${geofencePreview?.inside ? 'text-emerald-600' : geofencePreview ? 'text-rose-600' : 'text-slate-400'}`} />
@@ -137,10 +153,11 @@ export default function ClockCard({ record, employee, onClockIn, onClockOut, bus
                 <span className={geofencePreview.inside ? 'text-emerald-700' : 'text-rose-700'}>
                   {geofencePreview.inside
                     ? `Inside geofence — ${geofencePreview.distance}m from branch center`
-                    : `Outside geofence — ${geofencePreview.distance}m away (radius: ${geofencePreview.radius}m)`}
+                    : 'Not within bank or branch allowed clocking radius.'}
                 </span>
               )}
-              {geoStatus === 'idle' && <span className="text-slate-400">Location needed for geofence verification</span>}
+              {geoStatus === 'ok' && !geofencePreview && !hasGeofence && <span className="text-amber-700">Your branch geofence is not configured. Contact HR.</span>}
+              {geoStatus === 'idle' && <span className="text-slate-400">Location needed for attendance verification</span>}
             </div>
             {geoStatus === 'ok' && geo?.accuracy && (
               <p className="text-xs text-slate-400 mt-1 ml-6">GPS accuracy: ±{Math.round(geo.accuracy)}m</p>
@@ -165,7 +182,7 @@ export default function ClockCard({ record, employee, onClockIn, onClockOut, bus
           {!record && (
             <button
               onClick={handleClockIn}
-              disabled={busy || (hasGeofence && geoStatus !== 'ok')}
+              disabled={busy || !networkTimeSynced || (needsLocation && geoStatus !== 'ok')}
               className="flex-1 inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-[#009944] text-white font-semibold hover:bg-[#007a36] disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:shadow-lg hover:shadow-[#009944]/20"
             >
               {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <LogIn className="w-5 h-5" />}
@@ -175,7 +192,7 @@ export default function ClockCard({ record, employee, onClockIn, onClockOut, bus
           {isOpen && (
             <button
               onClick={handleClockOut}
-              disabled={busy || (hasGeofence && geoStatus !== 'ok')}
+              disabled={busy || !networkTimeSynced || (needsLocation && geoStatus !== 'ok')}
               className="flex-1 inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-rose-600 text-white font-semibold hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:shadow-lg hover:shadow-rose-600/20"
             >
               {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <LogOut className="w-5 h-5" />}
@@ -194,8 +211,8 @@ export default function ClockCard({ record, employee, onClockIn, onClockOut, bus
           <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <p className="text-sm font-semibold text-emerald-900 mb-2">Attendance Complete</p>
             <div className="grid grid-cols-2 gap-2 text-sm text-emerald-800">
-              <div>Clock-in: <span className="font-medium">{new Date(record.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span></div>
-              <div>Clock-out: <span className="font-medium">{new Date(record.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span></div>
+              <div>Clock-in: <span className="font-medium">{formatAttendanceTime(record.clock_in, timeZone)}</span></div>
+              <div>Clock-out: <span className="font-medium">{formatAttendanceTime(record.clock_out, timeZone)}</span></div>
               <div>Worked: <span className="font-medium">{record.work_hours}h</span></div>
               <div>Status: <span className="font-medium capitalize">{record.status.replace(/_/g, ' ')}</span></div>
             </div>
@@ -203,7 +220,7 @@ export default function ClockCard({ record, employee, onClockIn, onClockOut, bus
         )}
 
         <p className="text-xs text-slate-400 mt-4 text-center">
-          {hasGeofence ? 'Geofence verification is active for your branch.' : 'Official timestamps are set by the server.'}
+          {!networkTimeSynced ? 'Official network time is synchronizing. Clocking is disabled until it is available.' : hasGeofence ? 'Branch geofence verification is active.' : 'Official timestamps are set by the server.'}
         </p>
       </div>
     </div>

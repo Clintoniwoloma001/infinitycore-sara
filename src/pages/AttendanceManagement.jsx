@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon } from 'lucide-react'
 import { attendanceService, platformDateKey } from '../services/attendanceService'
-import { workManagementService } from '../services/workManagementService'
+import { attendanceEngineService } from '../services/attendanceEngineService'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import SaraBriefing from '../components/attendance/SaraBriefing'
 import TrendChart from '../components/attendance/TrendChart'
@@ -108,7 +108,7 @@ function RecordsTab({ setNotice }) {
     const todayRows = rows.filter((r) => String(r.attendance_date) === today)
     const totalEmps = employees.length
     const present = todayRows.filter((r) => r.clock_in).length
-    const late = todayRows.filter((r) => r.status === 'late').length
+    const late = todayRows.filter((r) => r.status === 'late' || (r.late_minutes || 0) > 0).length
     const absent = totalEmps - present
     const withHours = todayRows.filter((r) => r.work_hours != null)
     const avgHours = withHours.length > 0 ? (withHours.reduce((s, r) => s + parseFloat(r.work_hours), 0) / withHours.length).toFixed(1) : 0
@@ -533,7 +533,7 @@ function ConfigTab({ setNotice }) {
   const load = async () => {
     setLoading(true)
     try {
-      const cfg = await workManagementService.getAttendanceConfig()
+      const cfg = await attendanceEngineService.getConfig()
       if (cfg) {
         setForm({
           expected_start_time: cfg.expected_start_time || '08:00',
@@ -561,8 +561,8 @@ function ConfigTab({ setNotice }) {
   const save = async () => {
     setBusy(true)
     try {
-      await workManagementService.updateAttendanceConfig(form)
-      setNotice({ kind: 'ok', text: 'Attendance configuration updated.' })
+      await attendanceEngineService.updateConfig(form)
+      setNotice({ kind: 'ok', text: 'Attendance configuration updated and synchronized with Platform Settings.' })
       await load()
     } catch (e) {
       setNotice({ kind: 'error', text: e?.message || 'Update failed' })
@@ -577,7 +577,7 @@ function ConfigTab({ setNotice }) {
 
   return (
     <div className="max-w-2xl">
-      <p className="text-sm text-slate-500 mb-4">Configure the expected work schedule. These values determine late detection and attendance status — nothing here is hard-coded.</p>
+      <p className="text-sm text-slate-500 mb-4">Configure the expected work schedule. These values determine late detection and attendance status. Working hours and grace period mirror <strong>Platform Settings → Working Hours</strong> and stay synchronized when saved here.</p>
       <div className="bg-white rounded-xl border border-slate-200 p-6">
         <div className="flex items-center gap-2 mb-4">
           <SettingsIcon className="w-5 h-5 text-slate-400" />

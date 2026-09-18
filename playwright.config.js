@@ -39,13 +39,13 @@ export default defineConfig({
           { name: 'setup', testMatch: /auth\.setup\.js/, use: { ...devices['Desktop Chrome'] } },
           {
             name: 'chromium-auth',
-            testMatch: /authenticated\.spec\.js/,
+            testMatch: /(authenticated|medical-workbench)\.spec\.js/,
             use: { ...devices['Desktop Chrome'], storageState: authFile },
             dependencies: ['setup'],
           },
         ]
       : []),
-    { name: 'chromium', testMatch: /smoke\.spec\.js/, use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium', testMatch: /(smoke|medical-public)\.spec\.js/, use: { ...devices['Desktop Chrome'] } },
   ],
   webServer: process.env.E2E_BASE_URL
     ? undefined

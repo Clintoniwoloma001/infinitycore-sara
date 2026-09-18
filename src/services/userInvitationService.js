@@ -15,6 +15,7 @@ export const userInvitationService = {
       .select('id, full_name, email, department, position, staff_id, branch')
       .is('user_id', null)
       .not('email', 'is', null)
+      .eq('is_archived', false)
       .order('full_name', { ascending: true })
     if (error) throw error
     return data || []

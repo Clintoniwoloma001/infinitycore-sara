@@ -18,7 +18,7 @@ const STEPS = [
   { id: 'complete', label: 'Complete', icon: Check },
 ]
 
-export default function OnboardingFlow({ onComplete, onDismiss }) {
+export default function OnboardingFlow({ onComplete, onDismiss, embedded = false }) {
   const { user, profile } = useAuth()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -75,6 +75,9 @@ export default function OnboardingFlow({ onComplete, onDismiss }) {
   }, [user?.id])
 
   const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }))
+  const pageClass = embedded
+    ? 'min-h-[620px] bg-gradient-to-br from-slate-50 to-emerald-50 flex items-center justify-center p-4'
+    : 'min-h-screen bg-gradient-to-br from-slate-50 to-emerald-50 flex items-center justify-center p-4'
 
   const next = () => {
     setAnimating(true)
@@ -195,7 +198,7 @@ export default function OnboardingFlow({ onComplete, onDismiss }) {
   // DONE — completion confirmation with employee number + next steps
   if (done) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-emerald-50 flex items-center justify-center p-4">
+      <div className={pageClass}>
         <div className="max-w-lg w-full text-center">
           <div className="w-24 h-24 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-6 animate-[fadeIn_0.5s_ease]">
             <Check className="w-12 h-12 text-[#009944]" />
@@ -227,10 +230,10 @@ export default function OnboardingFlow({ onComplete, onDismiss }) {
           </div>
 
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <button onClick={() => { window.location.hash = '#/profile' }} className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#009944] text-white font-medium hover:bg-[#007a36] transition-all hover:scale-105 shadow-lg">
+            <button onClick={() => { onComplete?.(); window.location.hash = '#/profile' }} className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#009944] text-white font-medium hover:bg-[#007a36] transition-all hover:scale-105 shadow-lg">
               <UserCircle className="w-5 h-5" /> View My Profile
             </button>
-            <button onClick={() => { window.location.hash = '#/profile?card=1' }} className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl border-2 border-[#009944] text-[#009944] font-medium hover:bg-emerald-50 transition-all">
+            <button onClick={() => { onComplete?.(); window.location.hash = '#/profile?card=1' }} className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl border-2 border-[#009944] text-[#009944] font-medium hover:bg-emerald-50 transition-all">
               <CreditCard className="w-5 h-5" /> View Staff ID Card
             </button>
           </div>
@@ -242,7 +245,7 @@ export default function OnboardingFlow({ onComplete, onDismiss }) {
   // WELCOME STEP
   if (step === 0) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-emerald-50 flex items-center justify-center p-4">
+      <div className={pageClass}>
         <div className="max-w-lg w-full text-center">
           <div className="mb-8 animate-[fadeIn_0.5s_ease]">
             <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[#009944] to-[#007a36] flex items-center justify-center mx-auto mb-6 shadow-lg">
@@ -292,7 +295,7 @@ export default function OnboardingFlow({ onComplete, onDismiss }) {
   // COMPLETE STEP
   if (step === STEPS.length - 1) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-emerald-50 flex items-center justify-center p-4">
+      <div className={pageClass}>
         <div className="max-w-lg w-full text-center">
           <div className="w-24 h-24 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-6 animate-[fadeIn_0.5s_ease]">
             <Check className="w-12 h-12 text-[#009944]" />
@@ -339,7 +342,7 @@ export default function OnboardingFlow({ onComplete, onDismiss }) {
   const Icon = currentStep.icon
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-emerald-50 flex items-center justify-center p-4">
+    <div className={pageClass}>
       <div className="max-w-lg w-full">
         {/* Progress bar */}
         <div className="mb-6">

@@ -1,30 +1,55 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Archive, ChevronRight, Loader2, UserPlus, UserX } from 'lucide-react'
+import { Archive, ChevronRight, Loader2, Trash2, UserPlus, UserX } from 'lucide-react'
 import { date, ModuleTable, status, useTable } from './hrShared'
 import { useAuth } from '../hooks/useAuth'
+import { supabase } from '../supabaseClient'
 import { employeeService } from '../services/employeeService'
 import AddEmployeeModal from '../components/AddEmployeeModal'
 import TerminationModal from '../components/TerminationModal'
 import ArchiveModal from '../components/ArchiveModal'
+import DeleteEmployeeModal from '../components/DeleteEmployeeModal'
 
 export default function Employees() {
   const { rows, loading, error, reload } = useTable('employees')
-  const { hasPermission, isAdmin, isHR, canTerminate, canArchive } = useAuth()
+  const { hasPermission, isAdmin, isHR, canTerminate, canArchive, canDelete, user } = useAuth()
   const [showAdd, setShowAdd] = useState(false)
   const [terminating, setTerminating] = useState(null)
   const [archiving, setArchiving] = useState(null)
+  const [deleting, setDeleting] = useState(null)
   const [restoring, setRestoring] = useState(false)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
   const [showArchived, setShowArchived] = useState(false)
+  // user_ids whose linked profile is a super_admin — those employees can
+  // never be deleted (server-enforced; hidden here for UX).
+  const [protectedUserIds, setProtectedUserIds] = useState([])
 
   const canAdd = isAdmin || isHR || hasPermission('hr.employee.update')
 
-  // The terminate/archive actions are shown ONLY to super_admin and
+  // The terminate/archive/delete actions are shown ONLY to super_admin and
   // hr_manager (UX). The backend RPC still independently re-verifies
   // the authenticated user's role — a hidden button is never the gate.
-  const canRunLifecycle = canTerminate || canArchive
+  const canRunLifecycle = canTerminate || canArchive || canDelete
+
+  // Resolve which employees are protected from deletion (linked to a
+  // super_admin login) so the Delete button is hidden for them.
+  useEffect(() => {
+    if (!canDelete) { setProtectedUserIds([]); return }
+    const ids = [...new Set((rows || []).map((r) => r.user_id).filter(Boolean))]
+    if (!ids.length) { setProtectedUserIds([]); return }
+    supabase
+      .from('profiles')
+      .select('id')
+      .in('id', ids)
+      .eq('role', 'super_admin')
+      .then(({ data }) => setProtectedUserIds((data || []).map((p) => p.id)))
+      .catch(() => setProtectedUserIds([]))
+  }, [canDelete, rows])
+
+  const isProtectedEmployee = (employee) =>
+    !!employee?.user_id &&
+    (protectedUserIds.includes(employee.user_id) || employee.user_id === user?.id)
 
   const confirmTerminate = async (employee, { effectiveDate, reason, notes, rehireEligible }) => {
     setActionError('')
@@ -53,6 +78,21 @@ export default function Employees() {
     } catch (e) {
       setActionError(e?.message || 'Unable to archive employee')
       setArchiving(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const confirmDelete = async (employee) => {
+    setActionError('')
+    setBusy(true)
+    try {
+      await employeeService.deleteEmployee(employee.id)
+      setDeleting(null)
+      reload()
+    } catch (e) {
+      setActionError(e?.message || 'Unable to delete employee')
+      setDeleting(null)
     } finally {
       setBusy(false)
     }
@@ -166,6 +206,16 @@ export default function Employees() {
                         <Archive className="w-3.5 h-3.5" /> Archive
                       </button>
                     )}
+                    {canDelete && !isProtectedEmployee(r) && (
+                      <button
+                        onClick={() => setDeleting(r)}
+                        disabled={busy}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-rose-600 border border-rose-200 hover:bg-rose-50 disabled:opacity-50"
+                        title="Delete employee (removes from payroll and the platform, preserves history)"
+                      >
+                        {deleting?.id === r.id && busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} Delete
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -193,6 +243,16 @@ export default function Employees() {
           error=""
           onClose={() => setArchiving(null)}
           onConfirm={(opts) => confirmArchive(archiving, opts)}
+        />
+      )}
+
+      {deleting && canDelete && (
+        <DeleteEmployeeModal
+          employee={deleting}
+          busy={busy}
+          error={actionError}
+          onClose={() => setDeleting(null)}
+          onConfirm={(emp) => confirmDelete(emp)}
         />
       )}
     </div>

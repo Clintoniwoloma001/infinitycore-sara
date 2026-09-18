@@ -142,8 +142,32 @@ export const employeeService = {
     return data
   },
 
-  // Archive (soft-hide) / restore an employee while preserving full
-  // history. Restricted to super_admin/hr_manager on the server.
+  // Delete (decommission) an employee end-to-end. Restricted to
+  // super_admin/hr_manager on the server. The delete_employee RPC:
+  //   - re-verifies the actor role (super_admin / hr_manager),
+  //   - refuses to delete a Super Admin account or the actor's own record,
+  //   - archives the employee (history preserved — never a physical delete),
+  //   - cancels open payroll rows and drops the employee from the roster,
+  //   - deactivates the linked platform login (suspended, reversible).
+  async deleteEmployee(employeeId, reason = '') {
+    try {
+      return await rpcWithRetry(() =>
+        supabase.rpc('delete_employee', {
+          p_employee_id: employeeId,
+          p_reason: reason || 'Deleted via employee action menu',
+        })
+      )
+    } catch (err) {
+      if (err?.code === 'PGRST202') {
+        throw new Error(
+          'The employee delete function is not available in the database yet. ' +
+          'Please run the phase39 migration (`schema_phase39_employee_delete_authorization.sql`) in Supabase, then retry.'
+        )
+      }
+      throw new Error(err?.message || 'Unable to delete employee')
+    }
+  },
+
   async archive(employeeId, reason = '', restore = false) {
     const { data, error } = await supabase.rpc('archive_employee', {
       p_employee_id: employeeId,

@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient'
 import { logAction } from './supabaseService'
+import { getPosition } from './attendanceService'
 
 // ------------------------------------------------------------------
 // Attendance Engine Service — geofencing, devices, biometric mapping,
@@ -226,13 +227,33 @@ export const attendanceEngineService = {
   // Simulate a device clock-in event (for testing/terminal mode).
   // p_employeeId is optional; the RPC resolves by canonical employee number
   // when omitted, or uses the pre-verified employee when provided (WebAuthn).
-  async simulateDeviceEvent({ deviceId, externalUserId, eventType, verificationMethod = 'FINGERPRINT', employeeId = null }) {
+  async simulateDeviceEvent({ deviceId, externalUserId, eventType, verificationMethod = 'FINGERPRINT', employeeId = null, metadata = {} }) {
+    const { data: requirements, error: requirementsError } = await supabase.rpc('get_attendance_requirements')
+    if (requirementsError) throw requirementsError
+
+    const actionRequiresLocation = eventType === 'CLOCK_OUT' || eventType === 'DEVICE_CLOCK_OUT'
+      ? requirements?.require_gps_clock_out !== false
+      : requirements?.require_gps_clock_in !== false
+    const needsLocation = requirements?.geofence_enabled !== false || actionRequiresLocation
+    let locationMetadata = { ...metadata }
+    if (needsLocation) {
+      const position = await getPosition()
+      locationMetadata = {
+        ...locationMetadata,
+        latitude: position.lat,
+        longitude: position.lng,
+        accuracy: position.accuracy,
+        location_source: 'browser_geolocation',
+      }
+    }
+
     const { data, error } = await supabase.rpc('ingest_attendance_event', {
       p_device_id: deviceId,
       p_external_user_id: externalUserId || '',
       p_event_type: eventType,
       p_verification_method: verificationMethod,
       p_employee_id: employeeId,
+      p_metadata: locationMetadata,
     })
     if (error) throw error
     return data
@@ -283,12 +304,30 @@ export const attendanceEngineService = {
   },
 
   async updateConfig(payload) {
-    const { data, error } = await supabase
+    const updates = { ...payload, updated_at: new Date().toISOString() }
+
+    // UPDATE first so the normal path only needs the existing UPDATE policy.
+    // The singleton is seeded by the schema, but insert it if an older
+    // environment is missing the row.
+    let data
+    const { data: updated, error: updateErr } = await supabase
       .from('attendance_config')
-      .upsert({ id: 1, ...payload, updated_at: new Date().toISOString() })
+      .update(updates)
+      .eq('id', 1)
       .select()
-      .single()
-    if (error) throw error
+      .maybeSingle()
+    if (updateErr) throw updateErr
+    data = updated
+
+    if (!data) {
+      const { data: inserted, error: insertErr } = await supabase
+        .from('attendance_config')
+        .insert({ id: 1, ...updates })
+        .select()
+        .single()
+      if (insertErr) throw insertErr
+      data = inserted
+    }
 
     // Mirror changes to hr_platform_settings so Platform Settings working hours stay in sync
     try {
@@ -447,58 +486,15 @@ export const attendanceEngineService = {
 
   // ---- GEOFENCE CLOCK-IN FLOW ----
   async clockInWithGeofence({ employeeId, lat, lng, geofences, config }) {
-    // If geofencing is enabled, verify location
-    if (config?.geofence_enabled && geofences && geofences.length > 0) {
-      const result = this.verifyLocation(lat, lng, geofences)
-      if (!result.inside) {
-        return {
-          success: false,
-          blocked: true,
-          message: "You're outside the authorized attendance area.",
-          nearest: result.nearest,
-          distance: result.distance,
-        }
-      }
-    }
-
-    // Proceed with clock-in
-    const { data, error } = await supabase
-      .from('attendance_records')
-      .insert({
-        employee_id: employeeId,
-        attendance_date: new Date().toISOString().slice(0, 10),
-        source: 'web',
-        source_detail: 'WEB',
-        location_lat: lat,
-        location_lng: lng,
-        verification_method: config?.geofence_enabled ? 'GPS' : 'NONE',
-        location_status: config?.geofence_enabled ? 'inside' : 'unknown',
-        geofence_id: geofences?.find((g) => {
-          const dist = haversine(lat, lng, g.latitude, g.longitude)
-          return dist <= g.radius_meters
-        })?.id || null,
-      })
-      .select()
-      .single()
-    if (error) throw error
-
-    // Create central event
-    await supabase.from('attendance_events').insert({
-      employee_id: employeeId,
-      attendance_record_id: data.id,
-      event_type: 'CLOCK_IN',
-      source: 'WEB',
-      latitude: lat,
-      longitude: lng,
-      geofence_id: data.geofence_id,
-      verification_method: config?.geofence_enabled ? 'GPS' : 'NONE',
-      verification_status: config?.geofence_enabled ? 'verified' : 'pending',
-      location_status: config?.geofence_enabled ? 'inside' : 'unknown',
-      ip_address: null,
-      user_agent: navigator.userAgent,
+    // Keep this legacy entry point on the same server-authoritative path.
+    // The RPC resolves the authenticated employee and ignores client time.
+    const { data, error } = await supabase.rpc('clock_in_secure', {
+      p_lat: lat ?? null,
+      p_lng: lng ?? null,
+      p_accuracy: null,
     })
-
-    logAction({ action: 'ATTENDANCE_CLOCK_IN', entityType: 'AttendanceRecord', entityId: data.id, details: `Clock in by ${employeeId}` })
+    if (error) throw error
+    logAction({ action: 'ATTENDANCE_CLOCK_IN', entityType: 'AttendanceRecord', entityId: data.attendance_id, details: `Clock in by ${employeeId || 'authenticated employee'}` })
     return { success: true, data }
   },
 

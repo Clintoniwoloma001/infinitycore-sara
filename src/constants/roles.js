@@ -178,6 +178,7 @@ export const ROLE_PERMISSIONS = {
     'admin.manage_users',
     'admin.view_audit',
     'admin.manage_config',
+    'admin.platform.reset',
     'reports.read',
     'bankone.import',
     'bankone.read',
@@ -196,6 +197,8 @@ export const ROLE_PERMISSIONS = {
     'work.team.performance',
     'attendance.config.manage',
     'hr.org.manage',
+    'medical.read',
+    'medical.manage',
   ],
   [ROLES.ADMIN]: [
     'customers.read',
@@ -260,6 +263,8 @@ export const ROLE_PERMISSIONS = {
     'work.team.performance',
     'attendance.config.manage',
     'hr.org.manage',
+    'medical.read',
+    'medical.manage',
   ],
   [ROLES.BRANCH_MANAGER]: [
     'customers.read',
@@ -369,6 +374,8 @@ export const ROLE_PERMISSIONS = {
     'work.reports.review',
     'work.team.performance',
     'hr.org.manage',
+    'medical.read',
+    'medical.manage',
   ],
   [ROLES.HR_OFFICER]: [
     'hr.applications.read',
@@ -385,6 +392,7 @@ export const ROLE_PERMISSIONS = {
     'reconciliation.read',
     'performance.read',
     'appraisal.read',
+    'medical.read',
   ],
   [ROLES.STAFF]: [
     'customers.read',

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Calculator, Check, Loader2, Plus, Settings, Sliders, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
@@ -149,6 +150,9 @@ export default function Payroll() {
           <p className="text-sm text-slate-500 mt-1">Period-driven payroll: draft → calculated → review → approved → processed → paid.</p>
         </div>
         <div className="flex items-center gap-2">
+          <Link to="/salary-structure" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm hover:bg-slate-50">
+            <Calculator className="w-4 h-4" /> Salary Structure
+          </Link>
           <button onClick={() => setView('settings')} className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm ${view === 'settings' ? 'border-[#009944] text-[#009944]' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
             <Settings className="w-4 h-4" /> Settings
           </button>

@@ -103,7 +103,7 @@ export function resolveExpiresAt(expiresInDays) {
 }
 
 export const onboardingService = {
-  async createLink({ candidateName, candidateEmail, candidatePhone, position, department, branch, employmentType, expiresInDays = DEFAULT_EXPIRY_DAYS, createdBy }) {
+  async createLink({ candidateName, candidateEmail, candidatePhone, position, department, branch, employmentType, expiresInDays = DEFAULT_EXPIRY_DAYS, createdBy, candidateId = null, jobId = null }) {
     if (!candidateName) throw new Error('Candidate name is required.')
     const token = generateToken()
     const tokenHash = md5Hex(token)
@@ -123,6 +123,8 @@ export const onboardingService = {
         expires_at: expiresAt,
         status: 'PENDING',
         created_by: createdBy || null,
+        candidate_id: candidateId || null,
+        job_id: jobId || null,
       })
       .select()
       .single()

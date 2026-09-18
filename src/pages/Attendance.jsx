@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react'
 import { Calendar, TrendingUp, Clock, Clock3, CheckCircle2, AlertTriangle, AlertCircle, XCircle, Activity, X, Loader2, Send, Building2, Users, Search, ArrowRight, Shield } from 'lucide-react'
 import { useNavigate, Link } from 'react-router-dom'
-import { attendanceService, platformDateKey } from '../services/attendanceService'
+import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, getNetworkTime, platformDateKey } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState } from '../components/PageStates'
@@ -35,8 +35,8 @@ function monthKey(key, deltaMonths, day) {
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
 }
 
-function dateRange(filter) {
-  const today = platformDateKey()
+function dateRange(filter, referenceDate = new Date(), timeZone = DEFAULT_ATTENDANCE_TIMEZONE) {
+  const today = platformDateKey(referenceDate, timeZone)
   switch (filter) {
     case 'today':
       return { start: today, end: today }
@@ -91,7 +91,7 @@ export default function Attendance() {
   const [history, setHistory] = useState([])
   const [config, setConfig] = useState(null)
   const [requirements, setRequirements] = useState(null)
-  const [geofences, setGeofences] = useState([])
+  const [attendanceToday, setAttendanceToday] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState({ kind: '', text: '' })
@@ -108,7 +108,7 @@ export default function Attendance() {
   const [viewScope, setViewScope] = useState('my') // 'my' | 'branch' | 'area'
   const [teamRows, setTeamRows] = useState([])
   const [teamLoading, setTeamLoading] = useState(false)
-  const [teamDate, setTeamDate] = useState(platformDateKey())
+  const [teamDate, setTeamDate] = useState('')
   const [teamSearch, setTeamSearch] = useState('')
 
   const loadTeamAttendance = useCallback(async () => {
@@ -141,26 +141,31 @@ export default function Attendance() {
   const load = async () => {
     setLoading(true)
     try {
+      // Reconcile yesterday's open sessions before reading today's record.
+      // The database RPC is idempotent and closes sessions platform-wide.
+      try {
+        await attendanceService.reconcileAutoClockouts()
+      } catch (e) {
+        console.warn('Attendance auto-clockout reconciliation unavailable:', e)
+      }
+      const req = await attendanceService.getAttendanceRequirements()
+      setRequirements(req)
+      const networkTime = await getNetworkTime()
+      const networkToday = platformDateKey(new Date(networkTime.serverTimeMs), req.appTimezone)
+      setAttendanceToday(networkToday)
+      setTeamDate((current) => current || networkToday)
       const emp = await attendanceService.getMyEmployee()
       setEmployee(emp)
       if (emp) {
         const today = await attendanceService.getToday(emp.id)
         setRecord(today)
-        const range = dateRange(filter)
+        const range = dateRange(filter, new Date(networkTime.serverTimeMs), req.appTimezone)
         const hist = await attendanceService.getHistory(emp.id, { startDate: range.start, endDate: range.end })
         setHistory(hist)
       }
       try {
-        const req = await attendanceService.getAttendanceRequirements()
-        setRequirements(req)
-      } catch { /* requirements fall back to defaults */ }
-      try {
         const cfg = await attendanceEngineService.getConfig()
         setConfig(cfg)
-        if (cfg?.geofence_enabled) {
-          const gf = await attendanceEngineService.listGeofences()
-          setGeofences(gf.filter((g) => g.active))
-        }
       } catch { /* config may not exist yet */ }
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Unable to load attendance' })
@@ -178,13 +183,13 @@ export default function Attendance() {
     setGeofenceBlocked(null)
     try {
       const r = await attendanceService.clockIn(geo)
-      setMessage({ kind: 'ok', text: `Clocked in at ${new Date(r.clock_in_at).toLocaleTimeString()}.${r.late_minutes > 0 ? ` You are ${r.late_minutes} minutes late.` : ''}` })
+      setMessage({ kind: 'ok', text: `Clocked in at ${formatAttendanceTime(r.clock_in_at, schedule.timezone)}.${r.late_minutes > 0 ? ` You are ${r.late_minutes} minutes late.` : ''}` })
       if (r.late_minutes > 0) {
         setLateModal({
           attendanceId: r.attendance_id,
           employeeId: employee.id,
           expectedTime: config?.expected_start_time || schedule?.workStartTime || '08:00',
-          actualTime: new Date(r.clock_in_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          actualTime: formatAttendanceTime(r.clock_in_at, schedule.timezone),
         })
       }
       await load()
@@ -202,7 +207,7 @@ export default function Attendance() {
     setClockAnim(true)
     try {
       const r = await attendanceService.clockOut(record?.id, geo)
-      setMessage({ kind: 'ok', text: `Clocked out at ${new Date(r.clock_out_at).toLocaleTimeString()}. Worked ${r.work_hours} hours.` })
+      setMessage({ kind: 'ok', text: `Clocked out at ${formatAttendanceTime(r.clock_out_at, schedule.timezone)}. Worked ${r.work_hours} hours.` })
       await load()
     } catch (e) {
       setMessage({ kind: 'error', text: e?.message || 'Clock out failed' })
@@ -255,8 +260,8 @@ export default function Attendance() {
   const stats = useMemo(() => {
     if (!history.length) return { present: 0, absent: 0, late: 0, onTime: 0, earlyDep: 0, avgHours: 0, pct: 0, streak: 0 }
     const present = history.filter((r) => r.clock_in).length
-    const late = history.filter((r) => r.status === 'late').length
-    const onTime = history.filter((r) => r.status === 'present' && r.clock_in).length
+    const late = history.filter((r) => r.status === 'late' || (r.late_minutes || 0) > 0).length
+    const onTime = history.filter((r) => r.clock_in && !(r.status === 'late' || (r.late_minutes || 0) > 0)).length
     const earlyDep = history.filter((r) => r.status === 'early_exit').length
     const withHours = history.filter((r) => r.work_hours != null)
     const avgHours = withHours.length > 0 ? (withHours.reduce((s, r) => s + parseFloat(r.work_hours), 0) / withHours.length).toFixed(1) : 0
@@ -430,10 +435,10 @@ export default function Attendance() {
                       <td className="px-5 py-3 text-slate-600">{r.employees?.department || '—'}</td>
                       <td className="px-5 py-3 text-slate-600">{r.branches?.branch_name || r.employees?.branch || '—'}</td>
                       <td className="px-5 py-3 text-slate-700 tabular-nums">
-                        {r.clock_in ? new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                         {r.clock_in ? formatAttendanceTime(r.clock_in, schedule.timezone) : '—'}
                       </td>
                       <td className="px-5 py-3 text-slate-700 tabular-nums">
-                        {r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                         {r.clock_out ? formatAttendanceTime(r.clock_out, schedule.timezone) : '—'}
                       </td>
                       <td className="px-5 py-3 text-slate-700 tabular-nums">{r.work_hours || '—'}</td>
                       <td className="px-5 py-3"><StatusPill status={r.status} /></td>
@@ -458,6 +463,11 @@ export default function Attendance() {
             onClockOut={doClockOut}
             busy={busy}
             message={message}
+            geofenceEnabled={requirements?.geofenceEnabled !== false}
+            requireGpsClockIn={requirements?.requireGpsClockIn !== false}
+            requireGpsClockOut={requirements?.requireGpsClockOut !== false}
+            defaultGeofenceRadius={requirements?.defaultGeofenceRadius}
+            timeZone={requirements?.appTimezone || schedule.timezone}
           />
         </div>
 
@@ -527,8 +537,8 @@ export default function Attendance() {
               {history.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-5 py-3 text-slate-700">{new Date(r.attendance_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
-                  <td className="px-5 py-3 text-slate-700 tabular-nums">{r.clock_in ? new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                  <td className="px-5 py-3 text-slate-700 tabular-nums">{r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                   <td className="px-5 py-3 text-slate-700 tabular-nums">{r.clock_in ? formatAttendanceTime(r.clock_in, schedule.timezone) : '—'}</td>
+                   <td className="px-5 py-3 text-slate-700 tabular-nums">{r.clock_out ? formatAttendanceTime(r.clock_out, schedule.timezone) : '—'}</td>
                   <td className="px-5 py-3 text-slate-700 tabular-nums">{r.work_hours || '—'}</td>
                   <td className="px-5 py-3"><StatusPill status={r.status} /></td>
                   <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
@@ -545,7 +555,7 @@ export default function Attendance() {
       {lateModal && <LateModal data={lateModal} onSubmit={submitLateReason} onClose={() => setLateModal(null)} busy={busy} />}
 
       {/* Attendance Issue Modal */}
-      {issueModal && <IssueModal onSubmit={submitIssue} onClose={() => setIssueModal(false)} busy={busy} />}
+      {issueModal && <IssueModal defaultDate={attendanceToday} onSubmit={submitIssue} onClose={() => setIssueModal(false)} busy={busy} />}
     </div>
   )
 }
@@ -674,9 +684,9 @@ function StatusPill({ status }) {
 // ============================================================
 // ATTENDANCE ISSUE MODAL
 // ============================================================
-function IssueModal({ onSubmit, onClose, busy }) {
+function IssueModal({ defaultDate, onSubmit, onClose, busy }) {
   const [issueType, setIssueType] = useState('')
-  const [issueDate, setIssueDate] = useState(platformDateKey())
+  const [issueDate, setIssueDate] = useState(defaultDate || '')
   const [explanation, setExplanation] = useState('')
 
   return (

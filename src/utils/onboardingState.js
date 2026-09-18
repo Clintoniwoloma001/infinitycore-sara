@@ -1,18 +1,28 @@
-const KEY = 'infcore_onboarding_dismiss_until'
-const DEFAULT_MINUTES = 30
+const INITIAL_PREFIX = 'infcore_onboarding_initial_dismissed:'
+const BANNER_PREFIX = 'infcore_onboarding_banner_dismissed:'
 
-// Returns true while a previous "remind me later" dismissal is still active.
-export function isOnboardingDismissed() {
-  const until = Number(localStorage.getItem(KEY))
-  if (!until) return false
-  return Date.now() < until
+function key(prefix, userId) {
+  return `${prefix}${userId || 'anonymous'}`
 }
 
-// Persists a "remind me later" window (default 30 minutes).
-export function dismissOnboarding(minutes = DEFAULT_MINUTES) {
-  localStorage.setItem(KEY, String(Date.now() + minutes * 60 * 1000))
+export function isInitialOnboardingDismissed(userId) {
+  return localStorage.getItem(key(INITIAL_PREFIX, userId)) === '1'
 }
 
-export function clearOnboardingDismiss() {
-  localStorage.removeItem(KEY)
+export function dismissInitialOnboarding(userId) {
+  if (userId) localStorage.setItem(key(INITIAL_PREFIX, userId), '1')
+}
+
+export function isOnboardingBannerDismissed(userId) {
+  return sessionStorage.getItem(key(BANNER_PREFIX, userId)) === '1'
+}
+
+export function dismissOnboardingBanner(userId) {
+  if (userId) sessionStorage.setItem(key(BANNER_PREFIX, userId), '1')
+}
+
+export function clearOnboardingDismiss(userId) {
+  if (!userId) return
+  localStorage.removeItem(key(INITIAL_PREFIX, userId))
+  sessionStorage.removeItem(key(BANNER_PREFIX, userId))
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Archive, Briefcase, CalendarDays, Camera, CheckCircle2, Clock, CreditCard, Download, FileText, GraduationCap, Loader2, Pencil, Plus, Printer, RefreshCw, Save, ShieldCheck, Trash2, UserX, X } from 'lucide-react'
+import { ArrowLeft, Archive, Briefcase, CalendarDays, Camera, CheckCircle2, Clock, CreditCard, Download, FileText, GraduationCap, Loader2, Pencil, Plus, Printer, RefreshCw, Save, ShieldCheck, Stethoscope, Trash2, UserX, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import { date, money, status } from './hrShared'
@@ -19,6 +19,9 @@ import EmployeeRecordPrint, { RECORD_SECTIONS, ALL_RECORD_SECTIONS } from '../co
 import PrintPortal from '../components/PrintPortal'
 import TerminationModal from '../components/TerminationModal'
 import ArchiveModal from '../components/ArchiveModal'
+import MedicalCardModal from '../components/medical/MedicalCardModal'
+import MedicalScreeningHistory from '../components/medical/MedicalScreeningHistory'
+import { openOfferPreview } from '../lib/offerLetterPdf'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -104,6 +107,7 @@ const TABS = [
   { id: 'employment_letter', label: 'Employment Letter' },
   { id: 'onboarding', label: 'Onboarding' },
   { id: 'guarantors', label: 'Guarantor' },
+  { id: 'medical', label: 'Medical' },
   { id: 'leave', label: 'Leave' },
   { id: 'attendance', label: 'Attendance' },
   { id: 'performance', label: 'Performance' },
@@ -160,6 +164,7 @@ export default function EmployeeProfile() {
   const [showRecord, setShowRecord] = useState(false)
   const [showPhotos, setShowPhotos] = useState(false)
   const [showBiometric, setShowBiometric] = useState(false)
+  const [showMedical, setShowMedical] = useState(false)
   const [photoUrl, setPhotoUrl] = useState(null)
   const [passportUrl, setPassportUrl] = useState(null)
   const [recordBusy, setRecordBusy] = useState(false)
@@ -340,6 +345,11 @@ export default function EmployeeProfile() {
   const printLetter = (letter) => {
     setLetterError('')
     try {
+      const storedOfferHtml = letter?.snapshot?.offer_fields?.body_content
+      if (storedOfferHtml) {
+        openOfferPreview(storedOfferHtml, { print: true, title: `Offer Letter v${letter.version || 1}` })
+        return
+      }
       const html = employmentLetterService.buildEmploymentLetterHtml(employee, {
         salary: letter.salary,
         allowances: letter.allowances,
@@ -1221,6 +1231,24 @@ export default function EmployeeProfile() {
         </Section>
       )}
 
+      {/* ---- MEDICAL SCREENING ---- */}
+      {tab === 'medical' && (
+        <Section
+          title="Medical Screening & Hospital Referrals"
+          actions={isHR && (
+            <button onClick={() => setShowMedical(true)} className="text-sm font-medium text-[#009944] hover:text-[#007a36] flex items-center gap-1">
+              <Stethoscope className="w-4 h-4" /> Generate Medical Card
+            </button>
+          )}
+        >
+          <p className="text-sm text-slate-600 mb-1">
+            Medical screening cards and hospital results for this employee. Referral history follows the employee across screening types
+            (pre-employment, periodic, fitness for work, and others). Results are immutable — any amendment creates a new version.
+          </p>
+          <MedicalScreeningHistory subjectType="employee" subjectId={id} />
+        </Section>
+      )}
+
       {/* ---- Payroll Modal ---- */}
       {showAddPayroll && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
@@ -1281,6 +1309,24 @@ export default function EmployeeProfile() {
         onClose={() => setShowBiometric(false)}
         employeeId={employee?.id}
         employeeName={employee?.full_name}
+      />
+
+      {/* ---- Medical Screening Card Modal ---- */}
+      <MedicalCardModal
+        open={showMedical}
+        onClose={() => setShowMedical(false)}
+        subjectType="employee"
+        subject={employee ? {
+          id: employee.id,
+          full_name: employee.full_name,
+          email: employee.email || '',
+          phone: employee.phone || '',
+          position: employee.position || '',
+          department: employee.department || '',
+          branch: employee.branch || '',
+        } : {}}
+        photoUrl={photoUrl}
+        onCreated={() => {}}
       />
 
       {/* ---- Staff ID Card Modal ---- */}

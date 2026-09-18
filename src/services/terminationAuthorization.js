@@ -31,6 +31,16 @@ export function canArchiveEmployee(role) {
   return PERSONNEL_ARCHIVE_ROLES.includes(role)
 }
 
+
+// "Delete" (decommission) is exposed via the Employees grid and maps to the
+// delete_employee RPC (archive + cancel payroll + deactivate the platform
+// login). It inherits the SAME restricted authorization model so that
+// termination/archive/delete never compete — the SAME two roles own all three,
+// and the ZERO competing-role-systems rule holds.
+export function canDeleteEmployee(role) {
+  return canArchiveEmployee(role)
+}
+
 // Employee reference used for display across Employees / EmployeeProfile.
 export function employeeLabel(employee) {
   return (

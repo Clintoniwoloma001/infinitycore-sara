@@ -148,10 +148,18 @@ export default function Chat() {
   }
 
   // Resolve a member id from the loaded directory (populated on mount).
+  // Resolve a participant to the REAL employee identity from the loaded
+  // directory. Never expose a raw participant/UUID — if the record cannot be
+  // resolved we fall back to an explicit "Unknown User" placeholder (auditable
+  // in dev logs) instead of leaking an internal ID anywhere in the UI.
   const personName = (id) => {
     if (id === me) return myName
     const p = people.find((x) => x.id === id)
-    return p?.full_name || p?.email || id?.slice(0, 8) || 'User'
+    if (p?.full_name || p?.email) return p.full_name || p.email
+    if (id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      if (import.meta.env.DEV) console.warn('[Chat] unresolved participant (showing Unknown User):', id)
+    }
+    return 'Unknown User'
   }
 
   const openNewChat = async (personId) => {
@@ -234,7 +242,7 @@ export default function Chat() {
                   onClick={() => setActiveThread(t)}
                   className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-slate-50 transition-colors ${active ? 'bg-emerald-50/50' : ''}`}
                 >
-                  <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0 ${active ? 'bg-[#009944]' : 'bg-slate-400'}`}>{initials(personName(other) !== `User` ? personName(other) : other?.slice(0, 8))}</div>
+                  <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0 ${active ? 'bg-[#009944]' : 'bg-slate-400'}`}>{initials(personName(other))}</div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-slate-800 truncate">{personName(other)}</p>
                     <p className="text-xs text-slate-400 truncate">{t.last_sender_id === me ? 'You: ' : ''}{t.last_message || 'Say hello 👋'}</p>

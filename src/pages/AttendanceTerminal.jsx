@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Fingerprint, Loader2, Check, X, Clock, MapPin, ShieldCheck } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
+import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, normalizeAttendanceError } from '../services/attendanceService'
 import { biometricService } from '../services/biometricService'
 import { normalizeEmployeeId, canonicalEmployeeId } from '../utils/employeeId'
+import { useNetworkTime } from '../hooks/useNetworkTime'
 
 // ============================================================
 // ATTENDANCE TERMINAL MODE
@@ -20,31 +22,26 @@ export default function AttendanceTerminal() {
   const navigate = useNavigate()
   const [devices, setDevices] = useState([])
   const [selectedDevice, setSelectedDevice] = useState(null)
-  const [geofences, setGeofences] = useState([])
   const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
-  const [currentTime, setCurrentTime] = useState(new Date())
+  const [timeZone, setTimeZone] = useState(DEFAULT_ATTENDANCE_TIMEZONE)
+  const { now: currentTime, synced: networkTimeSynced } = useNetworkTime()
   // Confirmed identity — shown before recording attendance
   const [confirmed, setConfirmed] = useState(null)
 
   useEffect(() => {
-    const id = setInterval(() => setCurrentTime(new Date()), 1000)
-    return () => clearInterval(id)
-  }, [])
-
-  useEffect(() => {
     const load = async () => {
       try {
-        const [devs, geos] = await Promise.all([
+        const [devs, requirements] = await Promise.all([
           attendanceEngineService.listDevices(),
-          attendanceEngineService.listGeofences(),
+          attendanceService.getAttendanceRequirements(),
         ])
         const terminals = devs.filter((d) => d.device_type === 'attendance_terminal' && d.status === 'active')
         setDevices(terminals)
         if (terminals.length > 0) setSelectedDevice(terminals[0])
-        setGeofences(geos.filter((g) => g.active))
+        if (requirements?.appTimezone) setTimeZone(requirements.appTimezone)
       } catch (e) {
         setError(e?.message || 'Failed to load terminal data')
       }
@@ -92,7 +89,7 @@ export default function AttendanceTerminal() {
           success: true,
           name: data.employee_name || confirmed.full_name,
           eventType,
-          time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          time: data.event_time || data.server_time,
         })
         setConfirmed(null)
         setPin('')
@@ -101,7 +98,7 @@ export default function AttendanceTerminal() {
         setError(data?.error || 'Clock operation failed')
       }
     } catch (e) {
-      setError(e?.message || 'Terminal error')
+      setError(normalizeAttendanceError(e?.message) || 'Terminal error')
     } finally {
       setBusy(false)
     }
@@ -132,14 +129,14 @@ export default function AttendanceTerminal() {
           success: true,
           name: data.employee_name || employee.full_name,
           eventType,
-          time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          time: data.event_time || data.server_time,
         })
         setTimeout(() => setResult(null), 5000)
       } else {
         setError(data?.error || 'Clock operation failed')
       }
     } catch (e) {
-      setError(e?.message || 'Biometric authentication failed')
+      setError(normalizeAttendanceError(e?.message) || 'Biometric authentication failed')
     } finally {
       setBusy(false)
     }
@@ -152,7 +149,8 @@ export default function AttendanceTerminal() {
   }
 
   const greeting = (() => {
-    const h = new Date().getHours()
+    if (!currentTime) return 'Welcome'
+    const h = Number(new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hour12: false }).format(currentTime))
     if (h < 12) return 'Good morning'
     if (h < 17) return 'Good afternoon'
     return 'Good evening'
@@ -176,8 +174,8 @@ export default function AttendanceTerminal() {
           </div>
           <h1 className="text-2xl font-bold text-white">InfinityCore</h1>
           <p className="text-sm text-white/60 mt-1">Attendance Terminal</p>
-          <p className="text-3xl font-bold text-white tabular-nums mt-4">{currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</p>
-          <p className="text-sm text-white/60 mt-1">{currentTime.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+          <p className="text-3xl font-bold text-white tabular-nums mt-4">{currentTime ? currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone }) : 'Syncing official time...'}</p>
+          <p className="text-sm text-white/60 mt-1">{currentTime ? currentTime.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone }) : 'Official server time'}</p>
         </div>
 
         {/* Device selector */}
@@ -200,7 +198,7 @@ export default function AttendanceTerminal() {
             <p className="text-white/80 text-sm">{greeting},</p>
             <p className="text-2xl font-bold text-white mb-2">{result.name}</p>
             <p className="text-white text-lg font-medium">{result.eventType.replace(/_/g, ' ')} SUCCESSFUL</p>
-            <p className="text-white/70 text-sm mt-2">{result.time}</p>
+            <p className="text-white/70 text-sm mt-2">{formatAttendanceTime(result.time, timeZone)}</p>
           </div>
         )}
 
@@ -241,14 +239,14 @@ export default function AttendanceTerminal() {
             <div className="grid grid-cols-2 gap-3 mt-4">
               <button
                 onClick={() => handleClock('CLOCK_IN')}
-                disabled={busy}
+                disabled={busy || !networkTimeSynced}
                 className="h-12 rounded-xl bg-[#009944] text-white font-medium hover:bg-[#007a36] transition-all disabled:opacity-30 flex items-center justify-center gap-2"
               >
                 {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock In</>}
               </button>
               <button
                 onClick={() => handleClock('CLOCK_OUT')}
-                disabled={busy}
+                disabled={busy || !networkTimeSynced}
                 className="h-12 rounded-xl bg-rose-500/80 text-white font-medium hover:bg-rose-600 transition-all disabled:opacity-30 flex items-center justify-center gap-2"
               >
                 {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock Out</>}
@@ -288,14 +286,14 @@ export default function AttendanceTerminal() {
             <div className="grid grid-cols-2 gap-3 mt-4">
               <button
                 onClick={() => handleBiometric('CLOCK_IN')}
-                disabled={busy || !biometricService.isWebAuthnSupported()}
+                disabled={busy || !networkTimeSynced || !biometricService.isWebAuthnSupported()}
                 className="h-12 rounded-xl bg-white/10 border border-white/20 text-white text-sm font-medium hover:bg-white/20 transition-all disabled:opacity-30 flex items-center justify-center gap-2"
               >
                 <Fingerprint className="w-4 h-4" /> Biometric In
               </button>
               <button
                 onClick={() => handleBiometric('CLOCK_OUT')}
-                disabled={busy || !biometricService.isWebAuthnSupported()}
+                disabled={busy || !networkTimeSynced || !biometricService.isWebAuthnSupported()}
                 className="h-12 rounded-xl bg-white/10 border border-white/20 text-white text-sm font-medium hover:bg-white/20 transition-all disabled:opacity-30 flex items-center justify-center gap-2"
               >
                 <Fingerprint className="w-4 h-4" /> Biometric Out
@@ -312,9 +310,7 @@ export default function AttendanceTerminal() {
                 <MapPin className="w-3 h-3" /> {selectedDevice.device_name} · {selectedDevice.branch_id || 'No branch'}
               </p>
               <p className="text-xs text-white/30 flex items-center justify-center gap-1.5">
-                {geofences.length > 0
-                  ? `${geofences.length} authorized attendance location${geofences.length > 1 ? 's' : ''}: ${geofences.slice(0, 3).map((g) => g.name).join(', ')}${geofences.length > 3 ? '…' : ''}`
-                  : 'No active attendance locations configured. Add them in Attendance Settings → Geofences.'}
+                Location is captured and checked against the employee branch geofence in Platform Settings.
               </p>
             </>
           ) : (

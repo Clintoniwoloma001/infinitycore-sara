@@ -12,8 +12,8 @@ import { logAction } from './supabaseService'
 // ------------------------------------------------------------------
 
 const COMPANY = {
-  name: 'Infinity Microfinance Bank',
-  address: 'Lagos, Nigeria',
+  name: 'Infinity Microfinance Bank Ltd',
+  address: '',
   footer: 'This letter is issued by the Human Resources department and is confidential.',
 }
 
@@ -162,6 +162,71 @@ export const employmentLetterService = {
       entityType: 'EmploymentLetter',
       entityId: data.id,
       details: `Employment letter v${version} issued for ${employee.full_name || employee.id}`,
+    }).catch(() => {})
+
+    return data
+  },
+
+  // Attach a signed OFFER letter (from the Offer Letter Generator) to an
+  // employee's permanent profile so it can be viewed / PDF-downloaded from
+  // the employment letters tab.
+  async issueOfferLetter(employee, offer, opts = {}) {
+    if (!employee?.id) throw new Error('An employee must be selected to attach the offer letter to their profile.')
+    const { html, pdfFile = null, fileName = null, hrName = 'Human Resources' } = opts
+    if (!html) throw new Error('Offer letter HTML is required.')
+    const version = await this.nextVersion(employee.id)
+
+    const file = pdfFile || new File([html], fileName || `offer-letter-v${version}.html`, { type: pdfFile ? 'application/pdf' : 'text/html' })
+    const doc = await documentService.upload(file, 'employee', employee.id, pdfFile ? 'offer_letter_pdf' : 'offer_letter')
+
+    const { data: userRes } = await supabase.auth.getUser()
+    const user = userRes?.user
+    const officer = hrName || user?.user_metadata?.full_name || user?.email || 'Human Resources'
+
+    const conditions = Array.isArray(offer?.conditions)
+      ? offer.conditions
+      : [offer?.conditions || 'This offer is subject to the company’s standard terms and conditions of employment.']
+
+    const { error: supersedeError } = await supabase
+      .from('employment_letters')
+      .update({ status: 'superseded' })
+      .eq('employee_id', employee.id)
+      .eq('status', 'issued')
+    if (supersedeError) throw supersedeError
+
+    const record = {
+      employee_id: employee.id,
+      version,
+      status: 'issued',
+      position: offer.position || employee.position || null,
+      department: offer.department || employee.department || null,
+      branch: offer.branch || employee.branch || null,
+      employment_type: offer.employment_type || employee.employment_type || null,
+      commencement_date: offer.start_date || employee.hire_date || employee.start_date || null,
+      salary: offer.annual_salary ? Number(offer.annual_salary) : employee.salary || null,
+      allowances: {},
+      conditions,
+      snapshot: {
+        full_name: employee.full_name,
+        employee_code: employee.employee_code || employee.employee_number || null,
+          offer_fields: offer,
+          document_format: pdfFile ? 'pdf' : 'html',
+        signature_captured: !!offer.signature_data,
+        generated_from: 'OfferLetterGenerator',
+      },
+      document_id: doc?.id || null,
+      generated_by: user?.id || null,
+      generated_by_name: officer,
+    }
+
+    const { data, error } = await supabase.from('employment_letters').insert(record).select().single()
+    if (error) throw error
+
+    await logAction({
+      action: 'OFFER_LETTER_ATTACHED',
+      entityType: 'EmploymentLetter',
+      entityId: data.id,
+      details: `Offer letter v${version} attached for ${employee.full_name || employee.id}`,
     }).catch(() => {})
 
     return data

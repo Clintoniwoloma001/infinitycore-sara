@@ -5,10 +5,24 @@ import { attendanceEngineService } from '../services/attendanceEngineService'
 import { geofenceService } from '../services/geofenceService'
 import { LoadingState, ErrorState } from '../components/PageStates'
 import GeofenceEditor from '../components/attendance/GeofenceEditor'
+import { setPlatformCurrency } from '../lib/utils'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 const toggleCls = 'w-4 h-4 accent-[#009944]'
+const DEFAULT_CURRENCY = { currency_code: 'NGN', currency_symbol: '₦', currency_position: 'prefix', currency_decimal_places: 2 }
+
+function normalizeCurrency(settings = {}) {
+  const decimals = settings.currency_decimal_places == null || settings.currency_decimal_places === ''
+    ? Number.NaN
+    : Number(settings.currency_decimal_places)
+  return {
+    currency_code: String(settings.currency_code || DEFAULT_CURRENCY.currency_code).toUpperCase(),
+    currency_symbol: settings.currency_symbol || DEFAULT_CURRENCY.currency_symbol,
+    currency_position: settings.currency_position === 'suffix' ? 'suffix' : 'prefix',
+    currency_decimal_places: Number.isFinite(decimals) ? Math.min(2, Math.max(0, decimals)) : DEFAULT_CURRENCY.currency_decimal_places,
+  }
+}
 
 const TABS = [
   { id: 'leave', label: 'Leave Settings', icon: Calendar },
@@ -30,6 +44,8 @@ export default function PlatformSettings() {
   const [saved, setSaved] = useState(false)
   const [auditTrail, setAuditTrail] = useState([])
   const [form, setForm] = useState({})
+  const [currencyForm, setCurrencyForm] = useState(DEFAULT_CURRENCY)
+  const [currencySaving, setCurrencySaving] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -42,6 +58,14 @@ export default function PlatformSettings() {
       ])
       setSettings(s)
       setForm(s)
+      const currency = normalizeCurrency(s)
+      setCurrencyForm(currency)
+      setPlatformCurrency({
+        code: currency.currency_code,
+        symbol: currency.currency_symbol,
+        position: currency.currency_position,
+        decimals: currency.currency_decimal_places,
+      })
       setBranches(brs)
       setAuditTrail(audit)
       if (brs.length > 0) setSelectedBranch(brs[0])
@@ -55,6 +79,8 @@ export default function PlatformSettings() {
   useEffect(() => { load() }, [])
 
   const update = (k, v) => setForm((p) => ({ ...p, [k]: v }))
+
+  const updateCurrency = (k, v) => setCurrencyForm((p) => ({ ...p, [k]: v }))
 
   const saveSettings = async () => {
     setSaving(true)
@@ -115,12 +141,63 @@ export default function PlatformSettings() {
     }
   }
 
+  const saveCurrency = async () => {
+    const currency_code = String(currencyForm.currency_code || '').trim().toUpperCase()
+    const currency_symbol = String(currencyForm.currency_symbol || '').trim()
+    if (!currency_code) {
+      setError('Currency code is required.')
+      return
+    }
+    if (!currency_symbol) {
+      setError('Currency symbol is required.')
+      return
+    }
+
+    const payload = {
+      currency_code,
+      currency_symbol,
+      currency_position: currencyForm.currency_position === 'suffix' ? 'suffix' : 'prefix',
+      currency_decimal_places: Math.min(2, Math.max(0, Number(currencyForm.currency_decimal_places) || 0)),
+    }
+
+    setCurrencySaving(true)
+    setError('')
+    setSaved(false)
+    try {
+      await platformSettingsService.updateCurrency(payload)
+      setCurrencyForm(payload)
+      setSettings((current) => ({ ...(current || {}), ...payload }))
+      setForm((current) => ({ ...current, ...payload }))
+      setPlatformCurrency({
+        code: payload.currency_code,
+        symbol: payload.currency_symbol,
+        position: payload.currency_position,
+        decimals: payload.currency_decimal_places,
+      })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setError(e?.message || 'Failed to save currency settings')
+    } finally {
+      setCurrencySaving(false)
+    }
+  }
+
+  const previewDecimals = Number(currencyForm.currency_decimal_places) || 0
+  const previewNumber = new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: previewDecimals,
+    maximumFractionDigits: previewDecimals,
+  }).format(1234567.89)
+  const currencyPreview = currencyForm.currency_position === 'suffix'
+    ? `${previewNumber} ${currencyForm.currency_symbol || currencyForm.currency_code}`
+    : `${currencyForm.currency_symbol || currencyForm.currency_code}${previewNumber}`
+
   if (loading) return <LoadingState label="Loading platform settings..." />
 
   return (
     <div className="max-w-4xl">
       <h2 className="text-2xl font-semibold text-slate-900 mb-1">HR & Platform Settings</h2>
-      <p className="text-sm text-slate-500 mb-6">Configure leave entitlements, working hours, attendance rules, and geofences.</p>
+      <p className="text-sm text-slate-500 mb-6">Configure leave entitlements, working hours, attendance rules, geofences, and platform currency.</p>
 
       {error && <div className="mb-5"><ErrorState message={error} /></div>}
       {saved && (
@@ -206,6 +283,66 @@ export default function PlatformSettings() {
             These settings materially affect attendance validation. Changes are recorded in the audit trail.
           </div>
           <SaveButton onClick={saveSettings} saving={saving} />
+        </div>
+      )}
+
+      {/* Currency Settings */}
+      {tab === 'currency' && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-6">
+          <div>
+            <div className="flex items-center gap-2">
+              <Coins className="w-5 h-5 text-[#009944]" />
+              <h3 className="text-base font-semibold text-slate-900">Platform Currency</h3>
+            </div>
+            <p className="text-sm text-slate-500 mt-1">Set the currency used for payroll, salaries, reports, and offer letters.</p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className={labelCls}>Currency code</label>
+              <input
+                className={inputCls}
+                value={currencyForm.currency_code}
+                onChange={(e) => updateCurrency('currency_code', e.target.value.toUpperCase())}
+                maxLength={5}
+                placeholder="NGN"
+              />
+              <p className="text-xs text-slate-400 mt-1">ISO code, for example NGN, USD, or GBP.</p>
+            </div>
+            <div>
+              <label className={labelCls}>Currency symbol</label>
+              <input
+                className={inputCls}
+                value={currencyForm.currency_symbol}
+                onChange={(e) => updateCurrency('currency_symbol', e.target.value)}
+                maxLength={5}
+                placeholder="₦"
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Symbol position</label>
+              <select className={inputCls} value={currencyForm.currency_position} onChange={(e) => updateCurrency('currency_position', e.target.value)}>
+                <option value="prefix">Before amount (₦1,000.00)</option>
+                <option value="suffix">After amount (1,000.00 ₦)</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Decimal places</label>
+              <select className={inputCls} value={currencyForm.currency_decimal_places} onChange={(e) => updateCurrency('currency_decimal_places', Number(e.target.value))}>
+                <option value={0}>0 (₦1,000)</option>
+                <option value={1}>1 (₦1,000.0)</option>
+                <option value={2}>2 (₦1,000.00)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Preview</p>
+            <p className="text-2xl font-semibold text-slate-900 mt-1">{currencyPreview}</p>
+            <p className="text-xs text-slate-500 mt-1">Example amount: 1,234,567.89 · Code: {currencyForm.currency_code || '—'}</p>
+          </div>
+
+          <SaveButton onClick={saveCurrency} saving={currencySaving} />
         </div>
       )}
 

@@ -61,6 +61,10 @@ export const PERMISSIONS = {
   ADMIN_MANAGE_USERS: 'admin.manage_users',
   ADMIN_VIEW_AUDIT: 'admin.view_audit',
   ADMIN_MANAGE_CONFIG: 'admin.manage_config',
+  ADMIN_PLATFORM_RESET: 'admin.platform.reset',
+
+  // Communications
+  COMMUNICATION_MANAGE: 'communication.manage',
 
   // Reports
   REPORTS_READ: 'reports.read',
@@ -88,6 +92,10 @@ export const PERMISSIONS = {
 
   // Team chat
   CHAT_READ: 'chat.read',
+
+  // Medical screening / hospital referrals (Phase 40)
+  MEDICAL_READ: 'medical.read',
+  MEDICAL_MANAGE: 'medical.manage',
 }
 
 // Permission categories for organization

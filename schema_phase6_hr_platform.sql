@@ -963,16 +963,9 @@ begin
     end loop;
   end if;
 
-  -- Guarantor
-  if (p_payload ->> 'guarantor_full_name') is not null and trim(p_payload ->> 'guarantor_full_name') <> '' then
-    insert into public.employee_guarantors (employee_id, source, full_name, phone, profession, designation, business_address,
-      residential_address, email, relationship, bvn, nin, signature, signature_date)
-    values (v_employee, 'onboarding', p_payload ->> 'guarantor_full_name', p_payload ->> 'guarantor_phone',
-            p_payload ->> 'guarantor_profession', p_payload ->> 'guarantor_designation', p_payload ->> 'guarantor_business_address',
-            p_payload ->> 'guarantor_residential_address', p_payload ->> 'guarantor_email', p_payload ->> 'guarantor_relationship',
-            p_payload ->> 'guarantor_bvn', p_payload ->> 'guarantor_nin', p_payload ->> 'guarantor_signature',
-            nullif(p_payload ->> 'guarantor_date', '')::date);
-  end if;
+  -- Guarantor expected name/email remain in the onboarding payload. The
+  -- completed employee_guarantors row is created only after the guarantor
+  -- submits the token-scoped verification form and HR approves it.
 
   -- Fidelity bond
   if (p_payload ->> 'fidelity_surety_name') is not null and trim(p_payload ->> 'fidelity_surety_name') <> '' then

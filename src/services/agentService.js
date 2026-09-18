@@ -115,6 +115,39 @@ function joinCounts(label, value) {
   return value === null ? null : `${label} ${value}`
 }
 
+// ------------------------------------------------------------------
+// Communication (phase 40) reads. Every query runs under the caller's
+// own session — announcements/audience/ack rows the user can see are
+// enforced by RLS, never by SARA. No synthetic records are created.
+// ------------------------------------------------------------------
+async function myAnnouncements(ctx, onlyPendingAck) {
+  const userId = ctx?.userId
+  if (!userId) return []
+  try {
+    const { data, error } = await supabase
+      .from('announcements')
+      .select('id, title, priority, published_at, requires_ack, audience:announcement_audience!inner(member_id)')
+      .eq('audience.member_id', userId)
+      .eq('status', 'published')
+      .order('published_at', { ascending: false })
+      .limit(50)
+    if (error) return []
+    let rows = data || []
+    if (onlyPendingAck) {
+      const { data: acks } = await supabase
+        .from('message_acknowledgements')
+        .select('announcement_id')
+        .eq('user_id', userId)
+        .eq('status', 'acknowledged')
+      const done = new Set((acks || []).map((a) => a.announcement_id))
+      rows = rows.filter((a) => a.requires_ack && !done.has(a.id))
+    }
+    return rows
+  } catch {
+    return []
+  }
+}
+
 // pool: the caller's actionable queue (already computed via useMyLeaveApprovals) —
 // SARA only ever touches requests the authenticated user is actually
 // authorized to act on right now.
@@ -135,7 +168,7 @@ export async function runSaraCommand({ command, pool, ctx }) {
       return { type: 'text', message: "I can't change your role. Role elevation requires an authorized administrator using User Management." }
 
     case 'HELP':
-      return { type: 'text', message: 'Try: "show pending onboarding reviews", "how many active employees", "what interviews are scheduled today", "how many pending user approvals", "show my pending leave approvals", "approve annual leave 3 days or less", or "open employees".' }
+      return { type: 'text', message: 'Try: "show pending onboarding reviews", "how many active employees", "what interviews are scheduled today", "how many pending user approvals", "show my pending leave approvals", "approve annual leave 3 days or less", "what announcements did I miss", "search messages for payroll", or "open employees".' }
 
     case 'NAVIGATE': {
       const nav = resolveNavigationTarget(parsed.filters.target, ctx)
@@ -170,6 +203,48 @@ export async function runSaraCommand({ command, pool, ctx }) {
     case 'PENDING_USERS': {
       const data = await queryPendingUsers()
       return { type: 'text', message: formatPendingUsersResponse(data) }
+    }
+
+    case 'COMMS_PENDING_ACK': {
+      const rows = await myAnnouncements(ctx, true)
+      if (rows.length === 0) {
+        return { type: 'text', message: "You're all caught up — no announcements are waiting on your acknowledgement." }
+      }
+      return { type: 'text', message: `You have ${rows.length} unacknowledged announcement${rows.length === 1 ? '' : 's'}: ${rows.slice(0, 5).map((a) => `"${a.title}"`).join(', ')}. Acknowledge them from the Messages page.` }
+    }
+
+    case 'COMMS_ANNOUNCEMENTS': {
+      const rows = await myAnnouncements(ctx, false)
+      if (rows.length === 0) {
+        return { type: 'text', message: 'No announcements have been published for you yet.' }
+      }
+      const lines = rows.slice(0, 5).map((a) => {
+        const d = a.published_at ? new Date(a.published_at).toLocaleDateString() : ''
+        return `• ${a.title} (${a.priority})${a.requires_ack ? ' — requires your ack' : ''}${d ? ` — ${d}` : ''}`
+      })
+      return { type: 'text', message: `Recent announcements for you:\n${lines.join('\n')}` }
+    }
+
+    case 'COMMS_SEARCH': {
+      const query = parsed.filters?.query
+      if (!query || query.length < 2) {
+        return { type: 'text', message: 'What would you like me to search for? Try "search messages for payroll" or "find official communications about leave".' }
+      }
+      try {
+        const { data, error } = await supabase.rpc('search_messages', {
+          p_query: query,
+          p_filters: parsed.filters?.official ? { official: 'true' } : {},
+        })
+        if (error) throw error
+        const hits = Array.isArray(data) ? data : []
+        if (hits.length === 0) {
+          return { type: 'text', message: `I couldn't find any messages matching "${query}" in anything you can access.` }
+        }
+        const lines = hits.slice(0, 5).map((m) => `• ${m.is_official ? '[OFFICIAL] ' : ''}${m.title || String(m.body || '').slice(0, 80)} (${m.message_type})`)
+        return { type: 'text', message: `Found ${hits.length} message${hits.length === 1 ? '' : 's'} matching "${query}${parsed.filters?.official ? ' (official only)' : ''}":\n${lines.join('\n')}` }
+      } catch {
+        return { type: 'text', message: "I couldn't search messages right now — please try again or use the Messages page." }
+      }
     }
 
     case 'PENDING_LOANS': {

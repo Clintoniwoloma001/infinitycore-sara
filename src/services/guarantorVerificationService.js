@@ -2,6 +2,8 @@ import { supabase } from '../supabaseClient'
 import { generateToken, md5Hex } from './onboardingService'
 import { logAction } from './supabaseService'
 
+const GUARANTOR_LINK_EXPIRY_DAYS = 7
+
 // Builds the public guarantor verification URL (hash-routed, same as onboarding)
 export function buildGuarantorUrl(token) {
   return `${window.location.origin}${window.location.pathname}#/guarantor-verification/${token}`
@@ -14,6 +16,10 @@ export const guarantorVerificationService = {
     if (!guarantorEmail) throw new Error('Guarantor email is required.')
     const token = generateToken()
     const tokenHash = md5Hex(token)
+    const expiresAt = new Date(Date.now() + GUARANTOR_LINK_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString()
+    if (!onboardingLinkId || !employeeId || !submissionId) {
+      throw new Error('A guarantor link can only be generated after the employee onboarding submission is complete.')
+    }
     const { data, error } = await supabase
       .from('guarantor_verifications')
       .insert({
@@ -25,6 +31,7 @@ export const guarantorVerificationService = {
         guarantor_relationship: guarantorRelationship || null,
         token_hash: tokenHash,
         status: 'link_sent',
+        expires_at: expiresAt,
       })
       .select()
       .single()
@@ -38,6 +45,37 @@ export const guarantorVerificationService = {
     const { data, error } = await supabase
       .from('guarantor_verifications')
       .select('*')
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return data || []
+  },
+
+  // HR permanently deletes a verification record (and its cascaded
+  // corrections, documents, and events). Available for any generated link,
+  // including ones tied to archived onboarding links, so stale links can be
+  // cleaned up when the list grows too large.
+  async deleteVerification(id) {
+    const { error } = await supabase
+      .from('guarantor_verifications')
+      .delete()
+      .eq('id', id)
+    if (error) throw error
+    logAction({ action: 'GUARANTOR_LINK_DELETED', entityType: 'GuarantorVerification', entityId: id, details: 'Guarantor verification link deleted' })
+    return true
+  },
+
+  async revokeVerification(id) {
+    const { data, error } = await supabase.rpc('revoke_guarantor_verification', { p_verification_id: id })
+    if (error) throw error
+    return data
+  },
+
+  // HR lists verifications for a given onboarding link
+  async listVerificationsForLink(onboardingLinkId) {
+    const { data, error } = await supabase
+      .from('guarantor_verifications')
+      .select('*')
+      .eq('onboarding_link_id', onboardingLinkId)
       .order('created_at', { ascending: false })
     if (error) throw error
     return data || []

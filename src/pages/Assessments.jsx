@@ -1,11 +1,14 @@
-import React, { useEffect, useState } from 'react'
-import { ClipboardCheck, Clock, Plus, X, Loader2, CheckCircle2, AlertCircle, ListChecks } from 'lucide-react'
+import React, { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Bot, ClipboardCheck, Loader2, CheckCircle2, ListChecks, Sparkles, Upload, UserPlus, X } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { logAction } from '../services/supabaseService'
+import { hrService } from '../services/hrService'
+import { recruitmentService } from '../services/recruitmentService'
+import { assessmentService } from '../services/assessmentService'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
-import { date, status } from './hrShared'
-import HRJobs from './HRJobs'
+import { status } from './hrShared'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -17,6 +20,9 @@ const ASSESSMENT_TYPES = [
   { value: 'psychometric', label: 'Psychometric' },
 ]
 
+// SARA template categories map onto the hr_assessments.check type constraint.
+const CATEGORY_TO_TYPE = { technical: 'technical', behavioral: 'behavioral', aptitude: 'psychometric', analytical: 'practical' }
+
 const PIPELINE = [
   { value: 'received', label: 'Received', color: 'slate' },
   { value: 'screening', label: 'Screening', color: 'blue' },
@@ -27,26 +33,37 @@ const PIPELINE = [
   { value: 'rejected', label: 'Rejected', color: 'rose' },
 ]
 
+const NEW_CANDIDATE = '__new__'
+
 export default function Assessments() {
   const { user, name: userName } = useAuth()
   const [assessments, setAssessments] = useState([])
   const [candidates, setCandidates] = useState([])
   const [questions, setQuestions] = useState([])
+  const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [showQuestions, setShowQuestions] = useState(null) // assessmentId
+  const [showAI, setShowAI] = useState(false)
   const [busy, setBusy] = useState(false)
   const [success, setSuccess] = useState('')
   const [form, setForm] = useState({
     candidate_id: '',
+    new_name: '', new_email: '', new_role: '',
     assessment_type: 'technical',
     test_name: '',
     pass_score: '70',
     total_score: '100',
     notes: '',
   })
+  const [aiForm, setAiForm] = useState({
+    job_id: '', candidate_id: '', new_name: '', new_email: '',
+    category: 'technical', count: '10', duration_minutes: '30', pass_mark: '60',
+  })
   const [questionDraft, setQuestionDraft] = useState({ question_text: '', question_type: 'multiple_choice', correct_answer: '', options: '', difficulty: 'medium' })
+  const [qImportMsg, setQImportMsg] = useState('')
+  const qFileRef = useRef(null)
 
   const load = async () => {
     setLoading(true)
@@ -68,18 +85,38 @@ export default function Assessments() {
 
   useEffect(() => { load() }, [])
 
+  useEffect(() => {
+    recruitmentService.listJobs().then((j) => setJobs(j || [])).catch(() => setJobs([]))
+  }, [])
+
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
+
+  // Resolve a candidate: if __new__ was chosen, create the hr_candidates row
+  // first so assessments / invitations can reference it.
+  const resolveCandidate = async () => {
+    if (form.candidate_id !== NEW_CANDIDATE) return form.candidate_id
+    if (!form.new_name.trim()) throw new Error('Enter the new candidate’s name.')
+    const created = await hrService.createCandidate({
+      full_name: form.new_name.trim(),
+      email: form.new_email.trim() || null,
+      applied_role: form.new_role.trim() || (form.test_name.trim() ? form.test_name.trim() : null),
+      application_status: 'received',
+    })
+    await load()
+    return created.id
+  }
 
   const create = async () => {
     setError('')
     setSuccess('')
-    if (!form.candidate_id) { setError('Select a candidate.'); return }
+    if (!form.candidate_id) { setError('Select a candidate or create a new one.'); return }
     if (!form.test_name.trim()) { setError('Enter an assessment title.'); return }
     setBusy(true)
     try {
-      const candidate = candidates.find((c) => c.id === form.candidate_id)
+      const candidateId = await resolveCandidate()
+      const candidate = candidates.find((c) => c.id === candidateId)
       const payload = {
-        candidate_id: form.candidate_id,
+        candidate_id: candidateId,
         assessment_type: form.assessment_type,
         test_name: form.test_name,
         status: 'pending',
@@ -91,15 +128,91 @@ export default function Assessments() {
       const { data, error: insertErr } = await supabase.from('hr_assessments').insert([payload]).select().single()
       if (insertErr) throw insertErr
 
-      await supabase.from('hr_candidates').update({ application_status: 'screening' }).eq('id', form.candidate_id)
-      await logAction({ action: 'ASSESSMENT_CREATED', entityType: 'Assessment', entityId: data.id, details: `Assessment created for ${candidate?.full_name}`, userName })
+      await supabase.from('hr_candidates').update({ application_status: 'screening' }).eq('id', candidateId)
+      await logAction({ action: 'ASSESSMENT_CREATED', entityType: 'Assessment', entityId: data.id, details: `Assessment created for ${candidate?.full_name || form.new_name}`, userName })
 
-      setSuccess(`Assessment "${form.test_name}" created for ${candidate?.full_name}.`)
+      setSuccess(`Assessment "${form.test_name}" created for ${candidate?.full_name || form.new_name}.`)
       setShowForm(false)
-      setForm({ candidate_id: '', assessment_type: 'technical', test_name: '', pass_score: '70', total_score: '100', notes: '' })
+      setForm({ candidate_id: '', new_name: '', new_email: '', new_role: '', assessment_type: 'technical', test_name: '', pass_score: '70', total_score: '100', notes: '' })
       await load()
     } catch (e) {
       setError(e?.message || 'Failed to create assessment')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Generate an assessment with SARA: builds a draft CBT template from the
+  // job, then snapshots it into a classic hr_assessments + assessment_questions
+  // pair for the chosen candidate.
+  const generateAI = async () => {
+    setError('')
+    setSuccess('')
+    if (!aiForm.job_id) { setError('Select a job so SARA can build relevant questions.'); return }
+    if (!aiForm.candidate_id) { setError('Select a candidate or create a new one.'); return }
+    if (aiForm.candidate_id === NEW_CANDIDATE && !aiForm.new_name.trim()) { setError('Enter the new candidate’s name.'); return }
+    setBusy(true)
+    try {
+      let candidateId = aiForm.candidate_id
+      if (candidateId === NEW_CANDIDATE) {
+        const created = await hrService.createCandidate({
+          full_name: aiForm.new_name.trim(),
+          email: aiForm.new_email.trim() || null,
+          application_status: 'received',
+        })
+        candidateId = created.id
+        await load()
+      }
+      const job = jobs.find((j) => j.id === aiForm.job_id)
+
+      const res = await assessmentService.generateWithSara({
+        jobId: aiForm.job_id,
+        category: aiForm.category,
+        durationMinutes: Number(aiForm.duration_minutes) || 30,
+        passMark: Number(aiForm.pass_mark) || 60,
+        count: Number(aiForm.count) || 10,
+      })
+      if (!res?.template_id) throw new Error(res?.error ? `SARA: ${res.error}` : 'SARA could not generate questions.')
+
+      const { template, questions: tplQs } = await assessmentService.getTemplate(res.template_id)
+      const testName = template?.title || `AI ${aiForm.category} assessment for ${job?.job_title || 'role'}`
+
+      const { data: assessment, error: insErr } = await supabase.from('hr_assessments').insert([{
+        candidate_id: candidateId,
+        assessment_type: CATEGORY_TO_TYPE[aiForm.category] || aiForm.category,
+        test_name: testName,
+        status: 'pending',
+        pass_score: Number(aiForm.pass_mark) || (template?.pass_mark || 60),
+        total_score: (tplQs || []).reduce((sum, q) => sum + Number(q.marks || 1), 0) || 100,
+        notes: `AI-generated from job “${job?.job_title || '—'}” (template ${res.template_id})`,
+        created_by: user?.id,
+      }]).select().single()
+      if (insErr) throw insErr
+
+      if ((tplQs || []).length > 0) {
+        const rows = tplQs.map((q, i) => ({
+          assessment_id: assessment.id,
+          question_text: q.question_text,
+          question_type: q.question_type,
+          options: q.options || [],
+          correct_answer: q.correct_answer ?? null,
+          difficulty: q.difficulty || 'medium',
+          competency: q.competency || null,
+          display_order: Number(q.display_order ?? i),
+        }))
+        const { error: qErr } = await supabase.from('assessment_questions').insert(rows)
+        if (qErr) throw qErr
+      }
+
+      await supabase.from('hr_candidates').update({ application_status: 'screening' }).eq('id', candidateId)
+      await logAction({ action: 'ASSESSMENT_AI_GENERATED', entityType: 'Assessment', entityId: assessment.id, details: `AI assessment "${testName}" generated for ${aiForm.new_name || candidateId}`, userName })
+
+      setSuccess(`SARA generated “${testName}” with ${tplQs?.length || 0} question(s) for ${aiForm.new_name || 'the candidate'}.`)
+      setShowAI(false)
+      setAiForm({ job_id: '', candidate_id: '', new_name: '', new_email: '', category: 'technical', count: '10', duration_minutes: '30', pass_mark: '60' })
+      await load()
+    } catch (e) {
+      setError(e?.message || 'AI assessment generation failed')
     } finally {
       setBusy(false)
     }
@@ -167,6 +280,49 @@ export default function Assessments() {
     }
   }
 
+  // Upload a JSON sample file (array or single object) of question rows.
+  const onUploadSamples = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    setQImportMsg('')
+    if (!file || !showQuestions) return
+    setBusy(true)
+    try {
+      const text = await file.text()
+      const parsed = JSON.parse(text)
+      const rows = (Array.isArray(parsed) ? parsed : [parsed])
+        .map((q) => ({
+          assessment_id: showQuestions,
+          question_text: String(q.question_text || q.question || '').trim(),
+          question_type: q.question_type || 'multiple_choice',
+          options: Array.isArray(q.options) ? q.options : (q.options_text ? String(q.options_text).split('\n').filter(Boolean) : []),
+          correct_answer: q.correct_answer ?? null,
+          difficulty: q.difficulty || 'medium',
+          competency: q.competency || null,
+          display_order: Number(q.display_order ?? questions.length),
+        }))
+        .filter((r) => r.question_text)
+      if (rows.length === 0) throw new Error('No valid question rows found in the file.')
+      rows.forEach((r, i) => { r.display_order = questions.length + i })
+      const { error: qErr } = await supabase.from('assessment_questions').insert(rows)
+      if (qErr) throw qErr
+      setQImportMsg(`Imported ${rows.length} question sample(s).`)
+      await loadQuestions(showQuestions)
+    } catch (e) {
+      setQImportMsg(`Import failed: ${e?.message || 'file not readable'}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const candidateSelectOptions = () => (
+    <>
+      <option value="">Select candidate…</option>
+      {candidates.map((c) => <option key={c.id} value={c.id}>{c.full_name} {c.email ? `(${c.email})` : ''}</option>)}
+      <option value={NEW_CANDIDATE}>+ Create new candidate…</option>
+    </>
+  )
+
   return (
     <div>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between mb-6">
@@ -174,9 +330,17 @@ export default function Assessments() {
           <h2 className="text-2xl font-semibold text-slate-900">Assessments</h2>
           <p className="text-sm text-slate-500 mt-1">Create assessments, manage questions, and track candidate scores</p>
         </div>
-        <button onClick={() => { setShowForm(true); setSuccess(''); setError('') }} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
-          <Plus className="w-4 h-4" /> New Assessment
-        </button>
+        <div className="flex items-center gap-2">
+          <Link to="/assessment-builder" className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
+            <ListChecks className="w-4 h-4" /> Question Bank / AI Builder
+          </Link>
+          <button onClick={() => { setShowAI(true); setSuccess(''); setError('') }} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-slate-900 text-slate-800 text-sm font-medium hover:bg-slate-100">
+            <Sparkles className="w-4 h-4" /> Generate with AI
+          </button>
+          <button onClick={() => { setShowForm(true); setSuccess(''); setError('') }} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+            <Plus className="w-4 h-4" /> New Assessment
+          </button>
+        </div>
       </div>
 
       {error && <div className="mb-4"><ErrorState message={error} /></div>}
@@ -227,7 +391,7 @@ export default function Assessments() {
                       ) : '—'}
                     </td>
                     <td className="px-6 py-3">
-                      <button onClick={() => { setShowQuestions(a.id); loadQuestions(a.id) }} className="inline-flex items-center gap-1 text-xs text-[#009944] hover:underline">
+                      <button onClick={() => { setShowQuestions(a.id); setQImportMsg(''); loadQuestions(a.id) }} className="inline-flex items-center gap-1 text-xs text-[#009944] hover:underline">
                         <ListChecks className="w-3.5 h-3.5" /> Manage
                       </button>
                     </td>
@@ -261,9 +425,25 @@ export default function Assessments() {
               <div>
                 <label className={labelCls}>Candidate *</label>
                 <select className={inputCls} value={form.candidate_id} onChange={set('candidate_id')}>
-                  <option value="">Select candidate…</option>
-                  {candidates.map((c) => <option key={c.id} value={c.id}>{c.full_name} {c.email ? `(${c.email})` : ''}</option>)}
+                  {candidateSelectOptions()}
                 </select>
+                {form.candidate_id === NEW_CANDIDATE && (
+                  <div className="mt-3 rounded-xl border border-[#009944]/30 bg-emerald-50/50 p-3 space-y-3">
+                    <p className="text-xs font-semibold text-emerald-800 flex items-center gap-1.5"><UserPlus className="w-3.5 h-3.5" /> New candidate details</p>
+                    <div>
+                      <label className={labelCls}>Full Name *</label>
+                      <input className={inputCls} value={form.new_name} onChange={set('new_name')} placeholder="Candidate full name" />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Email</label>
+                      <input className={inputCls} value={form.new_email} onChange={set('new_email')} placeholder="name@example.com" />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Applied Role</label>
+                      <input className={inputCls} value={form.new_role} onChange={set('new_role')} placeholder="e.g. Customer Service Officer" />
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -302,6 +482,71 @@ export default function Assessments() {
         </div>
       )}
 
+      {/* Generate Assessment with AI Modal */}
+      {showAI && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Generate Assessment with AI</h3>
+                <p className="text-sm text-slate-500 mt-0.5">SARA builds questions from the job's requirements, then assigns them to the candidate.</p>
+              </div>
+              <button onClick={() => setShowAI(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className={labelCls}>Source job *</label>
+                <select className={inputCls} value={aiForm.job_id} onChange={(e) => setAiForm({ ...aiForm, job_id: e.target.value })}>
+                  <option value="">Select a job…</option>
+                  {jobs.map((j) => <option key={j.id} value={j.id}>{j.job_title}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className={labelCls}>Candidate *</label>
+                <select className={inputCls} value={aiForm.candidate_id} onChange={(e) => setAiForm({ ...aiForm, candidate_id: e.target.value })}>
+                  <option value="">Select candidate…</option>
+                  {candidates.map((c) => <option key={c.id} value={c.id}>{c.full_name} {c.email ? `(${c.email})` : ''}</option>)}
+                  <option value={NEW_CANDIDATE}>+ Create new candidate…</option>
+                </select>
+                {aiForm.candidate_id === NEW_CANDIDATE && (
+                  <div className="mt-3 rounded-xl border border-[#009944]/30 bg-emerald-50/50 p-3 space-y-3">
+                    <p className="text-xs font-semibold text-emerald-800 flex items-center gap-1.5"><UserPlus className="w-3.5 h-3.5" /> New candidate</p>
+                    <input className={inputCls} value={aiForm.new_name} onChange={(e) => setAiForm({ ...aiForm, new_name: e.target.value })} placeholder="Full name *" />
+                    <input className={inputCls} value={aiForm.new_email} onChange={(e) => setAiForm({ ...aiForm, new_email: e.target.value })} placeholder="Email" />
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Category</label>
+                  <select className={inputCls} value={aiForm.category} onChange={(e) => setAiForm({ ...aiForm, category: e.target.value })}>
+                    {['technical', 'aptitude', 'behavioral', 'analytical'].map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Questions</label>
+                  <input type="number" min="1" max="60" className={inputCls} value={aiForm.count} onChange={(e) => setAiForm({ ...aiForm, count: e.target.value })} />
+                </div>
+                <div>
+                  <label className={labelCls}>Duration (min)</label>
+                  <input type="number" className={inputCls} value={aiForm.duration_minutes} onChange={(e) => setAiForm({ ...aiForm, duration_minutes: e.target.value })} />
+                </div>
+                <div>
+                  <label className={labelCls}>Pass mark (%)</label>
+                  <input type="number" className={inputCls} value={aiForm.pass_mark} onChange={(e) => setAiForm({ ...aiForm, pass_mark: e.target.value })} />
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-5">
+              <button onClick={() => setShowAI(false)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+              <button onClick={generateAI} disabled={busy} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium hover:bg-slate-700 disabled:opacity-60">
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />} Generate with AI
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Question Management Modal */}
       {showQuestions && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
@@ -313,7 +558,7 @@ export default function Assessments() {
 
             {/* Existing questions */}
             <div className="space-y-3 mb-6">
-              {questions.length === 0 && <p className="text-sm text-slate-400 text-center py-4">No questions yet. Add questions below.</p>}
+              {questions.length === 0 && <p className="text-sm text-slate-400 text-center py-4">No questions yet. Add questions below or upload a sample file.</p>}
               {questions.map((q, i) => (
                 <div key={q.id} className="rounded-lg border border-slate-200 p-4">
                   <div className="flex items-start justify-between gap-2">
@@ -337,6 +582,23 @@ export default function Assessments() {
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* Upload question samples */}
+            <div className="border-t border-slate-200 pt-4 mb-4">
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+                <h4 className="text-sm font-medium text-slate-700">Upload question samples</h4>
+                <button
+                  onClick={() => qFileRef.current?.click()}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} Choose JSON file
+                </button>
+                <input ref={qFileRef} type="file" accept=".json,application/json" className="hidden" onChange={onUploadSamples} />
+              </div>
+              <p className="text-xs text-slate-400">A JSON array: <span className="font-mono">[{`{"question_text": "…", "options": ["A","B","C"], "correct_answer": "A"}`}]</span></p>
+              {qImportMsg && <p className={`text-xs mt-2 ${qImportMsg.startsWith('Import failed') ? 'text-rose-600' : 'text-emerald-700'}`}>{qImportMsg}</p>}
             </div>
 
             {/* Add question form */}

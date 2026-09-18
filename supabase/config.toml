@@ -424,3 +424,26 @@ entrypoint = "./functions/send-email/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/send-email/*.html" ]
+
+[functions.bankone-transaction-status]
+enabled = true
+# The platform rejects unauthenticated requests before the function runs.
+# In-function JWT + role checks still apply on top of this.
+verify_jwt = true
+import_map = "./functions/bankone-transaction-status/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/bankone-transaction-status/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/bankone-transaction-status/*.html" ]
+
+[functions.bankone-health]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/bankone-health/index.ts"
+
+[functions.bankone-test-connection]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/bankone-test-connection/index.ts"

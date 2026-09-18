@@ -93,6 +93,50 @@ function extractNavigateTarget(text) {
   return null
 }
 
+// Extracts a searchable query from "search messages for X" style phrasing.
+function extractSearchQuery(text) {
+  // Prefer an explicitly quoted phrase.
+  let m = text.match(/["']([^"']{2,})["']/)
+  if (m) return m[1].trim()
+  // "search messages for payroll", "find 'leave policy' in messages"
+  m = text.match(/\b(?:search|find|look up|lookup|look for)\b\s+(?:the\s+)?(?:messages?\s+|announcements?\s+|records?\s+)?(?:for\s+|about\s+|matching\s+)?(.{2,}?)(?:\s+in\s+(?:the\s+)?messages?|\s+(?:that|which|about)\b.*|\s*official\b)?\s*$/i)
+  if (m) return m[1].trim().replace(/\.$/, '')
+  return null
+}
+
+// ------------------------------------------------------------------
+// Communication (phase 40) intents — read-only and RLS-scoped. They are
+// checked before the generic navigation fallback so "show announcements"
+// is not swallowed as a navigation attempt.
+// ------------------------------------------------------------------
+function detectCommunicationIntent(text) {
+  // Announcements I still need to acknowledge (mandatory acks outstanding).
+  // Keyword can precede or follow "announcement", but never inside a
+  // search request ("search announcements about pending payments").
+  const pendingWord = /\b(?:unacknowledged|pending|outstanding|missed|missing|miss)\b/i
+  const ackPending =
+    (pendingWord.test(text) && /announcements?/i.test(text) && !/\b(?:search|find|look up|lookup|look for)\b/i.test(text)) ||
+    /announcements?.*(need|needs|require|requires|awaiting|ack|acknowledg)/i.test(text) ||
+    /(what|which).*(announcements?|messages?).*(need|must).*(acknowledge|ack)/i.test(text)
+  if (ackPending) return { intent: 'COMMS_PENDING_ACK', filters: {} }
+  // "show/list/recent announcements" — a read of what reached me.
+  if (/announcements?/i.test(text)
+      && /\b(show|list|display|see|recent|latest|new|mine|for me|updates|summary|open|go to)\b/i.test(text)
+      && !/\b(?:search|find|look up|lookup|look for)\b/i.test(text)) {
+    return { intent: 'COMMS_ANNOUNCEMENTS', filters: {} }
+  }
+  // Full-text search across everything the user can access (RLS-scoped).
+  if (/\b(?:search|find|look up|lookup|look for)\b/i.test(text)
+      && /(messages?|announcements?|official|records?|communications?)/i.test(text)) {
+    const query = extractSearchQuery(text)
+    return {
+      intent: 'COMMS_SEARCH',
+      filters: { query, official: /\bofficial\b/i.test(text) ? 'true' : undefined },
+    }
+  }
+  return null
+}
+
 export function parseSaraCommand(raw) {
   const text = (raw || '').trim()
   if (!text) return { intent: 'UNKNOWN', filters: {} }
@@ -100,6 +144,12 @@ export function parseSaraCommand(raw) {
   if (ROLE_ELEVATION.test(text)) return { intent: 'ROLE_CHANGE_DENIED', filters: {} }
   if (CONFIRM_WORDS.test(text)) return { intent: 'CONFIRM', filters: {} }
   if (CANCEL_WORDS.test(text)) return { intent: 'CANCEL', filters: {} }
+
+  // Communication (phase 40) reads are checked before the leave-approval
+  // rules so "show pending announcements" is not mistaken for "show pending
+  // leave approvals".
+  const comm = detectCommunicationIntent(text)
+  if (comm) return comm
 
   if (/how many.*(leave|approval|pending)/i.test(text) || /count.*(leave|approval)/i.test(text)) {
     return { intent: 'COUNT_PENDING', filters: {} }

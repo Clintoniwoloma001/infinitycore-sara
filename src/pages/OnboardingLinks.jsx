@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Archive, ArchiveRestore, Briefcase, CheckCircle2, Clock, Copy, Eye,
-  Link2, Loader2, Plus, RefreshCw, Search, Trash2, User, X,
+  IdCard, Link2, Loader2, Plus, RefreshCw, Search, Send, Trash2, User, X,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
@@ -14,6 +14,7 @@ import { payrollService } from '../services/payrollService'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
+const titleize = (value = '') => String(value).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text) } catch {
@@ -31,7 +32,20 @@ const TABS = [
   { id: 'revoked', label: 'Revoked' },
   { id: 'expired', label: 'Expired' },
   { id: 'archived', label: 'Archived' },
+  { id: 'guarantors', label: 'Guarantor Links' },
 ]
+
+const VERIF_BADGES = {
+  pending_link: 'bg-slate-100 text-slate-600 border-slate-200',
+  link_sent: 'bg-amber-50 text-amber-700 border-amber-200',
+  started: 'bg-blue-50 text-blue-700 border-blue-200',
+  submitted: 'bg-blue-50 text-blue-700 border-blue-200',
+  under_review: 'bg-violet-50 text-violet-700 border-violet-200',
+  correction_requested: 'bg-amber-50 text-amber-700 border-amber-200',
+  approved: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  rejected: 'bg-rose-50 text-rose-700 border-rose-200',
+  revoked: 'bg-slate-100 text-slate-500 border-slate-200',
+}
 
 function getProgressLabel(link) {
   if (link.is_archived) return 'Archived'
@@ -96,12 +110,14 @@ export default function OnboardingLinks() {
 
   const [links, setLinks] = useState([])
   const [submissions, setSubmissions] = useState([])
+  const [verifs, setVerifs] = useState([])
   const [activeTab, setActiveTab] = useState('active')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [toast, setToast] = useState(null)
   const [showCreate, setShowCreate] = useState(false)
+  const [showGeneratePick, setShowGeneratePick] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createdLink, setCreatedLink] = useState(null)
   const [copied, setCopied] = useState('')
@@ -113,6 +129,13 @@ export default function OnboardingLinks() {
   const [payrollPeriods, setPayrollPeriods] = useState([])
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [payrollBusy, setPayrollBusy] = useState(false)
+  const [manageTarget, setManageTarget] = useState(null)
+  const [managedVerifs, setManagedVerifs] = useState([])
+  const [guarantorForm, setGuarantorForm] = useState({})
+  const [guarantorBusy, setGuarantorBusy] = useState(false)
+  const [generatedVerif, setGeneratedVerif] = useState(null)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type })
@@ -123,12 +146,14 @@ export default function OnboardingLinks() {
     if (showSpinner) setLoading(true)
     setError('')
     try {
-      const [linkData, subData] = await Promise.all([
+      const [linkData, subData, verifData] = await Promise.all([
         onboardingService.listLinks(),
         onboardingService.listSubmissions(),
+        guarantorVerificationService.listVerifications(),
       ])
       setLinks(linkData)
       setSubmissions(subData)
+      setVerifs(verifData)
     } catch (e) {
       setError(e?.message || 'Unable to load onboarding links')
     } finally {
@@ -147,10 +172,23 @@ export default function OnboardingLinks() {
 
   // Tab counts
   const tabCounts = useMemo(() => {
-    const counts = { active: 0, review: 0, completed: 0, rejected: 0, revoked: 0, expired: 0, archived: 0 }
+    const counts = { active: 0, review: 0, completed: 0, rejected: 0, revoked: 0, expired: 0, archived: 0, guarantors: 0 }
     rows.forEach((r) => { counts[linkTabFilter(r)]++ })
+    counts.guarantors = verifs.length
     return counts
-  }, [rows])
+  }, [rows, verifs])
+
+  // Guarantor links joined with their onboarding link / candidate + submission
+  const guarantorRows = useMemo(() => {
+    const linkMap = new Map(links.map((l) => [l.id, l]))
+    const subMap = new Map()
+    submissions.forEach((s) => { if (s.link_id) subMap.set(s.link_id, s) })
+    return verifs.map((v) => {
+      const link = v.onboarding_link_id ? linkMap.get(v.onboarding_link_id) : null
+      const sub = link ? (subMap.get(link.id) || null) : (v.submission_id ? submissions.find((s) => s.id === v.submission_id) || null : null)
+      return { ...v, link, submission: sub, candidate_name: link?.candidate_name || sub?.candidate_name || v.guarantor_name }
+    })
+  }, [verifs, links, submissions])
 
   // Filtered rows
   const filteredRows = useMemo(() => {
@@ -272,6 +310,60 @@ export default function OnboardingLinks() {
     setTimeout(() => setCopied(''), 1500)
   }
 
+  // ---- Guarantor link management ----
+  const openGuarantorManage = (link) => {
+    const payload = link?.submission?.payload || {}
+    setManagedVerifs(verifs.filter((v) => v.onboarding_link_id === link.id))
+    setGeneratedVerif(null)
+    setGuarantorForm({
+      candidate: link,
+      guarantor_name: payload.guarantor_full_name || '',
+      guarantor_email: payload.guarantor_email || '',
+      guarantor_relationship: payload.guarantor_relationship || '',
+    })
+    setManageTarget(link)
+  }
+
+  const generateGuarantorLink = async () => {
+    if (!guarantorForm.guarantor_name?.trim()) { setError('Guarantor name is required.'); return }
+    if (!guarantorForm.guarantor_email?.trim()) { setError('Guarantor email is required.'); return }
+    setGuarantorBusy(true); setError('')
+    try {
+      const result = await guarantorVerificationService.createVerification({
+        onboardingLinkId: guarantorForm.candidate?.id || null,
+        employeeId: guarantorForm.candidate?.submission?.employee_id || null,
+        submissionId: guarantorForm.candidate?.submission?.id || null,
+        guarantorName: guarantorForm.guarantor_name,
+        guarantorEmail: guarantorForm.guarantor_email,
+        guarantorRelationship: guarantorForm.guarantor_relationship,
+      })
+      setGeneratedVerif(result)
+      setManagedVerifs((vs) => [result, ...vs])
+      await load(false)
+      showToast('Guarantor verification link generated.')
+    } catch (e) {
+      setError(e?.message || 'Failed to create guarantor link')
+    } finally {
+      setGuarantorBusy(false)
+    }
+  }
+
+  const deleteVerification = async () => {
+    if (!deleteTarget) return
+    setDeleteBusy(true)
+    try {
+      await guarantorVerificationService.revokeVerification(deleteTarget.id)
+      setDeleteTarget(null)
+      setManagedVerifs((vs) => vs.map((v) => v.id === deleteTarget.id ? { ...v, status: 'revoked' } : v))
+      await load(false)
+      showToast('Guarantor link revoked.')
+    } catch (e) {
+      setError(e?.message || 'Failed to delete guarantor link')
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
   const openPayroll = async (link) => {
     setPayrollTarget(link)
     setSelectedPeriod('')
@@ -303,6 +395,15 @@ export default function OnboardingLinks() {
   const renderActions = (link) => {
     const tab = linkTabFilter(link)
     const actions = []
+
+    if (canManage && link.submission) {
+      actions.push(
+        <button key="guarantor" onClick={() => openGuarantorManage(link)} title="Generate or view guarantor verification links for this candidate"
+          className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-slate-300 text-slate-600 text-xs hover:bg-slate-100">
+          <IdCard className="w-3.5 h-3.5" /> Guarantor
+        </button>
+      )
+    }
 
     if (tab === 'active') {
       if (canManage) {
@@ -453,19 +554,93 @@ export default function OnboardingLinks() {
       </div>
 
       {/* Search */}
-      <div className="relative w-full sm:w-80 mb-4">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search candidate, email, position…"
-          className="w-full h-10 pl-9 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
-        />
-      </div>
+      {activeTab !== 'guarantors' && (
+        <div className="relative w-full sm:w-80 mb-4">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search candidate, email, position…"
+            className="w-full h-10 pl-9 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+          />
+        </div>
+      )}
+
+      {/* Guarantor links tab */}
+      {activeTab === 'guarantors' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-500">
+              All guarantor verification links generated for every candidate, including those tied to archived onboarding links.
+            </p>
+            {canManage && (
+              <button onClick={() => setShowGeneratePick(true)}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+                <Plus className="w-4 h-4" /> Generate Link
+              </button>
+            )}
+          </div>
+          {guarantorRows.length === 0 ? (
+            <EmptyState
+              title="No guarantor links yet"
+              description="Open a candidate row and use the Guarantor action to generate a verification link."
+            />
+          ) : (
+            <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-left">
+                  <tr>
+                    <th className="px-4 py-3 font-medium whitespace-nowrap">Candidate</th>
+                    <th className="px-4 py-3 font-medium whitespace-nowrap">Guarantor</th>
+                    <th className="px-4 py-3 font-medium whitespace-nowrap hidden md:table-cell">Email</th>
+                    <th className="px-4 py-3 font-medium whitespace-nowrap hidden md:table-cell">Created</th>
+                    <th className="px-4 py-3 font-medium whitespace-nowrap">Status</th>
+                    <th className="px-4 py-3 font-medium whitespace-nowrap text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {guarantorRows.map((gv) => {
+                    const badge = VERIF_BADGES[gv.status] || 'bg-slate-100 text-slate-600 border-slate-200'
+                    return (
+                      <tr key={gv.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3">{gv.candidate_name || '—'}</td>
+                        <td className="px-4 py-3 font-medium">{gv.guarantor_name || '—'}</td>
+                        <td className="px-4 py-3 hidden md:table-cell">{gv.guarantor_email || '—'}</td>
+                         <td className="px-4 py-3 hidden md:table-cell text-slate-500">{date(gv.created_at)}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-xs font-medium ${badge}`}>
+                             {titleize(gv.status)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-1.5">
+                            {gv.link && (
+                              <button onClick={() => openGuarantorManage(gv.link)} title="View and manage this candidate's guarantor links"
+                                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-slate-300 text-slate-600 text-xs hover:bg-slate-100">
+                                <Eye className="w-3.5 h-3.5" /> Manage
+                              </button>
+                            )}
+                            {canManage && (
+                              <button onClick={() => setDeleteTarget(gv)} title="Delete this guarantor link"
+                                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-rose-300 text-rose-600 text-xs hover:bg-rose-50">
+                                <Trash2 className="w-3.5 h-3.5" /> Delete
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Table */}
-      {loading && <LoadingState label="Loading onboarding links..." />}
-      {!loading && !error && filteredRows.length === 0 && (
+      {activeTab !== 'guarantors' && loading && <LoadingState label="Loading onboarding links..." />}
+      {activeTab !== 'guarantors' && !loading && !error && filteredRows.length === 0 && (
         <EmptyState
           title={`No ${activeTab} onboarding links`}
           description={activeTab === 'active' ? 'Generate a one-time link for a new hire to begin onboarding.' : `There are no onboarding links in the ${activeTab} category.`}
@@ -625,14 +800,97 @@ export default function OnboardingLinks() {
         </div>
       )}
 
+      {showGeneratePick && (
+        <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-lg max-h-[80vh] overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div>
+                <h4 className="text-base font-semibold text-slate-900">Generate Guarantor Link</h4>
+                <p className="text-xs text-slate-500 mt-1">Select a submitted onboarding record. The employee only supplies the expected name and email.</p>
+              </div>
+              <button onClick={() => setShowGeneratePick(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto divide-y divide-slate-100">
+              {rows.filter((link) => link.submission && link.submission.payload?.guarantor_full_name && link.submission.payload?.guarantor_email).map((link) => (
+                <button
+                  key={link.id}
+                  onClick={() => { setShowGeneratePick(false); openGuarantorManage(link) }}
+                  className="w-full text-left px-5 py-3 hover:bg-slate-50"
+                >
+                  <div className="text-sm font-medium text-slate-800">{link.candidate_name}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">{link.submission.payload.guarantor_full_name} · {link.submission.payload.guarantor_email}</div>
+                </button>
+              ))}
+              {rows.filter((link) => link.submission && link.submission.payload?.guarantor_full_name && link.submission.payload?.guarantor_email).length === 0 && (
+                <div className="px-5 py-10 text-center text-sm text-slate-400">No submitted onboarding record is waiting for a guarantor link.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {manageTarget && (
+        <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h4 className="text-base font-semibold text-slate-900">Guarantor Verification</h4>
+                <p className="text-xs text-slate-500 mt-1">{manageTarget.candidate_name}</p>
+              </div>
+              <button onClick={() => { setManageTarget(null); setGeneratedVerif(null) }} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 mb-4">
+              Expected guarantor: <strong>{guarantorForm.guarantor_name}</strong> ({guarantorForm.guarantor_email})
+            </div>
+            {managedVerifs.map((verification) => (
+              <div key={verification.id} className="mb-3 rounded-lg border border-slate-200 p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-slate-700">{titleize(verification.status)}</span>
+                  <span className="text-xs text-slate-400">{date(verification.created_at)}</span>
+                </div>
+                {verification.expires_at && <p className="text-xs text-slate-400 mt-1">Expires {date(verification.expires_at)}</p>}
+              </div>
+            ))}
+            {generatedVerif && (
+              <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                <p className="text-sm font-medium text-emerald-900 mb-2">Secure link generated. It is shown only to HR now.</p>
+                <div className="flex gap-2">
+                  <input readOnly value={generatedVerif.url} className={inputCls} />
+                  <button onClick={() => copyText(generatedVerif.url)} className="px-3 py-2 rounded-lg bg-[#009944] text-white text-xs font-medium">Copy</button>
+                </div>
+              </div>
+            )}
+            {!generatedVerif && !managedVerifs.some((v) => ['link_sent', 'started', 'submitted', 'under_review'].includes(v.status)) && (
+              <button onClick={generateGuarantorLink} disabled={guarantorBusy} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium disabled:opacity-60">
+                {guarantorBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Generate secure link
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-md p-6">
+            <h4 className="text-base font-semibold text-slate-900">Revoke guarantor link?</h4>
+            <p className="text-sm text-slate-500 mt-2">This invalidates the token while preserving the verification audit history.</p>
+            <div className="flex justify-end gap-2 mt-5">
+              <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600">Cancel</button>
+              <button onClick={deleteVerification} disabled={deleteBusy} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-medium disabled:opacity-60">
+                {deleteBusy && <Loader2 className="w-4 h-4 animate-spin" />} Revoke link
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ---- Review Center ---- */}
       {reviewSubmission && (
         <OnboardingReviewCenter
           submission={reviewSubmission}
           onClose={() => setReviewSubmission(null)}
           onRefresh={() => load(false)}
-        />
-      )}
+        />)}
     </div>
   )
 }

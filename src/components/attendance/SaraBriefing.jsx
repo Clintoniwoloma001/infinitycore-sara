@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Sparkles, TrendingUp, AlertTriangle, Users, Clock } from 'lucide-react'
-import { calculateAttendanceState, DEFAULT_ATTENDANCE_TIMEZONE } from '../../services/attendanceService'
+import { calculateAttendanceState, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime } from '../../services/attendanceService'
+import { useNetworkTime } from '../../hooks/useNetworkTime'
 
 /**
  * SARA Attendance Briefing — deterministic analytics based on actual
@@ -14,15 +15,17 @@ import { calculateAttendanceState, DEFAULT_ATTENDANCE_TIMEZONE } from '../../ser
  */
 export default function SaraBriefing({ records, employees, isManager, myRecord = null, schedule = null }) {
   const [briefing, setBriefing] = useState(null)
+  const { now: networkNow } = useNetworkTime()
 
   useEffect(() => {
     if (!records) return
     compute()
-  }, [records, employees, myRecord, schedule]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [records, employees, myRecord, schedule, networkNow]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function compute() {
+    if (!networkNow) return
     const timezone = schedule?.timezone || DEFAULT_ATTENDANCE_TIMEZONE
-    const today = timeZoneDateKey(new Date(), timezone)
+    const today = timeZoneDateKey(networkNow, timezone)
     const todayRecords = records.filter((r) => String(r.attendance_date) === today)
     const totalEmployees = isManager ? (employees?.length || 0) : 0
     const presentToday = todayRecords.filter((r) => r.clock_in && (r.status === 'present' || r.status === 'late')).length
@@ -38,7 +41,7 @@ export default function SaraBriefing({ records, employees, isManager, myRecord =
     })
     const topLateDept = Object.entries(lateByDept).sort((a, b) => b[1] - a[1])[0]
 
-    const greeting = getGreeting(timezone)
+    const greeting = getGreeting(timezone, networkNow)
     const parts = []
 
     if (isManager) {
@@ -49,7 +52,7 @@ export default function SaraBriefing({ records, employees, isManager, myRecord =
     } else {
       const mine = myRecord || todayRecords[0] || null
       const state = calculateAttendanceState(mine, schedule || {})
-      const at = (d) => (d ? new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: timezone }) : '')
+      const at = (d) => (d ? formatAttendanceTime(d, timezone) : '')
       const scheduled = minutesToLabel(state.scheduledStartMinutes)
       switch (state.state) {
         case 'not_clocked_in':
@@ -134,11 +137,11 @@ function minutesToLabel(minutes) {
   return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`
 }
 
-function getGreeting(timeZone = DEFAULT_ATTENDANCE_TIMEZONE) {
-  let hour = new Date().getHours()
+function getGreeting(timeZone = DEFAULT_ATTENDANCE_TIMEZONE, date = null) {
+  let hour = date ? date.getHours() : 0
   try {
-    hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hour12: false }).format(new Date()))
-  } catch { /* fall back to local */ }
+    hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hour12: false }).format(date || new Date()))
+  } catch { /* keep the server-time fallback */ }
   if (hour < 12) return 'Good morning.'
   if (hour < 17) return 'Good afternoon.'
   return 'Good evening.'

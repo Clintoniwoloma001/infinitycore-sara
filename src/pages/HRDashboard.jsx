@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Activity, BriefcaseBusiness, CalendarDays, ClipboardCheck, CheckCircle2, DollarSign, Sparkles, TrendingUp, UserMinus, UserPlus, Users, Wallet } from 'lucide-react'
+import { Activity, BriefcaseBusiness, CalendarDays, ClipboardCheck, CheckCircle2, DollarSign, Sparkles, Stethoscope, TrendingUp, UserMinus, UserPlus, Users, Wallet } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { attendanceEngineService } from '../services/attendanceEngineService'
+import medicalScreeningService from '../services/medicalScreeningService'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
+import DrillDownModal from '../components/DrillDownModal'
 import { formatDate } from '../lib/utils'
 
 const safeList = async (table, orderBy = 'created_at') => {
@@ -16,6 +18,7 @@ const safeList = async (table, orderBy = 'created_at') => {
 export default function HRDashboard() {
   const navigate = useNavigate()
   const [state, setState] = useState({ loading: true, data: {}, errors: [] })
+  const [activeDrill, setActiveDrill] = useState(null)
 
   useEffect(() => {
     let active = true
@@ -33,6 +36,7 @@ export default function HRDashboard() {
         ['workTasks', safeList('work_tasks')],
         ['targets', safeList('targets')],
         ['kpis', safeList('employee_kpis')],
+        ['medicalReferrals', safeList('medical_referrals')],
       ].map(async ([key, promise]) => [key, await promise]))
 
       // HR metrics
@@ -48,6 +52,8 @@ export default function HRDashboard() {
       })
       data.hrMetrics = hrMetrics
       setState({ loading: false, data, errors })
+      // Opportunistic expiry alarms for the medical screening workflow.
+      medicalScreeningService.notifyExpiring().catch(() => {})
     }
     load()
     return () => { active = false }
@@ -55,7 +61,17 @@ export default function HRDashboard() {
 
   if (state.loading) return <LoadingState label="Loading HR dashboard..." />
 
-  const { employees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [], submissions = [], verifications = [], workTasks = [], targets = [], kpis = [], hrMetrics = null } = state.data
+  const { employees: allEmployees = [], jobs = [], candidates = [], assessments = [], interviews = [], leave = [], payroll = [], submissions = [], verifications = [], workTasks = [], targets = [], kpis = [], medicalReferrals = [], hrMetrics = null } = state.data
+
+  // Deleted employees are archived (is_archived = true). Exclude them so a
+  // deleted record never appears in any count or drill-down row.
+  const employees = allEmployees.filter((e) => !e.is_archived)
+
+  // Filters are stored once so each metric count and its drill-down share the
+  // SAME in-memory array (DrillDownModal contract: count === rows.length).
+  const pendingRecruitment = candidates.filter((c) => ['received', 'screening', 'shortlisted'].includes(c.application_status))
+  const publishedJobs = jobs.filter((j) => j.status === 'published')
+  const pendingLeave = leave.filter((l) => l.status === 'pending')
 
   // SARA intelligence metrics — derived from real data
   const pendingReviews = submissions.filter((s) => ['submitted', 'under_review', 'pending_guarantor', 'guarantor_submitted', 'correction_requested'].includes(s.onboarding_status)).length
@@ -72,11 +88,22 @@ export default function HRDashboard() {
   const activeTargets = targets.filter((t) => t.status === 'active').length
   const achievedTargets = targets.filter((t) => t.status === 'achieved').length
 
+  // SARA Medical Screening metrics — derived from the referral lifecycle.
+  const medicalNow = new Date()
+  const medicalCompletedStatuses = ['cleared', 'cleared_with_restrictions', 'further_review', 'not_cleared', 'revoked']
+  const medicalAwaitingHospital = medicalReferrals.filter((r) => ['draft', 'issued', 'qr_opened'].includes(r.status) && !(r.expires_at && new Date(r.expires_at) < medicalNow)).length
+  const medicalInProgress = medicalReferrals.filter((r) => r.status === 'screening_started').length
+  const medicalAwaitingReview = medicalReferrals.filter((r) => ['submitted', 'under_review'].includes(r.status)).length
+  const medicalCleared = medicalReferrals.filter((r) => ['cleared', 'cleared_with_restrictions'].includes(r.status)).length
+  const medicalExpiringSoon = medicalReferrals.filter((r) => r.status === 'issued' && r.expires_at && new Date(r.expires_at) > medicalNow && new Date(r.expires_at) - medicalNow < 7 * 86400000).length
+  const medicalCompleted = medicalReferrals.filter((r) => medicalCompletedStatuses.includes(r.status)).length
+
   // Workforce / hire-exit metrics — derived from the employees master and,
   // as a fallback when the employees list is empty, from the server-side
   // hr_metrics_view. No figures are fabricated.
   const activeEmployees = employees.filter((e) => e.employment_status && e.employment_status !== 'terminated')
   const terminatedEmployees = employees.filter((e) => e.employment_status === 'terminated')
+  const usesEmployeeBase = employees.length > 0
   const totalEmployees = employees.length || hrMetrics?.total_employees || 0
   const monthKeyNow = new Date().toISOString().slice(0, 7)
   const hiredThisMonth = employees.filter((e) => e.hire_date && String(e.hire_date).slice(0, 7) === monthKeyNow)
@@ -104,13 +131,14 @@ export default function HRDashboard() {
     ...leave.slice(0, 4).map((item) => ({ id: `leave-${item.id}`, label: `${item.employee_name || 'Employee'} leave request ${item.status || 'pending'}`, date: item.created_at })),
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).slice(0, 6)
 
-  const Stat = ({ icon: Icon, label, value, accent, subtitle }) => (
-    <div className="bg-white border border-slate-200 rounded-lg p-5">
+  const Stat = ({ icon: Icon, label, value, accent, subtitle, onClick }) => (
+    <div onClick={onClick} className={`bg-white border border-slate-200 rounded-lg p-5 ${onClick ? 'cursor-pointer hover:border-[#009944]/40 hover:shadow-sm transition-shadow' : ''}`}>
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs font-medium uppercase text-slate-500">{label}</p>
           <p className="text-2xl font-semibold text-slate-900 mt-1">{value}</p>
           {subtitle && <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>}
+          {onClick && <p className="text-xs text-[#009944] mt-1 opacity-70">View records →</p>}
         </div>
         <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${accent}15`, color: accent }}>
           <Icon className="w-5 h-5" />
@@ -119,8 +147,8 @@ export default function HRDashboard() {
     </div>
   )
 
-  const MetricCard = ({ icon: Icon, label, value, trend, accent }) => (
-    <div className="bg-gradient-to-br from-white to-slate-50 border border-slate-200 rounded-xl p-5">
+  const MetricCard = ({ icon: Icon, label, value, trend, accent, onClick }) => (
+    <div onClick={onClick} className={`bg-gradient-to-br from-white to-slate-50 border border-slate-200 rounded-xl p-5 ${onClick ? 'cursor-pointer hover:border-[#009944]/40 hover:shadow-sm transition-shadow' : ''}`}>
       <div className="flex items-center gap-3 mb-3">
         <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${accent}15`, color: accent }}>
           <Icon className="w-4.5 h-4.5" />
@@ -129,8 +157,116 @@ export default function HRDashboard() {
       </div>
       <p className="text-3xl font-bold text-slate-900">{value}</p>
       {trend && <p className="text-xs mt-1" style={{ color: accent }}>{trend}</p>}
+      {onClick && <p className="text-[11px] text-[#009944] mt-1.5 opacity-70">View records →</p>}
     </div>
   )
+
+  const statusText = (v) => String(v || '—').replace(/_/g, ' ')
+  const employeeColumns = [
+    { key: 'full_name', label: 'Employee', render: (r) => <span className="font-medium text-slate-900">{r.full_name || '—'}</span> },
+    { key: 'employee_code', label: 'Work ID', render: (r) => r.employee_code || r.employee_number || r.staff_id || '—' },
+    { key: 'department', label: 'Department', render: (r) => r.department || '—' },
+    { key: 'position', label: 'Position', render: (r) => r.position || '—' },
+    { key: 'employment_status', label: 'Status', render: (r) => statusText(r.employment_status) },
+    { key: 'hire_date', label: 'Joined', render: (r) => r.hire_date ? formatDate(r.hire_date) : '—' },
+  ]
+  const candidateColumns = [
+    { key: 'full_name', label: 'Candidate', render: (r) => <span className="font-medium text-slate-900">{r.full_name || '—'}</span> },
+    { key: 'email', label: 'Email', render: (r) => r.email || '—' },
+    { key: 'position', label: 'Position', render: (r) => r.position || r.job_title || '—' },
+    { key: 'application_status', label: 'Status', render: (r) => statusText(r.application_status) },
+    { key: 'created_at', label: 'Applied', render: (r) => r.created_at ? formatDate(r.created_at) : '—' },
+  ]
+  const interviewColumns = [
+    { key: 'candidate_name', label: 'Candidate', render: (r) => <span className="font-medium text-slate-900">{r.candidate_name || '—'}</span> },
+    { key: 'position', label: 'Position', render: (r) => r.position || '—' },
+    { key: 'interview_type', label: 'Type', render: (r) => statusText(r.interview_type) },
+    { key: 'scheduled_date', label: 'Date/Time', render: (r) => r.scheduled_date ? formatDate(r.scheduled_date) : '—' },
+    { key: 'status', label: 'Status', render: (r) => statusText(r.status) },
+  ]
+  const leaveColumns = [
+    { key: 'employee_name', label: 'Employee', render: (r) => <span className="font-medium text-slate-900">{r.employee_name || '—'}</span> },
+    { key: 'leave_type', label: 'Type', render: (r) => statusText(r.leave_type) },
+    { key: 'start_date', label: 'From', render: (r) => r.start_date ? formatDate(r.start_date) : '—' },
+    { key: 'end_date', label: 'To', render: (r) => r.end_date ? formatDate(r.end_date) : '—' },
+    { key: 'status', label: 'Status', render: (r) => statusText(r.status) },
+  ]
+  const payrollColumns = [
+    { key: 'employee_name', label: 'Employee', render: (r) => <span className="font-medium text-slate-900">{r.employee_name || '—'}</span> },
+    { key: 'payroll_period', label: 'Period', render: (r) => r.payroll_period || r.period_label || '—' },
+    { key: 'status', label: 'Status', render: (r) => statusText(r.status) },
+    { key: 'created_at', label: 'Added', render: (r) => r.created_at ? formatDate(r.created_at) : '—' },
+  ]
+  const jobColumns = [
+    { key: 'job_title', label: 'Job Title', render: (r) => <span className="font-medium text-slate-900">{r.job_title || '—'}</span> },
+    { key: 'department', label: 'Dept', render: (r) => r.department || '—' },
+    { key: 'location', label: 'Location', render: (r) => r.location || '—' },
+    { key: 'employment_type', label: 'Type', render: (r) => statusText(r.employment_type) },
+    { key: 'status', label: 'Status', render: (r) => statusText(r.status) },
+  ]
+  const assessmentColumns = [
+    { key: 'candidate_name', label: 'Candidate', render: (r) => <span className="font-medium text-slate-900">{r.candidate_name || '—'}</span> },
+    { key: 'test_name', label: 'Assessment', render: (r) => r.test_name || r.title || '—' },
+    { key: 'assessment_type', label: 'Type', render: (r) => statusText(r.assessment_type) },
+    { key: 'status', label: 'Status', render: (r) => statusText(r.status) },
+    { key: 'created_at', label: 'Created', render: (r) => r.created_at ? formatDate(r.created_at) : '—' },
+  ]
+  const serverMetricNote = {
+    emptyTitle: 'Record-level breakdown unavailable',
+    emptyMessage: 'This count is sourced from the server-side HR metrics view, so the individual records are not available to drill into. Open the Employees page to see the full employee list.',
+  }
+  const drills = {
+    totalEmployees: {
+      title: 'Total Employees', subtitle: `${totalEmployees} employee records on file`, accent: '#009944',
+      rows: employees, columns: employeeColumns,
+      ...(usesEmployeeBase ? {} : serverMetricNote),
+    },
+    activeEmployees: {
+      title: 'Active Employees', subtitle: `${activeCount} employees currently active`, accent: '#0ea5e9',
+      rows: activeEmployees, columns: employeeColumns,
+      ...(usesEmployeeBase ? {} : serverMetricNote),
+    },
+    pendingRecruitment: {
+      title: 'Pending Recruitment', subtitle: `${pendingRecruitment.length} candidates in the recruitment pipeline`, accent: '#f59e0b',
+      rows: pendingRecruitment, columns: candidateColumns,
+    },
+    interviews: {
+      title: 'Interviews', subtitle: `${interviews.length} scheduled interviews`, accent: '#6366f1',
+      rows: interviews, columns: interviewColumns,
+    },
+    pendingLeave: {
+      title: 'Pending Leave', subtitle: `${pendingLeave.length} leave requests awaiting approval`, accent: '#f43f5e',
+      rows: pendingLeave, columns: leaveColumns,
+    },
+    payroll: {
+      title: 'Payroll Records', subtitle: `${payroll.length} payroll records`, accent: '#14b8a6',
+      rows: payroll, columns: payrollColumns,
+    },
+    openJobs: {
+      title: 'Open Jobs', subtitle: `${publishedJobs.length} published job openings`, accent: '#84cc16',
+      rows: publishedJobs, columns: jobColumns,
+    },
+    assessments: {
+      title: 'Assessments', subtitle: `${assessments.length} assessments`, accent: '#a855f7',
+      rows: assessments, columns: assessmentColumns,
+    },
+    hiredThisMonth: {
+      title: 'Hired This Month', subtitle: `${hiredCount} employees hired in ${monthKeyNow}`, accent: '#009944',
+      rows: hiredThisMonth, columns: employeeColumns,
+      ...(usesEmployeeBase ? {} : serverMetricNote),
+    },
+    exitsThisMonth: {
+      title: 'Exits This Month', subtitle: `${termThisCount} employment records terminated in ${monthKeyNow}`, accent: '#ef4444',
+      rows: terminatedThisMonth, columns: employeeColumns,
+      ...(usesEmployeeBase ? {} : serverMetricNote),
+    },
+    turnover: {
+      title: 'Exits (All Time)', subtitle: `${termTotalCount} terminated employment records`, accent: '#6366f1',
+      rows: terminatedEmployees, columns: employeeColumns,
+      ...(usesEmployeeBase ? {} : serverMetricNote),
+    },
+  }
+  const openDrill = (key) => setActiveDrill(drills[key] || null)
 
   return (
     <div>
@@ -145,23 +281,23 @@ export default function HRDashboard() {
       <div className="mb-6">
         <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-[#009944]" /> Key HR Metrics</h3>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard icon={UserPlus} label="Hire Rate" value={`${hireRate}%`} trend={`${hiredCount} hired this month`} accent="#009944" />
-          <MetricCard icon={UserMinus} label="Fire / Exit Rate" value={`${fireRate}%`} trend={`${termThisCount} exits this month`} accent="#ef4444" />
+          <MetricCard icon={UserPlus} label="Hire Rate" value={`${hireRate}%`} trend={`${hiredCount} hired this month`} accent="#009944" onClick={() => openDrill('hiredThisMonth')} />
+          <MetricCard icon={UserMinus} label="Fire / Exit Rate" value={`${fireRate}%`} trend={`${termThisCount} exits this month`} accent="#ef4444" onClick={() => openDrill('exitsThisMonth')} />
           <MetricCard icon={DollarSign} label="Cost Per Hire" value={costPerHire == null ? '—' : `₦${Number(costPerHire).toLocaleString()}`} trend="No recruitment cost data" accent="#f59e0b" />
-          <MetricCard icon={Activity} label="Turnover Rate" value={`${turnoverRate}%`} trend={`${termTotalCount} total exits`} accent="#6366f1" />
+          <MetricCard icon={Activity} label="Turnover Rate" value={`${turnoverRate}%`} trend={`${termTotalCount} total exits`} accent="#6366f1" onClick={() => openDrill('turnover')} />
         </div>
       </div>
 
       {/* WORKFORCE STATS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-        <Stat icon={Users} label="Total Employees" value={totalEmployees} accent="#009944" />
-        <Stat icon={Users} label="Active Employees" value={activeCount} accent="#0ea5e9" />
-        <Stat icon={BriefcaseBusiness} label="Pending Recruitment" value={candidates.filter((c) => ['received', 'screening', 'shortlisted'].includes(c.application_status)).length} accent="#f59e0b" />
-        <Stat icon={CalendarDays} label="Interviews" value={interviews.length} accent="#6366f1" />
-        <Stat icon={CalendarDays} label="Pending Leave" value={leave.filter((l) => l.status === 'pending').length} accent="#f43f5e" />
-        <Stat icon={Wallet} label="Payroll Records" value={payroll.length} accent="#14b8a6" />
-        <Stat icon={BriefcaseBusiness} label="Open Jobs" value={jobs.filter((j) => j.status === 'published').length} accent="#84cc16" />
-        <Stat icon={ClipboardCheck} label="Assessments" value={assessments.length} accent="#a855f7" />
+        <Stat icon={Users} label="Total Employees" value={totalEmployees} accent="#009944" onClick={() => openDrill('totalEmployees')} />
+        <Stat icon={Users} label="Active Employees" value={activeCount} accent="#0ea5e9" onClick={() => openDrill('activeEmployees')} />
+        <Stat icon={BriefcaseBusiness} label="Pending Recruitment" value={pendingRecruitment.length} accent="#f59e0b" onClick={() => openDrill('pendingRecruitment')} />
+        <Stat icon={CalendarDays} label="Interviews" value={interviews.length} accent="#6366f1" onClick={() => openDrill('interviews')} />
+        <Stat icon={CalendarDays} label="Pending Leave" value={pendingLeave.length} accent="#f43f5e" onClick={() => openDrill('pendingLeave')} />
+        <Stat icon={Wallet} label="Payroll Records" value={payroll.length} accent="#14b8a6" onClick={() => openDrill('payroll')} />
+        <Stat icon={BriefcaseBusiness} label="Open Jobs" value={publishedJobs.length} accent="#84cc16" onClick={() => openDrill('openJobs')} />
+        <Stat icon={ClipboardCheck} label="Assessments" value={assessments.length} accent="#a855f7" onClick={() => openDrill('assessments')} />
       </div>
 
       {/* SARA HR Intelligence */}
@@ -177,7 +313,7 @@ export default function HRDashboard() {
             { label: 'Interviews Today', value: interviewsToday, path: '/interviews', color: 'text-violet-600' },
             { label: 'Assessments Pending', value: pendingAssessments, path: '/assessments', color: 'text-rose-600' },
             { label: 'Assessments Done', value: completedAssessments, path: '/assessments', color: 'text-emerald-600' },
-            { label: 'Pending Leave', value: leave.filter((l) => l.status === 'pending').length, path: '/leave-requests', color: 'text-slate-700' },
+            { label: 'Pending Leave', value: pendingLeave.length, path: '/leave-requests', color: 'text-slate-700' },
           ].map((metric) => (
             <button
               key={metric.label}
@@ -190,6 +326,39 @@ export default function HRDashboard() {
           ))}
         </div>
       </div>
+
+      {/* Medical Screening */}
+      {medicalReferrals.length > 0 && (
+        <div className="rounded-xl border border-slate-200 overflow-hidden mb-6 bg-white">
+          <div className="bg-gradient-to-r from-teal-500 to-emerald-500 px-5 py-3 flex items-center gap-2">
+            <Stethoscope className="w-5 h-5 text-white" />
+            <span className="text-white font-semibold text-sm tracking-wide">Medical Screening</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-0 divide-x divide-slate-100">
+            {[
+              { label: 'Total Referrals', value: medicalReferrals.length, color: 'text-slate-700', tab: 'all' },
+              { label: 'Awaiting Hospital', value: medicalAwaitingHospital, color: 'text-blue-600', tab: 'pending' },
+              { label: 'In Progress', value: medicalInProgress, color: 'text-violet-600', tab: 'progress' },
+              { label: 'Awaiting Review', value: medicalAwaitingReview, color: 'text-amber-600', tab: 'review' },
+              { label: 'Cleared', value: medicalCleared, color: 'text-emerald-600', tab: 'completed' },
+              { label: 'Expiring Soon (7d)', value: medicalExpiringSoon, color: 'text-rose-600', tab: 'expiring' },
+            ].map((metric) => (
+              <button
+                key={metric.label}
+                onClick={() => navigate('/medical-management', { state: { tab: metric.tab } })}
+                className="px-4 py-4 text-left hover:bg-slate-50 transition-colors"
+              >
+                <div className={`text-2xl font-bold ${metric.color}`}>{metric.value}</div>
+                <div className="text-xs text-slate-500 mt-0.5">{metric.label}</div>
+              </button>
+            ))}
+          </div>
+          <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-500">
+            {medicalCompleted} completed screening{medicalCompleted === 1 ? '' : 's'} in total.
+            <button onClick={() => navigate('/medical-management')} className="ml-1 font-medium text-teal-600 hover:underline">Open Medical Screening Center →</button>
+          </div>
+        </div>
+      )}
 
       {/* SARA Work Intelligence */}
       {(taskSubmissionsPending > 0 || overdueTasks > 0 || belowTargetKpis > 0) && (
@@ -261,6 +430,14 @@ export default function HRDashboard() {
           </div>
         )}
       </div>
+
+      {activeDrill && (
+        <DrillDownModal
+          open
+          onClose={() => setActiveDrill(null)}
+          {...activeDrill}
+        />
+      )}
     </div>
   )
 }

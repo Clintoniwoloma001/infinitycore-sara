@@ -1,0 +1,111 @@
+import { supabase } from '../../supabaseClient'
+import { invokeBankoneFunction } from './bankoneClient'
+import { rpcWithRetry } from '../rpcHelper'
+import { isAmountKoboString, isDateValidYYYYMMDD } from '../../../supabase/functions/_shared/bankone-core.mjs'
+
+// ---------------------------------------------------------------------------
+// BankOne transaction/health service. Frontend → Edge Functions only.
+// No BankOne token ever appears in a request body produced here (secrets are
+// injected server-side by the edge function).
+// ---------------------------------------------------------------------------
+
+const TRANSACTION_STATUS_FN = 'bankone-transaction-status'
+const HEALTH_FN = 'bankone-health'
+const TEST_CONNECTION_FN = 'bankone-test-connection'
+
+// Convert the user's form input into the Qore-documented body field names.
+export function toStatusPayload(input) {
+  const payload = {
+    RetrievalReference: String(input?.RetrievalReference || '').trim(),
+    TransactionDate: String(input?.TransactionDate || '').trim(),
+  }
+  // Optional documented fields — forwarded verbatim when supplied.
+  if (input?.TransactionType) payload.TransactionType = String(input.TransactionType).trim()
+  if (input?.Amount !== undefined && input?.Amount !== null && String(input.Amount).trim() !== '') {
+    payload.Amount = String(input.Amount).trim()
+  }
+  return payload
+}
+
+export function validateTransactionStatusInput(input) {
+  const retrievalReference = String(input?.RetrievalReference || '').trim()
+  const transactionDate = String(input?.TransactionDate || '').trim()
+  const amount = input?.Amount === undefined || input?.Amount === null ? '' : String(input.Amount).trim()
+  const errors = []
+
+  if (!retrievalReference) errors.push('Retrieval Reference is required.')
+  if (!transactionDate) errors.push('Transaction Date is required.')
+  else if (!isDateValidYYYYMMDD(transactionDate)) errors.push('Transaction Date must be a valid YYYY-MM-DD date.')
+  if (amount && !isAmountKoboString(amount)) errors.push('Amount must be numeric, with up to two decimal places.')
+
+  return { ok: errors.length === 0, errors }
+}
+
+export const bankoneTransactionService = {
+  // Documented BankOne Channels API: Transaction Status Query.
+  async queryTransactionStatus(input) {
+    const validation = validateTransactionStatusInput(input)
+    if (!validation.ok) {
+      const error = new Error(validation.errors.join(' '))
+      error.code = 'invalid_request'
+      error.details = validation.errors
+      throw error
+    }
+    const payload = toStatusPayload(input)
+    const res = await invokeBankoneFunction(TRANSACTION_STATUS_FN, payload)
+    return {
+      success: res.success !== false,
+      provider: res.provider || 'bankone',
+      operation: res.operation || 'transaction_status',
+      status: res.status ?? 200,
+      httpStatus: res.status ?? 200,
+      requestId: res.requestId || null,
+      providerStatus: res.providerStatus ?? null,
+      responseCode: res.responseCode ?? null,
+      responseMessage: res.responseMessage ?? null,
+      data: res.data ?? null,
+      raw: res.raw ?? null,
+      durationMs: res.durationMs ?? null,
+      error: res.error || null,
+    }
+  },
+
+  validateTransactionStatusInput,
+
+  // Internal configuration health (never a provider call).
+  async providerHealth() {
+    return invokeBankoneFunction(HEALTH_FN, {})
+  },
+
+  // Safe capability/configuration diagnostic. This is intentionally separate
+  // from the passive overview health check and from transaction_status.
+  async testConnection() {
+    try {
+      return await invokeBankoneFunction(TEST_CONNECTION_FN, {})
+    } catch (error) {
+      if (error?.envelope) return error.envelope
+      throw error
+    }
+  },
+
+  // Phase 15 integration overview for the configured environment.
+  async integrationHealth(environment = 'sandbox') {
+    return rpcWithRetry(() => supabase.rpc('integration_health', { p_environment: environment }))
+  },
+
+  // Masked configuration surface (secrets are never returned by the RPC).
+  async integrationConfig(environment = 'sandbox') {
+    const config = await rpcWithRetry(() => supabase.rpc('integration_get_config', { p_environment: environment }))
+    if (Array.isArray(config)) {
+      return config.find((row) => row?.provider === 'bankone' && row?.environment === environment) || null
+    }
+    return config?.provider && config.provider !== 'bankone' ? null : config
+  },
+
+  // Recent masked provider call logs.
+  async recentLogs(environment = 'sandbox', limit = 25) {
+    return rpcWithRetry(() => supabase.rpc('integration_get_logs', { p_environment: environment, p_limit: limit }))
+  },
+}
+
+export default bankoneTransactionService

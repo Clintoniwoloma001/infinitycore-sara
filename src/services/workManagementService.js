@@ -250,6 +250,7 @@ export const workManagementService = {
       .select('department')
       .not('department', 'is', null)
       .neq('department', '')
+      .eq('is_archived', false)
     if (error) throw error
     const depts = [...new Set((data || []).map((d) => d.department))]
     return depts

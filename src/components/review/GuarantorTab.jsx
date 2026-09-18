@@ -94,7 +94,8 @@ export default function GuarantorTab({
         <>
           <SubSection title="Guarantor Identity (verified)" icon={User}>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
-              <InfoRow label="Phone" value={verification.phone} />
+               <InfoRow label="Legal / Full Name" value={verification.verified_full_name || verification.guarantor_name} />
+               <InfoRow label="Phone" value={verification.phone} />
               <InfoRow label="Residential Address" value={verification.residential_address} />
               <InfoRow label="Occupation" value={verification.occupation} />
               <InfoRow label="Employer / Business" value={verification.employer} />

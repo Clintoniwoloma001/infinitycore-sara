@@ -14,11 +14,14 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:install": "playwright install chromium",
+    "test:bankone": "node scripts/test-bankone-integration.mjs",
     "test:termination-auth": "node scripts/verify-termination-auth.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",
+    "html2pdf.js": "^0.10.3",
     "lucide-react": "^0.475.0",
+    "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",

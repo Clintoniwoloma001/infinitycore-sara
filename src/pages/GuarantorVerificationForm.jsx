@@ -84,6 +84,7 @@ export default function GuarantorVerificationForm() {
         if (!active) return
         setDetails(data)
         setForm({
+          full_name: data.verified_full_name || data.guarantor_name || '',
           phone: data.phone || '',
           residential_address: data.residential_address || '',
           occupation: data.occupation || '',
@@ -142,7 +143,7 @@ export default function GuarantorVerificationForm() {
   }
 
   const checklist = useMemo(() => ({
-    identity: !!(form.phone && form.residential_address && form.occupation && form.employer && form.bvn && form.nin),
+    identity: !!(form.full_name && form.phone && form.residential_address && form.occupation && form.employer && form.bvn && form.nin),
     documents: DOC_TYPES.filter((d) => d.required).every((d) => documents.some((doc) => doc.document_type === d.key)),
     selfie: !!selfie,
     signature: !!signature,
@@ -195,8 +196,11 @@ export default function GuarantorVerificationForm() {
   const stepContent = useMemo(() => {
     if (step === 1) return (
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="Full Name" >
+        <Field label="Expected Guarantor Name">
           <input className={`${inputCls} bg-slate-50`} value={details?.guarantor_name || ''} readOnly />
+        </Field>
+        <Field label="Legal / Full Name" required>
+          <input className={inputCls} value={form.full_name || ''} onChange={set('full_name')} placeholder="Your full legal name" />
         </Field>
         <Field label="Email">
           <input className={`${inputCls} bg-slate-50`} value={details?.guarantor_email || ''} readOnly />

@@ -18,7 +18,7 @@ import { canTerminateEmployee } from './terminationAuthorization'
 // ------------------------------------------------------------------
 
 // Intents the deterministic parser emits.
-export const LOCAL_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE', 'CONFIRM', 'CANCEL', 'HELP', 'NAVIGATE', 'ROLE_CHANGE_DENIED', 'UNKNOWN']
+export const LOCAL_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE', 'CONFIRM', 'CANCEL', 'HELP', 'NAVIGATE', 'ROLE_CHANGE_DENIED', 'UNKNOWN', 'COMMS_PENDING_ACK', 'COMMS_ANNOUNCEMENTS', 'COMMS_SEARCH']
 
 // Intents the Edge Function may return on top of the local set.
 export const AI_INTENTS = ['DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS', 'TERMINATE_EMPLOYEE']
@@ -30,7 +30,7 @@ export const CONSEQUENTIAL_INTENTS = ['APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINAT
 
 // Reads that are safe to run once the authenticated user can reach them —
 // record access still comes from RLS-scoped queries.
-export const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS', 'NAVIGATE']
+export const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS', 'NAVIGATE', 'COMMS_PENDING_ACK', 'COMMS_ANNOUNCEMENTS', 'COMMS_SEARCH']
 
 // Read intents never need extra gates — record access still comes from
 // RLS-scoped queries. Write intents require either the leave-management
@@ -94,6 +94,8 @@ function sanitizeAiResult(raw) {
     if (typeof e.leave_type === 'string' && e.leave_type) filters.leave_type = e.leave_type
     if (typeof e.branch === 'string' && e.branch) filters.branch = e.branch
     if (Array.isArray(e.traits) && e.traits.length) filters.traits = e.traits
+    if (typeof e.query === 'string' && e.query) filters.query = e.query
+    if (e.official === true) filters.official = 'true'
   }
   if (typeof raw.criteria?.max_days === 'number') filters.max_days = raw.criteria.max_days
   if (typeof raw.criteria?.min_days === 'number') filters.min_days = raw.criteria.min_days

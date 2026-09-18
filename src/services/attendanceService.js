@@ -19,13 +19,13 @@ import { sendInAppNotification } from './notificationService'
 // late / early / on-time interpretation, used by the Attendance menu,
 // the clock card and SARA. It reads the schedule stored in the DB
 // (branch → work_start_time / work_end_time / grace_period_minutes)
-// and compares in the platform timezone (Africa/Lagos by default),
+// and compares in the fixed Africa/Lagos (GMT+1) timezone,
 // never UTC-stamped-as-local.
 // ------------------------------------------------------------------
 
 export const DEFAULT_ATTENDANCE_TIMEZONE = 'Africa/Lagos'
 
-let _requirementsCache = null
+const performanceNow = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 
 function parseHHMM(value) {
   if (!value) return null
@@ -65,6 +65,37 @@ function timeZoneDateKey(date, timeZone) {
  */
 export function platformDateKey(date = new Date(), timeZone = DEFAULT_ATTENDANCE_TIMEZONE) {
   return timeZoneDateKey(date, timeZone)
+}
+
+/**
+ * Get a server-time snapshot. The midpoint of the request is used so the
+ * live clock is independent of a device clock that is wrong or adjusted.
+ */
+export async function getNetworkTime() {
+  const requestStartedAt = performanceNow()
+  const { data, error } = await supabase.rpc('get_attendance_network_time')
+  const responseReceivedAt = performanceNow()
+  if (error) throw error
+  const serverTimeMs = new Date(data).getTime()
+  if (!Number.isFinite(serverTimeMs)) throw new Error('The attendance server returned an invalid time.')
+  return {
+    serverTimeMs,
+    referencePerformanceMs: requestStartedAt + ((responseReceivedAt - requestStartedAt) / 2),
+  }
+}
+
+export function formatAttendanceTime(value, timeZone = DEFAULT_ATTENDANCE_TIMEZONE, options = {}) {
+  if (!value) return '—'
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      ...options,
+    }).format(new Date(value))
+  } catch {
+    return '—'
+  }
 }
 
 /**
@@ -195,8 +226,10 @@ export function getPosition() {
  */
 export function normalizeAttendanceError(message) {
   const msg = message || 'Attendance action failed. Please try again.'
-  if (msg.startsWith('OUTSIDE_GEOFENCE:')) return msg.replace('OUTSIDE_GEOFENCE:', '')
+  if (msg.startsWith('OUTSIDE_GEOFENCE:')) return 'Not within bank or branch allowed clocking radius.'
+  if (msg.startsWith('GEOFENCE_NOT_CONFIGURED:')) return msg.replace('GEOFENCE_NOT_CONFIGURED:', '')
   if (msg.startsWith('LOCATION_REQUIRED:')) return msg.replace('LOCATION_REQUIRED:', '')
+  if (msg.startsWith('LOCATION_INVALID:')) return msg.replace('LOCATION_INVALID:', '')
   return msg
 }
 
@@ -215,25 +248,24 @@ export const attendanceService = {
 
   /**
    * Platform attendance policy + schedule. Distinguishes "policy requires
-   * GPS" from "GPS unavailable". Cached per session unless {force:true}.
+   * GPS" from "GPS unavailable". The database is read on each request so
+   * Platform Settings changes are picked up without a stale client cache.
    */
-  async getAttendanceRequirements({ force = false } = {}) {
-    if (!force && _requirementsCache) return _requirementsCache
+  async getAttendanceRequirements() {
     const { data, error } = await supabase.rpc('get_attendance_requirements')
     if (error) throw error
-    const req = {
+    return {
       requireGpsClockIn: data?.require_gps_clock_in !== false,
       requireGpsClockOut: data?.require_gps_clock_out !== false,
       geofenceEnabled: data?.geofence_enabled !== false,
+      defaultGeofenceRadius: data?.default_geofence_radius ?? 150,
       lateThresholdMinutes: data?.late_threshold_minutes ?? 15,
       earlyDepartureThresholdMinutes: data?.early_departure_threshold_minutes ?? 30,
       defaultWorkStartTime: data?.default_work_start_time || '08:00',
       defaultWorkEndTime: data?.default_work_end_time || '17:00',
       defaultGracePeriodMinutes: data?.default_grace_period_minutes ?? 15,
-      appTimezone: data?.app_timezone || DEFAULT_ATTENDANCE_TIMEZONE,
+      appTimezone: DEFAULT_ATTENDANCE_TIMEZONE,
     }
-    _requirementsCache = req
-    return req
   },
 
   /** Build the canonical schedule object for calculateAttendanceState(). */
@@ -249,7 +281,8 @@ export const attendanceService = {
 
   async getToday(employeeId) {
     const { appTimezone } = await this.getAttendanceRequirements()
-    const today = timeZoneDateKey(new Date(), appTimezone)
+    const networkTime = await getNetworkTime()
+    const today = timeZoneDateKey(new Date(networkTime.serverTimeMs), appTimezone)
     const { data, error } = await supabase
       .from('attendance_records')
       .select('*')
@@ -258,6 +291,12 @@ export const attendanceService = {
       .limit(1)
     if (error) throw error
     return data?.[0] || null
+  },
+
+  async reconcileAutoClockouts() {
+    const { data, error } = await supabase.rpc('attendance_auto_clockout_close_sessions')
+    if (error) throw error
+    return data
   },
 
   async getHistory(employeeId, { startDate, endDate, limit = 90 } = {}) {
@@ -282,7 +321,7 @@ export const attendanceService = {
   async clockIn(geo) {
     const req = await this.getAttendanceRequirements()
     let coords = geo || null
-    if (req.requireGpsClockIn && !coords) {
+    if ((req.requireGpsClockIn || req.geofenceEnabled) && !coords) {
       coords = await getPosition()
     }
     const { data, error } = await supabase.rpc('clock_in_secure', {
@@ -318,7 +357,7 @@ export const attendanceService = {
   async clockOut(attendanceId, geo) {
     const req = await this.getAttendanceRequirements()
     let coords = geo || null
-    if (req.requireGpsClockOut && !coords) {
+    if ((req.requireGpsClockOut || req.geofenceEnabled) && !coords) {
       coords = await getPosition()
     }
     const { data, error } = await supabase.rpc('clock_out_secure', {

@@ -19,13 +19,14 @@ export function EmptyState({ title = 'No records found', description = 'There is
   )
 }
 
-export function ErrorState({ title = 'Unable to load data', message }) {
+export function ErrorState({ title = 'Unable to load data', message, children }) {
   return (
     <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
       <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-600" />
       <div>
         <p className="font-semibold">{title}</p>
         {message && <p className="mt-1 text-amber-800">{message}</p>}
+        {children}
       </div>
     </div>
   )

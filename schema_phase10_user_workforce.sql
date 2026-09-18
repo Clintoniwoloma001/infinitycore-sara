@@ -1195,6 +1195,21 @@ WITH CHECK (
     )
 );
 
+DROP POLICY IF EXISTS "attendance_config_insert"
+ON public.attendance_config;
+
+CREATE POLICY "attendance_config_insert"
+ON public.attendance_config
+FOR INSERT
+TO authenticated
+WITH CHECK (
+    public.current_role() IN (
+        'super_admin',
+        'admin',
+        'hr_manager'
+    )
+);
+
 
 -- Seed default configuration
 
