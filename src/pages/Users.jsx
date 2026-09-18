@@ -550,7 +550,8 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
       const list = res?.results || []
       setResults({ list, summary: userProvisioningService.summarizeResults(list) })
       const ok = list.filter((r) => ['SUCCESS', 'RESENT'].includes(r.result)).length
-      showToast(ok ? `Invitation sent successfully to ${selectedEmployee.email}.` : 'Invitation processed — check the result below')
+      const firstMessage = list.find((r) => r?.message)?.message || list.find((r) => r?.error)?.error || null
+      showToast(ok ? `Invitation sent successfully to ${selectedEmployee.email}.` : (firstMessage || 'Invitation processed — check the result below'))
       if (ok) onProvisioned()
     } catch (e) {
       setError(e?.message || `Invitation request failed. Confirm the invite-employees Edge Function is deployed (HTTP ${e?.context?.status || e?.status || 'unknown'}).`)

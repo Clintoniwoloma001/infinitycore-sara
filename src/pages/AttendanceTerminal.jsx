@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Fingerprint, Loader2, Check, X, Clock, MapPin, ShieldCheck } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
-import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, normalizeAttendanceError } from '../services/attendanceService'
+import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, getPosition, normalizeAttendanceError } from '../services/attendanceService'
 import { biometricService } from '../services/biometricService'
 import { normalizeEmployeeId, canonicalEmployeeId } from '../utils/employeeId'
 import { useNetworkTime } from '../hooks/useNetworkTime'
@@ -29,6 +29,9 @@ export default function AttendanceTerminal() {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
+  const [geo, setGeo] = useState(null)
+  const [geoStatus, setGeoStatus] = useState('idle')
+  const [locationCheck, setLocationCheck] = useState(null)
   const [timeZone, setTimeZone] = useState(DEFAULT_ATTENDANCE_TIMEZONE)
   const { now: currentTime, synced: networkTimeSynced } = useNetworkTime()
   // Confirmed identity — shown before recording attendance
@@ -67,8 +70,26 @@ export default function AttendanceTerminal() {
         setBusy(false)
         return
       }
-      setConfirmed(publicMode ? { employee_number: pin, public: true } : lookup.employee)
+      const identity = publicMode
+        ? { employee_number: lookup.employee_number || pin, employee_name: lookup.employee_name, public: true }
+        : lookup.employee
+      setConfirmed(identity)
+      if (publicMode) {
+        setGeoStatus('fetching')
+        setLocationCheck(null)
+        const position = await getPosition()
+        setGeo(position)
+        const checked = await attendanceService.validatePublicTerminalLocation({
+          token: terminalToken,
+          employeeIdentifier: identity.employee_number,
+          eventType: 'CLOCK_IN',
+          geo: position,
+        })
+        setLocationCheck(checked)
+        setGeoStatus('ok')
+      }
     } catch (e) {
+      if (publicMode) setGeoStatus('denied')
       setError(e?.message || 'Employee lookup failed')
     } finally {
       setBusy(false)
@@ -81,11 +102,26 @@ export default function AttendanceTerminal() {
     setError('')
     setResult(null)
     try {
+      let actionGeo = geo
+      if (publicMode) {
+        setGeoStatus('fetching')
+        actionGeo = await getPosition()
+        const checked = await attendanceService.validatePublicTerminalLocation({
+          token: terminalToken,
+          employeeIdentifier: confirmed.employee_number || pin,
+          eventType,
+          geo: actionGeo,
+        })
+        setGeo(actionGeo)
+        setLocationCheck(checked)
+        setGeoStatus('ok')
+      }
       const data = publicMode
         ? await attendanceService.clockPublicTerminal({
           token: terminalToken,
           employeeIdentifier: confirmed.employee_number || pin,
           eventType,
+          geo: actionGeo,
         })
         : await attendanceEngineService.simulateDeviceEvent({
           deviceId: selectedDevice.id,
@@ -98,9 +134,12 @@ export default function AttendanceTerminal() {
       if (data?.success) {
         setResult({
           success: true,
-           name: publicMode ? 'Attendance recorded' : (data.employee_name || confirmed.full_name),
+           name: publicMode ? (data.employee_name || confirmed.employee_name || 'Attendance recorded') : (data.employee_name || confirmed.full_name),
           eventType,
           time: data.event_time || data.server_time,
+          location: data.actual_location_name,
+          assignedBranch: data.assigned_branch_name,
+          workHours: data.work_hours,
         })
         setConfirmed(null)
         setPin('')
@@ -157,6 +196,9 @@ export default function AttendanceTerminal() {
     setConfirmed(null)
     setError('')
     setPin('')
+    setGeo(null)
+    setLocationCheck(null)
+    setGeoStatus('idle')
   }
 
   const greeting = (() => {
@@ -212,6 +254,11 @@ export default function AttendanceTerminal() {
             <p className="text-2xl font-bold text-white mb-2">{result.name}</p>
             <p className="text-white text-lg font-medium">{result.eventType.replace(/_/g, ' ')} SUCCESSFUL</p>
             <p className="text-white/70 text-sm mt-2">{formatAttendanceTime(result.time, timeZone)}</p>
+            {result.location && <p className="text-white/90 text-sm mt-2">Location: {result.location}</p>}
+            {result.assignedBranch && result.location && result.assignedBranch !== result.location && (
+              <p className="text-white/80 text-xs mt-1">Assigned branch: {result.assignedBranch}</p>
+            )}
+            {result.workHours != null && <p className="text-white/80 text-xs mt-1">Hours: {result.workHours}</p>}
           </div>
         )}
 
@@ -232,13 +279,35 @@ export default function AttendanceTerminal() {
             </div>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#009944] to-[#007a36] flex items-center justify-center text-white font-bold text-lg">
-                {(confirmed.full_name || '?').split(' ').filter(Boolean).slice(0, 2).map((n) => n[0]?.toUpperCase()).join('')}
+                {(confirmed.full_name || confirmed.employee_name || '?').split(' ').filter(Boolean).slice(0, 2).map((n) => n[0]?.toUpperCase()).join('')}
               </div>
               <div>
-                <p className="font-semibold text-slate-900 text-lg leading-tight">{confirmed.public ? 'Employee number verified' : (confirmed.full_name || 'Unknown')}</p>
+                <p className="font-semibold text-slate-900 text-lg leading-tight">{confirmed.public ? (confirmed.employee_name || 'Employee number verified') : (confirmed.full_name || 'Unknown')}</p>
                 <p className="font-mono text-sm text-[#009944] font-medium">{confirmed.employee_number || '—'}</p>
               </div>
             </div>
+            {publicMode && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 mb-4 text-sm">
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-slate-500" />
+                  {geoStatus === 'fetching' && <span className="text-slate-600">Checking location…</span>}
+                  {geoStatus === 'denied' && <span className="text-rose-600">Location is required to clock in or out.</span>}
+                  {geoStatus === 'ok' && locationCheck?.valid && (
+                    <span className="text-emerald-700">
+                      Location verified — {locationCheck.actual_location_name || 'approved attendance location'}
+                    </span>
+                  )}
+                </div>
+                {geoStatus === 'ok' && locationCheck?.valid && (
+                  <p className="text-xs text-slate-500 mt-1 ml-6">
+                    {locationCheck.location_difference
+                      ? `Clocking from ${locationCheck.actual_location_name}. Your assigned branch is ${locationCheck.assigned_branch_name || 'different branch'}.`
+                      : 'Clock-in location matches your assigned branch.'}
+                    {locationCheck.distance != null ? ` Distance: ${Math.round(locationCheck.distance)}m.` : ''}
+                  </p>
+                )}
+              </div>
+            )}
             {!confirmed.public && <div className="grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-lg bg-slate-50 p-3">
                 <p className="text-xs text-slate-500">Department</p>
@@ -252,14 +321,14 @@ export default function AttendanceTerminal() {
             <div className="grid grid-cols-2 gap-3 mt-4">
               <button
                 onClick={() => handleClock('CLOCK_IN')}
-                disabled={busy || !networkTimeSynced}
+                disabled={busy || !networkTimeSynced || (publicMode && !locationCheck?.valid)}
                 className="h-12 rounded-xl bg-[#009944] text-white font-medium hover:bg-[#007a36] transition-all disabled:opacity-30 flex items-center justify-center gap-2"
               >
                 {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock In</>}
               </button>
               <button
                 onClick={() => handleClock('CLOCK_OUT')}
-                disabled={busy || !networkTimeSynced}
+                disabled={busy || !networkTimeSynced || (publicMode && !locationCheck?.valid)}
                 className="h-12 rounded-xl bg-rose-500/80 text-white font-medium hover:bg-rose-600 transition-all disabled:opacity-30 flex items-center justify-center gap-2"
               >
                 {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock Out</>}

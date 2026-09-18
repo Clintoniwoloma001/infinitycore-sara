@@ -58,21 +58,46 @@ export const userInvitationService = {
     })
   },
 
-  // Employees without an auth account (user_id is null). Rows without an
-  // email remain visible so HR gets the required correction message instead
-  // of silently losing the employee from the picker.
+  // Employees without a valid linked profile/auth account. Rows without an
+  // email remain visible so HR gets a correction message instead of silently
+  // losing the employee from the picker. Stale `user_id` references and orphaned
+  // auth accounts are treated as eligible for reconciliation rather than as a
+  // completed account.
   async listUninvited() {
     const { data, error } = await supabase
       .from('employees')
       .select('*')
-      .is('user_id', null)
       .eq('is_archived', false)
       .order('full_name', { ascending: true })
     if (error) throw error
+
+    const rows = data || []
+    const userIds = [...new Set(rows.map((employee) => employee.user_id).filter(Boolean))]
+    let profilesByUserId = {}
+
+    if (userIds.length) {
+      const { data: profilesData } = await supabase
+        .from('profiles')
+        .select('id, email, employee_id, status')
+        .in('id', userIds)
+      ;(profilesData || []).forEach((profile) => {
+        profilesByUserId[profile.id] = profile
+      })
+    }
+
+    const eligible = rows.filter((employee) => {
+      if (!employee.user_id) return true
+      const profile = profilesByUserId[employee.user_id]
+      if (!profile) return true
+      if (String(profile.email || '').trim().toLowerCase() !== String(employee.email || '').trim().toLowerCase()) return true
+      if (profile.employee_id && profile.employee_id !== employee.id) return true
+      return false
+    })
+
     try {
-      return await this.enrichEmployeeLocations(data || [])
+      return await this.enrichEmployeeLocations(eligible)
     } catch {
-      return data || []
+      return eligible
     }
   },
 

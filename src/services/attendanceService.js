@@ -507,6 +507,22 @@ export const attendanceService = {
     return data
   },
 
+  async validatePublicTerminalLocation({ token, employeeIdentifier, eventType, geo }) {
+    if (!geo || !Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(geo.lng))) {
+      throw new Error('A valid location is required to verify attendance.')
+    }
+    const { data, error } = await supabase.rpc('validate_attendance_terminal_location', {
+      p_token: token,
+      p_employee_identifier: employeeIdentifier,
+      p_lat: geo.lat,
+      p_lng: geo.lng,
+      p_event_type: eventType,
+    })
+    if (error) throw new Error(normalizeAttendanceError(error.message))
+    if (data?.valid === false) throw new Error(normalizeAttendanceError(data.error))
+    return data
+  },
+
   async clockPublicTerminal({ token, employeeIdentifier, eventType, geo }) {
     const coords = geo || await getPosition()
     if (!coords || !Number.isFinite(Number(coords.lat)) || !Number.isFinite(Number(coords.lng))) {

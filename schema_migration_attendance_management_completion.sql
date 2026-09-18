@@ -927,7 +927,10 @@ begin
   end if;
 
   update public.attendance_devices
-     set device_token = encode(digest(v_raw, 'sha256'), 'hex'),
+     set device_token = encode(
+       extensions.digest(convert_to(v_raw::text, 'UTF8'), 'sha256'::text),
+       'hex'
+     ),
          status = 'active', active = true, updated_at = now()
    where id = v_device.id;
 
@@ -1081,12 +1084,18 @@ begin
     from public.attendance_devices
    where device_type = 'attendance_terminal'
      and status = 'active' and active = true
-     and device_token = encode(digest(coalesce(p_token, ''), 'sha256'), 'hex')
+     and device_token = encode(
+       extensions.digest(convert_to(coalesce(p_token, '')::text, 'UTF8'), 'sha256'::text),
+       'hex'
+     )
    limit 1;
   if not found then return jsonb_build_object('valid', false, 'error', 'This attendance terminal link is invalid or revoked.'); end if;
   if v_normalized = '' then return jsonb_build_object('valid', false, 'error', 'Enter your employee number.'); end if;
 
-  v_identifier_hash := encode(digest(v_normalized, 'sha256'), 'hex');
+  v_identifier_hash := encode(
+    extensions.digest(convert_to(v_normalized::text, 'UTF8'), 'sha256'::text),
+    'hex'
+  );
   select count(*) into v_attempts
     from public.attendance_terminal_attempts
    where terminal_id = v_device.id and identifier_hash = v_identifier_hash
@@ -1134,13 +1143,19 @@ begin
     from public.attendance_devices
    where device_type = 'attendance_terminal'
      and status = 'active' and active = true
-     and device_token = encode(digest(coalesce(p_token, ''), 'sha256'), 'hex')
+     and device_token = encode(
+       extensions.digest(convert_to(coalesce(p_token, '')::text, 'UTF8'), 'sha256'::text),
+       'hex'
+     )
    limit 1;
   if not found then return jsonb_build_object('success', false, 'error', 'This attendance terminal link is invalid or revoked.'); end if;
   if v_normalized = '' then return jsonb_build_object('success', false, 'error', 'Enter your employee number.'); end if;
   if p_lat is null or p_lng is null then return jsonb_build_object('success', false, 'error', 'Location is required to record attendance.'); end if;
 
-  v_identifier_hash := encode(digest(v_normalized, 'sha256'), 'hex');
+  v_identifier_hash := encode(
+    extensions.digest(convert_to(v_normalized::text, 'UTF8'), 'sha256'::text),
+    'hex'
+  );
   select count(*) into v_attempts
     from public.attendance_terminal_attempts
    where terminal_id = v_device.id and identifier_hash = v_identifier_hash

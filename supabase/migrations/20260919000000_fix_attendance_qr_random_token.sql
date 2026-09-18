@@ -70,7 +70,10 @@ begin
   end if;
 
   update public.attendance_devices
-     set device_token = encode(digest(v_raw, 'sha256'), 'hex'),
+     set device_token = encode(
+       extensions.digest(convert_to(v_raw::text, 'UTF8'), 'sha256'::text),
+       'hex'
+     ),
          status = 'active',
          active = true,
          updated_at = now()
