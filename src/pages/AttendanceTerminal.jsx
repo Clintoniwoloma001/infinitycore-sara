@@ -355,7 +355,7 @@ export default function AttendanceTerminal() {
         {/* ID entry */}
         {!result?.success && !confirmed && (
           <div className="bg-white/5 backdrop-blur rounded-2xl border border-white/10 p-6">
-             <p className="text-white/60 text-sm text-center mb-4">{publicMode ? 'Enter your Employee Number' : 'Enter your Employee ID or PIN'}</p>
+             <p className="text-white/60 text-sm text-center mb-4">{publicMode ? 'Enter your Employee Number or Email' : 'Enter your Employee ID or PIN'}</p>
             <input
               type="text"
               value={pin}

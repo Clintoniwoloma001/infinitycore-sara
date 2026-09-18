@@ -1,5 +1,5 @@
 -- DESTRUCTIVE ACCOUNT CLEANUP
--- Keeps only c.iwoloma@infinitymfb.com as an auth user/profile. Employee rows
+-- Keeps only Tamunosikiiwolomaclinton@gmail.com as an auth user/profile. Employee rows
 -- are never deleted: non-kept employees are only unlinked by setting user_id
 -- to NULL. The preflight checks make the entire transaction fail safely if the
 -- keeper account or its single employee record cannot be identified.
@@ -8,7 +8,7 @@ begin;
 
 do $$
 declare
-  v_keeper_email constant text := 'c.iwoloma@infinitymfb.com';
+  v_keeper_email constant text := 'Tamunosikiiwolomaclinton@gmail.com';
   v_keeper_user_id uuid;
   v_keeper_employee_id uuid;
   v_employee_matches integer;
@@ -16,7 +16,7 @@ begin
   select id
     into v_keeper_user_id
     from auth.users
-   where lower(btrim(email)) = v_keeper_email;
+   where lower(btrim(email)) = lower(v_keeper_email);
 
   if v_keeper_user_id is null then
     raise exception 'Account cleanup stopped: auth user % was not found.', v_keeper_email;
@@ -29,7 +29,7 @@ begin
   select count(*)
     into v_employee_matches
     from public.employees
-   where lower(btrim(email)) = v_keeper_email;
+   where lower(btrim(email)) = lower(v_keeper_email);
 
   if v_employee_matches <> 1 then
     raise exception
@@ -40,7 +40,7 @@ begin
   select id
     into v_keeper_employee_id
     from public.employees
-   where lower(btrim(email)) = v_keeper_email;
+   where lower(btrim(email)) = lower(v_keeper_email);
 
   -- Preserve all employee records. Clear every existing account link first,
   -- then link the one verified employee to the retained account.
