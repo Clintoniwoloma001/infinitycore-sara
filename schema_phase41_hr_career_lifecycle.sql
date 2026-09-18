@@ -658,11 +658,12 @@ create policy "interview_questions_insert" on public.interview_questions
 -- ============================================================
 -- gen_random_bytes comes from pgcrypto. Hosted Supabase ships it enabled;
 -- ensure local dev / fresh projects have it too (idempotent).
-create extension if not exists pgcrypto;
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
 
 create or replace function public.generate_secure_token()
 returns text language sql stable set search_path = public, extensions as $$
-  select replace(replace(replace(encode(gen_random_bytes(32), 'base64'), '+', '-'), '/', '_'), '=', '');
+  select replace(replace(replace(encode(extensions.gen_random_bytes(32), 'base64'), '+', '-'), '/', '_'), '=', '');
 $$;
 
 create or replace function public.hr_audit(p_action text, p_entity text, p_id text, p_details text)

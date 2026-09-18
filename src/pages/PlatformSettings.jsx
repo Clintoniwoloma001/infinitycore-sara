@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react'
-import { Settings, Clock, Calendar, MapPin, Shield, Loader2, CheckCircle2, History, Coins, Save } from 'lucide-react'
+import { Settings, Clock, Calendar, MapPin, Shield, Loader2, CheckCircle2, History, Coins, Save, PenLine } from 'lucide-react'
 import { platformSettingsService } from '../services/platformSettingsService'
+import signatureService, { uploadSignature } from '../services/signatureService'
 import { geofenceService } from '../services/geofenceService'
 import { LoadingState, ErrorState } from '../components/PageStates'
 import GeofenceEditor from '../components/attendance/GeofenceEditor'
+import SignatureCaptureModal from '../components/SignatureCaptureModal'
 import { setPlatformCurrency } from '../lib/utils'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
@@ -29,6 +31,7 @@ const TABS = [
   { id: 'attendance', label: 'Attendance', icon: Shield },
   { id: 'geofence', label: 'Geofence', icon: MapPin },
   { id: 'currency', label: 'Currency', icon: Coins },
+  { id: 'signatures', label: 'Document Signatures', icon: PenLine },
   { id: 'audit', label: 'Audit Trail', icon: History },
 ]
 
@@ -45,15 +48,20 @@ export default function PlatformSettings() {
   const [form, setForm] = useState({})
   const [currencyForm, setCurrencyForm] = useState(DEFAULT_CURRENCY)
   const [currencySaving, setCurrencySaving] = useState(false)
+  const [signatures, setSignatures] = useState({ management: null, hrManager: null })
+  const [signatureType, setSignatureType] = useState(null)
+  const [signatureInputMode, setSignatureInputMode] = useState('pad')
+  const [signatureSaving, setSignatureSaving] = useState(false)
 
   const load = async () => {
     setLoading(true)
     setError('')
     try {
-      const [s, brs, audit] = await Promise.all([
+      const [s, brs, audit, configuredSignatures] = await Promise.all([
         platformSettingsService.get(),
         geofenceService.list(),
         platformSettingsService.getAuditTrail(30).catch(() => []),
+        signatureService.getPlatformSignatures(),
       ])
       setSettings(s)
       setForm(s)
@@ -67,6 +75,7 @@ export default function PlatformSettings() {
       })
       setBranches(brs)
       setAuditTrail(audit)
+      setSignatures(configuredSignatures)
       if (brs.length > 0) setSelectedBranch(brs[0])
     } catch (e) {
       setError(e?.message || 'Failed to load settings')
@@ -129,6 +138,7 @@ export default function PlatformSettings() {
       setError('Currency code is required.')
       return
     }
+
     if (!currency_symbol) {
       setError('Currency symbol is required.')
       return
@@ -161,6 +171,29 @@ export default function PlatformSettings() {
       setError(e?.message || 'Failed to save currency settings')
     } finally {
       setCurrencySaving(false)
+    }
+  }
+
+  const saveSignature = async (dataUrl) => {
+    setSignatureSaving(true)
+    try {
+      const uploaded = await uploadSignature({ dataUrl, scope: signatureType })
+      await signatureService.updatePlatformSignature(signatureType, uploaded.path)
+      setSignatures((current) => ({ ...current, [signatureType === 'hr_manager' ? 'hrManager' : 'management']: uploaded.preview }))
+      setSignatureType(null)
+      await load()
+    } finally {
+      setSignatureSaving(false)
+    }
+  }
+
+  const clearSignature = async (type) => {
+    setSignatureSaving(true)
+    try {
+      await signatureService.updatePlatformSignature(type, null)
+      setSignatures((current) => ({ ...current, [type === 'hr_manager' ? 'hrManager' : 'management']: null }))
+    } finally {
+      setSignatureSaving(false)
     }
   }
 
@@ -373,8 +406,38 @@ export default function PlatformSettings() {
                   <GeofenceEditor branch={selectedBranch} onSave={saveGeofence} busy={saving} />
                 </div>
               )}
+
             </>
           )}
+        </div>
+      )}
+
+      {tab === 'signatures' && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-6">
+          <div>
+            <h3 className="text-base font-semibold text-slate-900 uppercase tracking-wide">Document Signatures</h3>
+            <p className="text-sm text-slate-500 mt-1">Signatures are reused automatically on applicable InfinityCore documents.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <SignatureSetting
+              title="Management Signature"
+              description="Used automatically on Staff ID Cards."
+              value={signatures.management}
+              onCapture={() => { setSignatureInputMode('pad'); setSignatureType('management') }}
+              onUpload={() => { setSignatureInputMode('upload'); setSignatureType('management') }}
+              onClear={() => clearSignature('management')}
+              disabled={signatureSaving}
+            />
+            <SignatureSetting
+              title="HR Manager Signature"
+              description="Used automatically for Offer Letters, Memos, and other supported HR documents."
+              value={signatures.hrManager}
+              onCapture={() => { setSignatureInputMode('pad'); setSignatureType('hr_manager') }}
+              onUpload={() => { setSignatureInputMode('upload'); setSignatureType('hr_manager') }}
+              onClear={() => clearSignature('hr_manager')}
+              disabled={signatureSaving}
+            />
+          </div>
         </div>
       )}
 
@@ -404,6 +467,31 @@ export default function PlatformSettings() {
           )}
         </div>
       )}
+      <SignatureCaptureModal
+        open={Boolean(signatureType)}
+        onClose={() => !signatureSaving && setSignatureType(null)}
+        onSave={saveSignature}
+        title={signatureType === 'hr_manager' ? 'HR Manager Signature' : 'Management Signature'}
+        initialMode={signatureInputMode}
+        key={`${signatureType}-${signatureInputMode}`}
+      />
+    </div>
+  )
+}
+
+function SignatureSetting({ title, description, value, onCapture, onUpload, onClear, disabled }) {
+  return (
+    <div className="rounded-xl border border-slate-200 p-4">
+      <p className="font-medium text-slate-800">{title}</p>
+      <p className="text-xs text-slate-500 mt-1">{description}</p>
+      <div className="h-24 mt-4 rounded-lg border border-slate-100 bg-slate-50 flex items-center justify-center">
+        {value ? <img src={value} alt={`${title} preview`} className="max-h-20 max-w-full object-contain" /> : <span className="text-xs text-slate-400">No signature configured</span>}
+      </div>
+      <div className="flex flex-wrap gap-2 mt-3">
+        <button onClick={onCapture} disabled={disabled} className="px-3 py-2 rounded-lg bg-[#009944] text-white text-xs font-medium disabled:opacity-50">{value ? 'Replace' : 'Capture Signature'}</button>
+        <button onClick={onUpload} disabled={disabled} className="px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium disabled:opacity-50">Upload PNG</button>
+        {value && <button onClick={onClear} disabled={disabled} className="px-3 py-2 rounded-lg border border-rose-200 text-rose-600 text-xs font-medium disabled:opacity-50">Clear</button>}
+      </div>
     </div>
   )
 }

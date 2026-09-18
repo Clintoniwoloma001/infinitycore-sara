@@ -613,12 +613,18 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
               )}
               <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
                 {results.list.map((r, i) => {
-                  const meta = userProvisioningService.resultMeta(r.result)
+                  const meta = userProvisioningService.resultMeta(r.result || r.code || 'FAILED')
+                  const detailMessage = r.message || r.error || (['SUCCESS', 'RESENT'].includes(r.result) ? 'Invitation sent.' : 'Invitation failed.')
                   return (
                     <div key={i} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
                       <div className="min-w-0">
-                        <p className="text-slate-700 truncate">{r.employee_name || r.id || '—'}</p>
+                        <p className="text-slate-700 truncate">{r.employee_name || r.email || r.id || 'Employee record'}</p>
                         {r.email && <p className="text-xs text-slate-400 truncate">{r.email}</p>}
+                        {(r.code || r.message || r.error) && (
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            {r.code ? `Code: ${r.code}` : 'Reason:'} {detailMessage}
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <span className={`text-xs font-medium ${meta.color}`}>{meta.label}</span>

@@ -10,6 +10,7 @@ import { renderOfferLetterHtml } from '../../lib/offerLetterDocument'
 import { downloadBlob, offerLetterHtmlToPdf, openOfferPreview } from '../../lib/offerLetterPdf'
 import { computeRemuneration, emptyRemuneration, remunerationFromLegacy, remunerationFromPayroll, PAY_COMPONENTS, COA_COMPONENTS, BENEFIT_COMPONENTS, SOCIAL_COMPONENTS } from '../../lib/remuneration'
 import { defaultSalaryConfig } from '../../config/offerLetterDefaults'
+import signatureService from '../../services/signatureService'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944] bg-white'
 const labelCls = 'block text-xs font-medium text-slate-500 mb-1'
@@ -109,7 +110,8 @@ export default function OfferLetterGenerator({ open, onClose, onSaved, initialOf
       employeeService.list().catch(() => []),
       offerService.listActiveTemplates().catch(() => []),
       getOfferEnvironment(initialOffer?.branch || '').catch(() => null),
-    ]).then(([candidateRows, employeeRows, templateRows, env]) => {
+      signatureService.getPlatformSignatures().catch(() => ({ hrManager: null })),
+    ]).then(([candidateRows, employeeRows, templateRows, env, configuredSignatures]) => {
       if (!active) return
       const selectedTemplate = templateRows.find((item) => item.id === initialOffer?.template_id)
         || templateRows.find((item) => item.is_default && !item.archived)
@@ -123,7 +125,7 @@ export default function OfferLetterGenerator({ open, onClose, onSaved, initialOf
       setSource(initialOffer?.employee_id && !initialOffer?.candidate_id ? 'employee' : 'candidate')
       setPickId(initialOffer?.candidate_id || initialOffer?.employee_id || '')
       setForm(initialOffer ? formFromOffer(initialOffer, person, selectedTemplate, env) : blankForm(env, selectedTemplate))
-      setSignature(selectedTemplate?.signatories?.signature_data || null)
+      setSignature(configuredSignatures.hrManager || selectedTemplate?.signatories?.signature_data || null)
     }).catch((e) => setError(e?.message || 'Offer data could not be loaded.')).finally(() => active && setBusy(''))
     return () => { active = false }
   }, [open, initialOffer])

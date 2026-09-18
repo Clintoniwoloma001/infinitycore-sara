@@ -13,6 +13,8 @@ import { payrollService } from '../services/payrollService'
 import { supabase } from '../supabaseClient'
 import EmployeeHRActions from '../components/EmployeeHRActions'
 import StaffIdCard from '../components/StaffIdCard'
+import SignatureCaptureModal from '../components/SignatureCaptureModal'
+import signatureService, { uploadSignature } from '../services/signatureService'
 import ProfilePhotoModal from '../components/ProfilePhotoModal'
 import BiometricModal from '../components/BiometricModal'
 import EmployeeRecordPrint, { RECORD_SECTIONS, ALL_RECORD_SECTIONS } from '../components/EmployeeRecordPrint'
@@ -175,6 +177,9 @@ export default function EmployeeProfile() {
   const [lifecycleBusy, setLifecycleBusy] = useState(false)
   const [showTerminate, setShowTerminate] = useState(false)
   const [showArchive, setShowArchive] = useState(false)
+  const [managementSignature, setManagementSignature] = useState(null)
+  const [cardHolderSignature, setCardHolderSignature] = useState(null)
+  const [showSignatureCapture, setShowSignatureCapture] = useState(false)
 
   // Record section selection (default = full employee file)
   const [recordSections, setRecordSections] = useState(ALL_RECORD_SECTIONS)
@@ -197,6 +202,12 @@ export default function EmployeeProfile() {
       const emp = await employeeService.getById(id)
       setEmployee(emp)
       setDraft(emp)
+      const [platformSignatures, employeeSignature] = await Promise.all([
+        signatureService.getPlatformSignatures().catch(() => ({ management: null })),
+        signatureService.getEmployeeSignature(id).catch(() => ({ url: null })),
+      ])
+      setManagementSignature(platformSignatures.management)
+      setCardHolderSignature(employeeSignature.url)
       const childs = await employeeService.listChildrenForEmployee(id)
       setChildrenData(childs)
       const docList = await documentService.list('employee', id).catch(() => [])
@@ -530,6 +541,14 @@ export default function EmployeeProfile() {
     } catch (e) {
       setRecordError(e?.message || 'Unable to prepare employee record')
     }
+
+  }
+
+  const saveCardHolderSignature = async (dataUrl) => {
+    const uploaded = await uploadSignature({ dataUrl, scope: 'employee', id })
+    await signatureService.updateEmployeeSignature(id, uploaded.path)
+    setCardHolderSignature(uploaded.preview)
+    setEmployee((current) => ({ ...current, signature_url: uploaded.path }))
   }
 
   const toggleSection = (key) => {
@@ -1352,16 +1371,22 @@ export default function EmployeeProfile() {
             <div className="flex items-center justify-between mb-4 no-print">
               <h3 className="text-lg font-semibold text-slate-900">Staff ID Card</h3>
               <div className="flex items-center gap-3">
-                <button onClick={() => window.print()} className="inline-flex items-center gap-1 text-sm text-[#009944] hover:underline font-medium">
+                <button onClick={() => window.print()} disabled={!managementSignature || !cardHolderSignature} className="inline-flex items-center gap-1 text-sm text-[#009944] hover:underline font-medium disabled:opacity-40 disabled:no-underline">
                   <Printer className="w-4 h-4" /> Print Card
                 </button>
-                <button onClick={() => window.print()} className="inline-flex items-center gap-1 text-sm text-slate-600 hover:underline font-medium">
+                <button onClick={() => window.print()} disabled={!managementSignature || !cardHolderSignature} className="inline-flex items-center gap-1 text-sm text-slate-600 hover:underline font-medium disabled:opacity-40 disabled:no-underline">
                   <Download className="w-4 h-4" /> Download
                 </button>
                 <button onClick={() => setShowCard(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
               </div>
             </div>
             {recordError && <div className="mb-3"><ErrorState message={recordError} /></div>}
+            <div className="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs space-y-1">
+              <p className={managementSignature ? 'text-emerald-700' : 'text-amber-700'}>{managementSignature ? '✓' : '⚠'} Management signature{managementSignature ? '' : ' missing'}</p>
+              <p className={cardHolderSignature ? 'text-emerald-700' : 'text-amber-700'}>{cardHolderSignature ? '✓' : '⚠'} Employee signature{cardHolderSignature ? '' : ' missing'}</p>
+              {!managementSignature && <p className="text-amber-700 mt-1">Management signature is not configured in Platform Settings.</p>}
+              {!cardHolderSignature && <><p className="text-amber-700 mt-1">Card holder signature required</p><button onClick={() => setShowSignatureCapture(true)} className="text-[#009944] font-medium hover:underline">Add Signature</button></>}
+            </div>
 
             {canEdit && (
               <div className="mb-5 rounded-xl border border-slate-200 bg-white p-4">
@@ -1414,6 +1439,8 @@ export default function EmployeeProfile() {
                 issueDate={cardIssueDate}
                 issuedBy={cardIssuedBy}
                 status={cardStatus}
+                managementSignature={managementSignature}
+                cardHolderSignature={cardHolderSignature}
               />
             </div>
 
@@ -1426,11 +1453,19 @@ export default function EmployeeProfile() {
                 issueDate={cardIssueDate}
                 issuedBy={cardIssuedBy}
                 status={cardStatus}
+                managementSignature={managementSignature}
+                cardHolderSignature={cardHolderSignature}
               />
             </PrintPortal>
           </div>
         </div>
       )}
+      <SignatureCaptureModal
+        open={showSignatureCapture}
+        onClose={() => setShowSignatureCapture(false)}
+        onSave={saveCardHolderSignature}
+        title="Add Signature"
+      />
 
       {/* ---- Employee Record Print / Download Modal ---- */}
       {showRecord && (

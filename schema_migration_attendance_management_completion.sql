@@ -10,7 +10,8 @@
 --   * attendance_devices as the existing terminal registry.
 -- ============================================================================
 
-create extension if not exists pgcrypto;
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
 
 -- --------------------------------------------------------------------------
 -- 1. Audit contract repair
@@ -23,7 +24,7 @@ create or replace function public.log_attendance_config_change()
 returns trigger
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_actor text;
@@ -895,11 +896,11 @@ create or replace function public.create_attendance_terminal_token(
 ) returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_device public.attendance_devices%rowtype;
-  v_raw text := encode(gen_random_bytes(32), 'hex');
+  v_raw text := encode(extensions.gen_random_bytes(32), 'hex');
 begin
   if public.current_role() not in ('super_admin', 'admin', 'hr_manager') then
     raise exception 'Not authorized to manage attendance terminals.';

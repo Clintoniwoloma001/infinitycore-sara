@@ -19,6 +19,8 @@ export default function StaffIdCard({
   issueDate = null,
   issuedBy = 'Human Resources',
   status = 'active',
+  managementSignature = null,
+  cardHolderSignature = null,
 }) {
   const name = employee?.full_name || '—'
   const number = employee?.employee_number || employee?.staff_id || employee?.employee_code || '—'
@@ -249,6 +251,11 @@ export default function StaffIdCard({
             )}
           </div>
 
+          <div className="mt-4 pt-3 border-t border-slate-100 grid grid-cols-2 gap-4">
+            <SignatureArea label="Management Signature" src={managementSignature} caption="Management / HR" />
+            <SignatureArea label="Card Holder Signature" src={cardHolderSignature} caption="Employee Signature" />
+          </div>
+
           <div className="mt-4 pt-3 border-t border-slate-100">
             <p
               className="text-[10px] text-[#4B5563] leading-relaxed"
@@ -268,6 +275,19 @@ export default function StaffIdCard({
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function SignatureArea({ label, src, caption }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[8px] text-slate-400 uppercase tracking-wide mb-1">{label}</p>
+      <div className="h-8 flex items-end justify-center">
+        {src && <img src={src} alt={label} className="max-h-8 max-w-full object-contain" />}
+      </div>
+      <div className="h-px bg-slate-400 mt-1" />
+      <p className="text-[8px] text-slate-500 mt-1 text-center">{caption}</p>
     </div>
   )
 }

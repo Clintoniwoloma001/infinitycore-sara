@@ -27,8 +27,12 @@ function text(value) {
   return String(value || '').trim()
 }
 
+function normalizeEmail(value) {
+  return text(value).toLowerCase()
+}
+
 function validEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text(value))
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(value))
 }
 
 function expiryDate() {
@@ -36,16 +40,29 @@ function expiryDate() {
 }
 
 function employeeResult(emp, result, extra = {}) {
+  const code = extra.code || result
+  const message = extra.message || extra.error || null
   return {
-    employee_id: emp?.id,
+    employee_id: emp?.id || null,
     employee_name: emp?.full_name || null,
     email: emp?.email || null,
     department: emp?.department || null,
     branch: emp?.branch || null,
     area: emp?.area || null,
     result,
+    success: ['SUCCESS', 'RESENT'].includes(result),
+    code,
+    message,
     ...extra,
   }
+}
+
+function structuredFailure(code, message, emp = null, result = 'FAILED', extra = {}) {
+  return employeeResult(emp || { id: null, full_name: null, email: null }, result, {
+    code,
+    message,
+    ...extra,
+  })
 }
 
 async function audit(admin, { action, entityType, entityId, actorName, details, severity = 'warning' }) {
@@ -100,6 +117,18 @@ async function latestResendCount(admin, employeeId) {
     .limit(1)
     .maybeSingle()
   return Number(data?.resent_count || 0) + 1
+}
+
+async function getMatchingAuthUser(admin, normalizedEmail) {
+  try {
+    const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 })
+    if (error) throw error
+    const match = (data?.users || []).find((user) => normalizeEmail(user.email || '') === normalizedEmail)
+    return match || null
+  } catch (e) {
+    console.warn('Unable to resolve auth users by email:', e?.message || e)
+    return null
+  }
 }
 
 Deno.serve(async (req) => {
@@ -160,19 +189,23 @@ Deno.serve(async (req) => {
         .select('*')
         .eq('id', employeeId)
         .single()
-      if (employeeError) throw employeeError
+      if (employeeError) {
+        throw new Error(`Selected employee could not be found: ${employeeError.message}`)
+      }
       employee = data
 
-      const email = text(employee.email)
+      const email = normalizeEmail(employee.email)
       if (!validEmail(email)) {
-        results.push(employeeResult(employee, 'INVALID_EMAIL', { error: 'This employee does not have a valid email address. Update the employee record before creating the user account.' }))
-        await recordInvite(admin, { employeeId, email: null, role: intendedRole, result: 'INVALID_EMAIL', error: 'No valid email on employee record', invitedBy: user.id })
+        const structured = structuredFailure('EMPLOYEE_EMAIL_MISSING', 'Selected employee does not have an email address.', employee, 'INVALID_EMAIL')
+        results.push(structured)
+        await recordInvite(admin, { employeeId, email: employee?.email || null, role: intendedRole, result: 'INVALID_EMAIL', error: 'Selected employee does not have an email address.', invitedBy: user.id })
         continue
       }
 
       if (resend) {
         if (!employee.user_id) {
-          results.push(employeeResult(employee, 'FAILED', { error: 'employee_account_not_linked' }))
+          const structured = structuredFailure('EMPLOYEE_ACCOUNT_NOT_LINKED', 'This employee does not have a linked InfinityCore account yet.', employee, 'FAILED', { code: 'EMPLOYEE_ACCOUNT_NOT_LINKED' })
+          results.push(structured)
           continue
         }
 
@@ -181,8 +214,9 @@ Deno.serve(async (req) => {
           .select('id, email, status, full_name')
           .eq('id', employee.user_id)
           .maybeSingle()
-        if (linkedProfileError || !linkedProfile || text(linkedProfile.email).toLowerCase() !== email.toLowerCase()) {
-          results.push(employeeResult(employee, 'FAILED', { error: 'employee_email_account_mismatch' }))
+        if (linkedProfileError || !linkedProfile || normalizeEmail(linkedProfile.email || '') !== email) {
+          const structured = structuredFailure('EMPLOYEE_EMAIL_MISMATCH', 'The employee account is not linked to the selected email address.', employee, 'FAILED', { code: 'EMPLOYEE_EMAIL_MISMATCH' })
+          results.push(structured)
           await audit(admin, {
             action: 'ACCOUNT_ACTIVATION_FAILURE',
             entityType: 'Employee',
@@ -197,7 +231,8 @@ Deno.serve(async (req) => {
         const resetClient = createClient(supabaseUrl, anonKey, { auth: { persistSession: false } })
         const { error: resetError } = await resetClient.auth.resetPasswordForEmail(email, { redirectTo })
         if (resetError) {
-          results.push(employeeResult(employee, 'FAILED', { error: resetError.message }))
+          const structured = structuredFailure('INVITE_RESEND_FAILED', resetError.message, employee, 'FAILED', { code: 'INVITE_RESEND_FAILED' })
+          results.push(structured)
           await recordInvite(admin, { employeeId, email, role: intendedRole, result: 'FAILED', error: resetError.message, invitedBy: user.id, authUserId: employee.user_id })
           continue
         }
@@ -213,55 +248,99 @@ Deno.serve(async (req) => {
           actorName: profile?.full_name || user.email,
           details: `InfinityCore activation invitation resent to ${email}. ${reason}`.trim(),
         })
-        results.push(employeeResult(employee, 'RESENT', { auth_user_id: employee.user_id, expires_at: expiresAt }))
+        results.push(employeeResult(employee, 'RESENT', { auth_user_id: employee.user_id, expires_at: expiresAt, code: 'INVITE_RESENT', message: 'Invitation resent to the employee email.' }))
         continue
       }
 
       if (employee.user_id) {
         const { data: linkedProfile } = await admin.from('profiles').select('id, email, status').eq('id', employee.user_id).maybeSingle()
-        results.push(employeeResult(employee, 'ALREADY_EXISTS', { auth_user_id: employee.user_id, account_status: linkedProfile?.status || 'active' }))
-        await recordInvite(admin, { employeeId, email, role: intendedRole, result: 'ALREADY_EXISTS', status: linkedProfile?.status === 'active' ? 'activated' : 'pending', invitedBy: user.id, authUserId: employee.user_id })
-        continue
+        const isMatchingEmail = normalizeEmail(linkedProfile?.email || '') === email
+        if (isMatchingEmail) {
+          const structured = structuredFailure('USER_ALREADY_EXISTS', 'This employee already has an InfinityCore account.', employee, 'ALREADY_EXISTS', {
+            auth_user_id: employee.user_id,
+            account_status: linkedProfile?.status || 'active',
+          })
+          results.push(structured)
+          await recordInvite(admin, { employeeId, email, role: intendedRole, result: 'ALREADY_EXISTS', status: linkedProfile?.status === 'active' ? 'activated' : 'pending', invitedBy: user.id, authUserId: employee.user_id })
+          continue
+        }
       }
 
-      // Handle an existing profile by exact normalized email instead of
-      // creating a second auth.users identity.
-      const { data: existingProfile } = await admin
+      const { data: existingProfileByEmail } = await admin
         .from('profiles')
         .select('id, email, status, employee_id')
         .ilike('email', email)
         .maybeSingle()
 
-      if (existingProfile) {
-        const { data: linkData, error: linkError } = await userClient.rpc('provision_employee_account', {
-          p_employee_id: employee.id,
-          p_auth_user_id: existingProfile.id,
-          p_role: intendedRole,
-          p_user_type: 'staff',
-          p_reason: reason || 'Existing auth account linked to employee',
+      const existingAuthUser = await getMatchingAuthUser(admin, email)
+      if (existingAuthUser) {
+        const userMessage = existingProfileByEmail?.employee_id && existingProfileByEmail.employee_id !== employee.id
+          ? 'This email already belongs to a different employee account.'
+          : 'This email already belongs to an existing InfinityCore user.'
+        const structured = structuredFailure('USER_ALREADY_EXISTS', userMessage, employee, 'FAILED', {
+          auth_user_id: existingAuthUser.id,
+          code: 'USER_ALREADY_EXISTS',
         })
-        if (linkError) throw linkError
-        const existingPending = existingProfile.status !== 'active'
-        if (existingPending) {
-          const resetClient = createClient(supabaseUrl, anonKey, { auth: { persistSession: false } })
-          const { error: resetError } = await resetClient.auth.resetPasswordForEmail(email, { redirectTo })
-          if (resetError) throw resetError
-          await revokeOpenInvitations(admin, employee.id)
-          const expiresAt = expiryDate()
-          await recordInvite(admin, { employeeId: employee.id, email, role: intendedRole, result: 'RESENT', invitedBy: user.id, authUserId: existingProfile.id, status: 'sent', expiresAt, resentCount: await latestResendCount(admin, employee.id) })
-          results.push(employeeResult(employee, 'RESENT', { auth_user_id: existingProfile.id, expires_at: expiresAt, department: linkData?.department, branch: linkData?.branch }))
-        } else {
-          await recordInvite(admin, { employeeId: employee.id, email, role: intendedRole, result: 'ALREADY_EXISTS', status: 'activated', invitedBy: user.id, authUserId: existingProfile.id })
-          results.push(employeeResult(employee, 'ALREADY_EXISTS', { auth_user_id: existingProfile.id, account_status: existingProfile.status }))
+        results.push(structured)
+        await recordInvite(admin, { employeeId, email, role: intendedRole, result: 'FAILED', error: userMessage, invitedBy: user.id, authUserId: existingAuthUser.id })
+        continue
+      }
+        if (!employee.user_id) {
+          const structured = structuredFailure('EMPLOYEE_ACCOUNT_NOT_LINKED', 'This employee does not have a linked InfinityCore account yet.', employee, 'FAILED', { code: 'EMPLOYEE_ACCOUNT_NOT_LINKED' })
+          results.push(structured)
+          continue
         }
+
+        const { data: linkedProfile, error: linkedProfileError } = await admin
+          .from('profiles')
+          .select('id, email, status, full_name')
+          .eq('id', employee.user_id)
+          .maybeSingle()
+        if (linkedProfileError || !linkedProfile || normalizeEmail(linkedProfile.email || '') !== email) {
+          const structured = structuredFailure('EMPLOYEE_EMAIL_MISMATCH', 'The employee account is not linked to the selected email address.', employee, 'FAILED', { code: 'EMPLOYEE_EMAIL_MISMATCH' })
+          results.push(structured)
+          await audit(admin, {
+            action: 'ACCOUNT_ACTIVATION_FAILURE',
+            entityType: 'Employee',
+            entityId: employee.id,
+            actorName: profile?.full_name || user.email,
+            details: `Cannot resend invitation: ${email} is not linked to the employee auth account`,
+            severity: 'critical',
+          })
+          continue
+        }
+
+        const resetClient = createClient(supabaseUrl, anonKey, { auth: { persistSession: false } })
+        const { error: resetError } = await resetClient.auth.resetPasswordForEmail(email, { redirectTo })
+        if (resetError) {
+          const structured = structuredFailure('INVITE_RESEND_FAILED', resetError.message, employee, 'FAILED', { code: 'INVITE_RESEND_FAILED' })
+          results.push(structured)
+          await recordInvite(admin, { employeeId, email, role: intendedRole, result: 'FAILED', error: resetError.message, invitedBy: user.id, authUserId: employee.user_id })
+          continue
+        }
+
+        await revokeOpenInvitations(admin, employee.id)
+        const expiresAt = expiryDate()
+        const resentCount = await latestResendCount(admin, employee.id)
+        await recordInvite(admin, { employeeId, email, role: intendedRole, result: 'RESENT', invitedBy: user.id, authUserId: employee.user_id, status: 'sent', expiresAt, resentCount })
+        await audit(admin, {
+          action: 'EMPLOYEE_ACCOUNT_INVITATION_RESENT',
+          entityType: 'Employee',
+          entityId: employee.id,
+          actorName: profile?.full_name || user.email,
+          details: `InfinityCore activation invitation resent to ${email}. ${reason}`.trim(),
+        })
+        results.push(employeeResult(employee, 'RESENT', { auth_user_id: employee.user_id, expires_at: expiresAt, code: 'INVITE_RESENT', message: 'Invitation resent to the employee email.' }))
         continue
       }
 
       const { data: authData, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
-        data: { full_name: employee.full_name || '' },
+        data: { full_name: employee.full_name || '', employee_id: employee.id },
         redirectTo,
       })
-      if (inviteError || !authData?.user?.id) throw inviteError || new Error('Supabase did not return the invited auth user')
+      if (inviteError || !authData?.user?.id) {
+        throw inviteError || new Error('Supabase did not return the invited auth user.')
+      }
       createdAuthUserId = authData.user.id
 
       const { data: linked, error: linkError } = await userClient.rpc('provision_employee_account', {
@@ -306,6 +385,8 @@ Deno.serve(async (req) => {
         department: linked?.department,
         branch: linked?.branch,
         area: linked?.area,
+        code: 'INVITE_SENT',
+        message: 'Invitation sent successfully.',
       }))
     } catch (e) {
       const message = String(e?.message || e)
@@ -313,7 +394,9 @@ Deno.serve(async (req) => {
         const { error: cleanupError } = await admin.auth.admin.deleteUser(createdAuthUserId)
         if (cleanupError) console.warn('Failed to clean up incomplete auth user:', cleanupError.message)
       }
-      results.push(employeeResult(employee || { id: employeeId }, 'FAILED', { error: message }))
+      results.push(structuredFailure('INVITE_FAILED', message, employee || { id: employeeId }, 'FAILED', {
+        error: message,
+      }))
       await recordInvite(admin, { employeeId, email: employee?.email || null, role: intendedRole, result: 'FAILED', error: message, invitedBy: user.id, authUserId: createdAuthUserId })
       await audit(admin, {
         action: 'ACCOUNT_ACTIVATION_FAILURE',

@@ -14,6 +14,9 @@ const RESULT_META = {
   RESENT: { label: 'Invitation resent', color: 'text-emerald-600 bg-emerald-50' },
   ALREADY_EXISTS: { label: 'Already has account', color: 'text-amber-600 bg-amber-50' },
   INVALID_EMAIL: { label: 'No email', color: 'text-slate-500 bg-slate-100' },
+  EMPLOYEE_EMAIL_MISSING: { label: 'No email', color: 'text-slate-500 bg-slate-100' },
+  USER_ALREADY_EXISTS: { label: 'Account exists', color: 'text-amber-600 bg-amber-50' },
+  INVITE_FAILED: { label: 'Failed', color: 'text-rose-600 bg-rose-50' },
   FAILED: { label: 'Failed', color: 'text-rose-600 bg-rose-50' },
 }
 
@@ -72,8 +75,11 @@ export const userProvisioningService = {
 
   // Helpers for the provisioning modal
   summarizeResults(results) {
-    const summary = { SUCCESS: 0, RESENT: 0, ALREADY_EXISTS: 0, INVALID_EMAIL: 0, FAILED: 0 }
-    ;(results || []).forEach((r) => { summary[r.result] = (summary[r.result] || 0) + 1 })
+    const summary = { SUCCESS: 0, RESENT: 0, ALREADY_EXISTS: 0, INVALID_EMAIL: 0, EMPLOYEE_EMAIL_MISSING: 0, USER_ALREADY_EXISTS: 0, INVITE_FAILED: 0, FAILED: 0 }
+    ;(results || []).forEach((r) => {
+      const key = r?.result || r?.code || 'FAILED'
+      summary[key] = (summary[key] || 0) + 1
+    })
     return summary
   },
 }

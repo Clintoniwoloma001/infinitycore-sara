@@ -7,6 +7,8 @@ import { employeeService } from '../services/employeeService'
 import { documentService } from '../services/documentService'
 import { supabase } from '../supabaseClient'
 import StaffIdCard from '../components/StaffIdCard'
+import SignatureCaptureModal from '../components/SignatureCaptureModal'
+import signatureService, { uploadSignature } from '../services/signatureService'
 import ProfilePhotoModal from '../components/ProfilePhotoModal'
 import PrintPortal from '../components/PrintPortal'
 import { trainingService, formatTrainingType, hours as trainingHours } from '../services/trainingService'
@@ -56,6 +58,9 @@ export default function Profile() {
   const [showPhotos, setShowPhotos] = useState(false)
   const [loadingCard, setLoadingCard] = useState(false)
   const [cardError, setCardError] = useState('')
+  const [managementSignature, setManagementSignature] = useState(null)
+  const [cardHolderSignature, setCardHolderSignature] = useState(null)
+  const [showSignatureCapture, setShowSignatureCapture] = useState(false)
 
   useEffect(() => {
     const load = async () => {
@@ -70,6 +75,12 @@ export default function Profile() {
         if (emp) {
           setEmployee(emp)
           setDraft(emp)
+          const [platformSignatures, employeeSignature] = await Promise.all([
+            signatureService.getPlatformSignatures().catch(() => ({ management: null })),
+            signatureService.getEmployeeSignature(emp.id).catch(() => ({ url: null })),
+          ])
+          setManagementSignature(platformSignatures.management)
+          setCardHolderSignature(employeeSignature.url)
           // Load child data
           const childData = await employeeService.listChildrenForEmployee(emp.id).catch(() => ({}))
           setEducation(childData.employee_education || [])
@@ -122,6 +133,13 @@ export default function Profile() {
       setLoadingCard(false)
     }
     setShowCard(true)
+  }
+
+  const saveCardHolderSignature = async (dataUrl) => {
+    const uploaded = await uploadSignature({ dataUrl, scope: 'employee', id: employee.id })
+    await signatureService.updateEmployeeSignature(employee.id, uploaded.path)
+    setCardHolderSignature(uploaded.preview)
+    setEmployee((current) => ({ ...current, signature_url: uploaded.path }))
   }
 
   const savePersonal = async () => {
@@ -512,12 +530,18 @@ export default function Profile() {
             <div className="flex items-center justify-between mb-4 no-print">
               <h3 className="text-lg font-semibold text-slate-900">Staff ID Card</h3>
               <div className="flex items-center gap-2">
-                <button onClick={() => window.print()} className="inline-flex items-center gap-1 text-sm text-[#009944] hover:underline font-medium"><Printer className="w-4 h-4" /> Print Card</button>
-                <button onClick={() => window.print()} className="inline-flex items-center gap-1 text-sm text-slate-600 hover:underline font-medium"><Download className="w-4 h-4" /> Download</button>
+                <button onClick={() => window.print()} disabled={!managementSignature || !cardHolderSignature} className="inline-flex items-center gap-1 text-sm text-[#009944] hover:underline font-medium disabled:opacity-40 disabled:no-underline"><Printer className="w-4 h-4" /> Print Card</button>
+                <button onClick={() => window.print()} disabled={!managementSignature || !cardHolderSignature} className="inline-flex items-center gap-1 text-sm text-slate-600 hover:underline font-medium disabled:opacity-40 disabled:no-underline"><Download className="w-4 h-4" /> Download</button>
                 <button onClick={() => setShowCard(false)} className="text-slate-400 hover:text-slate-600">✕</button>
               </div>
             </div>
             {cardError && <div className="mb-3"><ErrorState message={cardError} /></div>}
+            <div className="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs space-y-1">
+              <p className={managementSignature ? 'text-emerald-700' : 'text-amber-700'}>{managementSignature ? '✓' : '⚠'} Management signature{managementSignature ? '' : ' missing'}</p>
+              <p className={cardHolderSignature ? 'text-emerald-700' : 'text-amber-700'}>{cardHolderSignature ? '✓' : '⚠'} Employee signature{cardHolderSignature ? '' : ' missing'}</p>
+              {!managementSignature && <p className="text-amber-700 mt-1">Management signature is not configured in Platform Settings.</p>}
+              {!cardHolderSignature && <button onClick={() => setShowSignatureCapture(true)} className="text-[#009944] font-medium hover:underline">Add Signature</button>}
+            </div>
             <div className="bg-white rounded-xl p-5 flex justify-center">
               <StaffIdCard
                 employee={employee}
@@ -527,6 +551,8 @@ export default function Profile() {
                 issueDate={employee?.staff_id_issued_at}
                 issuedBy={employee?.staff_id_issued_by || 'Human Resources'}
                 status={employee?.staff_id_status || 'active'}
+                managementSignature={managementSignature}
+                cardHolderSignature={cardHolderSignature}
               />
             </div>
             <PrintPortal className="print-idcard">
@@ -538,11 +564,19 @@ export default function Profile() {
                 issueDate={employee?.staff_id_issued_at}
                 issuedBy={employee?.staff_id_issued_by || 'Human Resources'}
                 status={employee?.staff_id_status || 'active'}
+                managementSignature={managementSignature}
+                cardHolderSignature={cardHolderSignature}
               />
             </PrintPortal>
           </div>
         </div>
       )}
+      <SignatureCaptureModal
+        open={showSignatureCapture}
+        onClose={() => setShowSignatureCapture(false)}
+        onSave={saveCardHolderSignature}
+        title="Add Signature"
+      />
     </div>
   )
 }
