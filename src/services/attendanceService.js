@@ -425,7 +425,10 @@ export const attendanceService = {
   async listAll({ startDate, endDate, branchId, department, employeeId, status } = {}) {
     let q = supabase
       .from('attendance_records')
-      .select('*, employees(full_name, department, position, branch, branch_id, user_id, employee_number, staff_id, employee_code, branches(id, branch_name)), branches(id, branch_name)')
+      // attendance_records has both branch_id (assigned branch) and
+      // actual_branch_id (detected clocking branch). Name the FK explicitly
+      // so PostgREST does not reject this embed as ambiguous.
+      .select('*, employees(full_name, department, position, branch, branch_id, user_id, employee_number, staff_id, employee_code, branches(id, branch_name)), branches!attendance_records_branch_id_fkey(id, branch_name)')
       .order('attendance_date', { ascending: false })
       .limit(500)
     if (startDate) q = q.gte('attendance_date', startDate)

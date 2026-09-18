@@ -71,7 +71,12 @@ export default function AttendanceTerminal() {
         return
       }
       const identity = publicMode
-        ? { employee_number: lookup.employee_number || pin, employee_name: lookup.employee_name, public: true }
+        ? {
+            employee_number: lookup.employee_number || pin,
+            employee_name: lookup.employee_name,
+            nextAction: lookup.next_action || null,
+            public: true,
+          }
         : lookup.employee
       setConfirmed(identity)
       if (publicMode) {
@@ -318,22 +323,32 @@ export default function AttendanceTerminal() {
                 <p className="font-medium text-slate-800">{confirmed.branch || '—'}</p>
               </div>
             </div>}
-            <div className="grid grid-cols-2 gap-3 mt-4">
-              <button
-                onClick={() => handleClock('CLOCK_IN')}
-                disabled={busy || !networkTimeSynced || (publicMode && !locationCheck?.valid)}
-                className="h-12 rounded-xl bg-[#009944] text-white font-medium hover:bg-[#007a36] transition-all disabled:opacity-30 flex items-center justify-center gap-2"
-              >
-                {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock In</>}
-              </button>
-              <button
-                onClick={() => handleClock('CLOCK_OUT')}
-                disabled={busy || !networkTimeSynced || (publicMode && !locationCheck?.valid)}
-                className="h-12 rounded-xl bg-rose-500/80 text-white font-medium hover:bg-rose-600 transition-all disabled:opacity-30 flex items-center justify-center gap-2"
-              >
-                {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock Out</>}
-              </button>
-            </div>
+            {publicMode && confirmed.nextAction === 'COMPLETE' ? (
+              <div className="mt-4 h-12 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium flex items-center justify-center gap-2">
+                <Check className="w-5 h-5" /> Attendance complete for today
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 mt-4">
+                {(!publicMode || !confirmed.nextAction || confirmed.nextAction === 'CLOCK_IN') && (
+                  <button
+                    onClick={() => handleClock('CLOCK_IN')}
+                    disabled={busy || !networkTimeSynced || (publicMode && !locationCheck?.valid)}
+                    className="h-12 rounded-xl bg-[#009944] text-white font-medium hover:bg-[#007a36] transition-all disabled:opacity-30 flex items-center justify-center gap-2"
+                  >
+                    {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock In</>}
+                  </button>
+                )}
+                {(!publicMode || !confirmed.nextAction || confirmed.nextAction === 'CLOCK_OUT') && (
+                  <button
+                    onClick={() => handleClock('CLOCK_OUT')}
+                    disabled={busy || !networkTimeSynced || (publicMode && !locationCheck?.valid)}
+                    className="h-12 rounded-xl bg-rose-500/80 text-white font-medium hover:bg-rose-600 transition-all disabled:opacity-30 flex items-center justify-center gap-2"
+                  >
+                    {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Clock className="w-5 h-5" /> Clock Out</>}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
 

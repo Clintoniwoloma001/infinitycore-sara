@@ -507,7 +507,7 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
   const [employees, setEmployees] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [selectedEmployeeId, setSelectedEmployeeId] = useState('')
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState([])
   const [role, setRole] = useState('staff')
   const [reason, setReason] = useState('')
   const [sending, setSending] = useState(false)
@@ -538,20 +538,41 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
     (e.resolved_branch || e.branch || '').toLowerCase().includes(q)
   )
 
-  const selectedEmployee = employees.find((employee) => employee.id === selectedEmployeeId) || null
+  const selectedEmployees = employees.filter((employee) => selectedEmployeeIds.includes(employee.id))
+  const selectedEmployee = selectedEmployees.length === 1 ? selectedEmployees[0] : null
+  const selectedCount = selectedEmployees.length
+  const hasValidEmail = (employee) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(employee?.email || '').trim())
+
+  const toggleEmployee = (employeeId) => {
+    setSelectedEmployeeIds((ids) => ids.includes(employeeId)
+      ? ids.filter((id) => id !== employeeId)
+      : [...ids, employeeId])
+    setResults(null)
+    setError('')
+  }
+
+  const toggleAllFiltered = () => {
+    const validIds = filtered.filter(hasValidEmail).map((employee) => employee.id)
+    const allSelected = validIds.length > 0 && validIds.every((id) => selectedEmployeeIds.includes(id))
+    setSelectedEmployeeIds((ids) => allSelected
+      ? ids.filter((id) => !validIds.includes(id))
+      : [...new Set([...ids, ...validIds])])
+    setResults(null)
+    setError('')
+  }
 
   const send = async () => {
-    if (!selectedEmployee) return
+    if (!selectedCount) return
     setSending(true)
     setError('')
     setResults(null)
     try {
-      const res = await userProvisioningService.inviteEmployees([selectedEmployee], { role, reason })
+      const res = await userProvisioningService.inviteEmployees(selectedEmployees, { role, reason })
       const list = res?.results || []
       setResults({ list, summary: userProvisioningService.summarizeResults(list) })
       const ok = list.filter((r) => ['SUCCESS', 'RESENT'].includes(r.result)).length
       const firstMessage = list.find((r) => r?.message)?.message || list.find((r) => r?.error)?.error || null
-      showToast(ok ? `Invitation sent successfully to ${selectedEmployee.email}.` : (firstMessage || 'Invitation processed — check the result below'))
+      showToast(ok ? `${ok} InfinityCore invitation${ok === 1 ? '' : 's'} sent successfully.` : (firstMessage || 'Invitation processed — check the result below'))
       if (ok) onProvisioned()
     } catch (e) {
       setError(e?.message || `Invitation request failed. Confirm the invite-employees Edge Function is deployed (HTTP ${e?.context?.status || e?.status || 'unknown'}).`)
@@ -589,7 +610,7 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
 
         <div className="p-6 space-y-4">
           <p className="text-sm text-slate-500">
-            Select an employee from the staff record. Their HR information is the source of truth and is copied to the linked InfinityCore profile server-side.
+            Select one or more employees from the staff record. Their HR information is the source of truth and is copied to each linked InfinityCore profile server-side.
             The invitation is sent only to the email stored on that employee record.
           </p>
 
@@ -604,10 +625,10 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
                   return <span key={k} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full font-medium ${meta.color}`}>{meta.label} • {n}</span>
                 })}
               </div>
-              {results.list.some((result) => ['SUCCESS', 'RESENT'].includes(result.result)) && selectedEmployee && (
+              {results.list.some((result) => ['SUCCESS', 'RESENT'].includes(result.result)) && (
                 <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 mb-3">
                   <p><strong>Invitation status:</strong> Sent</p>
-                  <p><strong>Employee:</strong> {selectedEmployee.full_name || '—'}</p>
+                  <p><strong>Employees selected:</strong> {selectedCount}</p>
                   <p><strong>Account:</strong> Pending activation</p>
                   {results.list.find((result) => result.expires_at)?.expires_at && <p><strong>Expires:</strong> {new Date(results.list.find((result) => result.expires_at).expires_at).toLocaleString()}</p>}
                 </div>
@@ -649,6 +670,9 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input className={`${inputCls} pl-9`} placeholder="Search employees..." value={search} onChange={(e) => setSearch(e.target.value)} />
               </div>
+              <button type="button" onClick={toggleAllFiltered} disabled={!filtered.some(hasValidEmail)} className="shrink-0 px-3 h-10 rounded-lg border border-slate-300 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+                {filtered.filter(hasValidEmail).length > 0 && filtered.filter(hasValidEmail).every((employee) => selectedEmployeeIds.includes(employee.id)) ? 'Clear filtered' : 'Select filtered'}
+              </button>
             </div>
           )}
 
@@ -659,26 +683,30 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
             <div className="text-center py-10 text-slate-400 text-sm">No eligible employees found (all staff may already have accounts, or the employee list is empty).</div>
           ) : (
             <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100 bg-white">
-              {filtered.map((e) => (
-                <button key={e.id} type="button" onClick={() => { setSelectedEmployeeId(e.id); setResults(null); setError('') }} className={`w-full text-left flex items-center gap-3 px-4 py-3 transition ${selectedEmployeeId === e.id ? 'bg-emerald-50 ring-1 ring-inset ring-[#009944]' : 'hover:bg-slate-50'}`}>
-                  <span className={`w-4 h-4 rounded-full border-2 shrink-0 ${selectedEmployeeId === e.id ? 'border-[#009944] bg-[#009944] shadow-[inset_0_0_0_3px_white]' : 'border-slate-300'}`} />
+              {filtered.map((e) => {
+                const selected = selectedEmployeeIds.includes(e.id)
+                const validEmail = hasValidEmail(e)
+                return <button key={e.id} type="button" disabled={!validEmail} onClick={() => toggleEmployee(e.id)} className={`w-full text-left flex items-center gap-3 px-4 py-3 transition disabled:cursor-not-allowed disabled:opacity-55 ${selected ? 'bg-emerald-50 ring-1 ring-inset ring-[#009944]' : 'hover:bg-slate-50'}`}>
+                  <span className={`w-4 h-4 rounded border-2 shrink-0 ${selected ? 'border-[#009944] bg-[#009944] shadow-[inset_0_0_0_3px_white]' : 'border-slate-300'}`} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-slate-900 truncate">{e.full_name || '—'}</p>
                     <p className="text-xs text-slate-400 truncate">
                       {e.email || 'No email on record'} {e.department ? `• ${e.department}` : ''} {e.resolved_branch || e.branch ? `• ${e.resolved_branch || e.branch}` : ''}
                     </p>
                   </div>
-                  {selectedEmployeeId === e.id && <CheckCircle2 className="w-4 h-4 text-[#009944] shrink-0" />}
+                  {selected && <CheckCircle2 className="w-4 h-4 text-[#009944] shrink-0" />}
                 </button>
-              ))}
+              })}
             </div>
           ))}
 
           {/* Selected employee source-of-truth record and account configuration */}
           {!results && (
             <div className="border-t border-slate-100 pt-4 space-y-4">
-              {!selectedEmployee ? (
+              {!selectedCount ? (
                 <p className="text-sm text-slate-400 text-center py-2">Select an employee to review their account details.</p>
+              ) : !selectedEmployee ? (
+                <p className="text-sm text-slate-500 text-center py-2">{selectedCount} employees selected. Each account will use its employee record and email address.</p>
               ) : (
                 <>
                   <div>
@@ -723,8 +751,8 @@ function EmployeeProvisioningModal({ onClose, onProvisioned, actorRole, showToas
               )}
               <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2">
                 <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
-                <button onClick={send} disabled={sending || !selectedEmployee} className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
-                  {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Send InfinityCore Invitation
+                <button onClick={send} disabled={sending || !selectedCount} className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+                  {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Send {selectedCount || ''} InfinityCore Invitation{selectedCount === 1 ? '' : 's'}
                 </button>
               </div>
             </div>
