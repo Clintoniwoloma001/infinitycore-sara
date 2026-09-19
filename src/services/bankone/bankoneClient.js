@@ -96,6 +96,9 @@ async function currentSessionState() {
 function errorStage({ body, status, error }) {
   const providerStatus = body?.providerStatus ?? null
   const providerCode = body?.errorCode || body?.error?.code
+  if (providerStatus !== null && providerStatus !== undefined && Number(providerStatus) >= 200 && Number(providerStatus) < 300 && providerCode === 'malformed_response') {
+    return 'bankone_response_processing'
+  }
   if (providerStatus !== null && providerStatus !== undefined) return 'bankone_http'
   if (body?.provider === 'bankone' && ['network', 'timeout', 'malformed_response', 'rate_limited', 'upstream_error'].includes(providerCode)) {
     return 'edge_to_bankone'
@@ -106,7 +109,7 @@ function errorStage({ body, status, error }) {
 }
 
 function defaultErrorMessage({ stage, body, status }) {
-  const providerMessage = body?.error?.providerMessage || (typeof body?.error === 'string' ? body.error : null)
+  const providerMessage = body?.responseMessage || body?.error?.providerMessage || (typeof body?.error === 'string' ? body.error : null)
   if (providerMessage) return providerMessage
   if (body?.error?.message) return body.error.message
   if (body?.message) return body.message
@@ -158,6 +161,23 @@ function makeDiagnosticError({
   error.details = safeBody?.error?.details || safeBody?.details || null
   error.providerRequestSent = safeBody?.providerRequestSent ?? null
   error.providerResponseReceived = safeBody?.providerResponseReceived ?? null
+  error.providerResultValid = safeBody?.providerResultValid ?? false
+  error.providerResultClassification = safeBody?.providerResultClassification ?? null
+  error.transactionSuccess = safeBody?.transactionSuccess ?? null
+  error.transactionStatus = safeBody?.transactionStatus ?? null
+  error.responseCode = safeBody?.responseCode ?? null
+  error.responseMessage = safeBody?.responseMessage ?? null
+  error.retrievalReference = safeBody?.retrievalReference ?? safeBody?.rrn ?? null
+  error.transactionDate = safeBody?.transactionDate ?? null
+  error.transactionType = safeBody?.transactionType ?? null
+  error.amount = safeBody?.amount ?? null
+  error.timestamp = safeBody?.timestamp ?? null
+  error.providerContentType = safeBody?.providerContentType ?? null
+  error.providerBodyFormat = safeBody?.providerBodyFormat ?? null
+  error.providerApplicationStatus = safeBody?.providerApplicationStatus ?? null
+  error.providerResponsePreview = safeBody?.providerResponsePreview ?? null
+  error.diagnostics = safeBody?.diagnostics ?? null
+  error.correlationId = safeBody?.correlationId || requestId
   error.requestTimestamp = safeBody?.requestTimestamp || null
   error.durationMs = safeBody?.durationMs ?? null
   error.responseBody = safeBody
@@ -179,6 +199,23 @@ function makeDiagnosticError({
     providerHttpStatus,
     providerRequestSent: error.providerRequestSent,
     providerResponseReceived: error.providerResponseReceived,
+    providerResultValid: error.providerResultValid,
+    providerResultClassification: error.providerResultClassification,
+    transactionSuccess: error.transactionSuccess,
+    transactionStatus: error.transactionStatus,
+    responseCode: error.responseCode,
+    responseMessage: error.responseMessage,
+    retrievalReference: error.retrievalReference,
+    transactionDate: error.transactionDate,
+    transactionType: error.transactionType,
+    amount: error.amount,
+    timestamp: error.timestamp,
+    providerContentType: error.providerContentType,
+    providerBodyFormat: error.providerBodyFormat,
+    providerApplicationStatus: error.providerApplicationStatus,
+    providerResponsePreview: error.providerResponsePreview,
+    diagnostics: error.diagnostics,
+    correlationId: error.correlationId,
     requestTimestamp: error.requestTimestamp,
     durationMs: error.durationMs,
     requestId,
@@ -260,8 +297,19 @@ export async function invokeBankoneFunction(functionName, body = {}, options = {
         functionInvoked: true,
       })
     }
-    // If the function still returned a success:false envelope (rare), surface it.
-    if (!allowFailureEnvelope && data && typeof data === 'object' && data.success === false) {
+    // A valid provider response may carry success:false because BankOne
+    // rejected the transaction/application request while still returning HTTP
+    // 200. Let the transaction service render that real result instead of
+    // turning it into a generic frontend/Edge error.
+    const processedProviderResponse = data
+      && typeof data === 'object'
+      && data.provider === 'bankone'
+      && data.providerResponseReceived === true
+      && data.providerResultValid === true
+      && data.providerHttpStatus !== null
+      && data.providerHttpStatus !== undefined
+
+    if (!allowFailureEnvelope && data && typeof data === 'object' && data.success === false && !processedProviderResponse) {
       const status = data.statusCode || data.providerStatus || data.status || null
       throw makeDiagnosticError({
         code: data.errorCode || data.error?.code || 'bankone_call_failed',

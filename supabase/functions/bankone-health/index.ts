@@ -20,6 +20,7 @@ import {
   BANKONE_STATUS_ENDPOINT,
   BANKONE_QUERY_ROLES,
   isAllowedBankOneHost,
+  checkSecretHealth,
   resolveBankoneEnvironment,
   newRequestId,
 } from '../_shared/bankone-core.mjs'
@@ -59,8 +60,8 @@ function classifyReachability(call) {
   if (!call) return 'not_tested'
   if (call.status === 'ok') return 'reachable'
   if (call.http_status !== null && call.http_status !== undefined) {
-    if (call.error_category === 'malformed_response' || call.error_category === 'provider_response_invalid') return 'provider_response_invalid'
-    if (call.error_category === 'provider_result_failed' || call.error_category === 'provider_result_unconfirmed') return 'provider_result_failed'
+    if (call.error_category === 'malformed_response' || call.error_category === 'provider_response_invalid' || call.error_category === 'provider_application_response_html' || call.error_category === 'provider_empty_response' || call.error_category === 'provider_malformed_json' || call.error_category === 'provider_application_response_unparseable') return 'provider_response_invalid'
+    if (call.error_category === 'provider_result_failed' || call.error_category === 'provider_result_unconfirmed' || call.error_category === 'BANKONE_PROVIDER_RESULT_FAILED' || call.error_category === 'BANKONE_PROVIDER_RESULT_UNCONFIRMED') return 'provider_result_failed'
     if (call.error_category === 'unauthorized' || call.error_category === 'forbidden') return 'provider_authentication_rejected'
     return 'provider_rejected'
   }
@@ -81,6 +82,14 @@ function safeProviderCall(call) {
     'rate_limited',
     'upstream_error',
     'malformed_response',
+    'provider_application_response_html',
+    'provider_empty_response',
+    'provider_malformed_json',
+    'provider_application_response_unparseable',
+    'provider_result_failed',
+    'provider_result_unconfirmed',
+    'BANKONE_PROVIDER_RESULT_FAILED',
+    'BANKONE_PROVIDER_RESULT_UNCONFIRMED',
   ])
   return {
     status: call.status,
@@ -138,12 +147,15 @@ async function handleHealthRequest(req, origin, requestId) {
   const baseUrlRaw = (Deno.env.get('BANKONE_API_BASE_URL') || '').trim()
   const tokenRaw = (Deno.env.get('BANKONE_API_TOKEN') || '').trim()
   const timeoutRaw = Deno.env.get('BANKONE_TIMEOUT_MS') || ''
-  const baseUrlConfigured = Boolean(baseUrlRaw)
-  const tokenConfigured = Boolean(tokenRaw)
+  const {
+    baseUrlConfigured,
+    tokenConfigured,
+    tokenHasWhitespace,
+    baseUrlValid,
+    timeoutValid,
+    configurationHealthy,
+  } = checkSecretHealth({ baseUrl: baseUrlRaw, token: tokenRaw, timeoutMs: timeoutRaw })
 
-  const baseUrlValid = baseUrlConfigured && isAllowedBankOneHost(baseUrlRaw)
-  const timeoutValid = !timeoutRaw || (Number.isFinite(Number(timeoutRaw)) && Number(timeoutRaw) > 0)
-  const configurationHealthy = baseUrlConfigured && tokenConfigured && baseUrlValid && timeoutValid
   const checks = [{
     name: 'bankone_server_configuration',
     ok: configurationHealthy,
@@ -154,6 +166,8 @@ async function handleHealthRequest(req, origin, requestId) {
   let bankoneReachable = null
   let providerEvidence = null
   let lastProviderCall = null
+  let lastSuccessfulProviderCall = null
+  let lastFailedProviderCall = null
   const environment = resolveBankoneEnvironment(baseUrlRaw || DEFAULT_BANKONE_BASE_URL)
   try {
     const { data: conn } = await admin
@@ -179,9 +193,45 @@ async function handleHealthRequest(req, origin, requestId) {
   } catch {
     lastProviderCall = null
   }
+  try {
+    const [{ data: successful }, { data: failed }] = await Promise.all([
+      admin
+        .from('integration_logs')
+        .select('status, error_category, http_status, duration_ms, created_at')
+        .eq('environment', environment)
+        .eq('operation', 'transaction_status')
+        .eq('status', 'ok')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      admin
+        .from('integration_logs')
+        .select('status, error_category, http_status, duration_ms, created_at')
+        .eq('environment', environment)
+        .eq('operation', 'transaction_status')
+        .in('status', ['error', 'timeout'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ])
+    lastSuccessfulProviderCall = successful || null
+    lastFailedProviderCall = failed || null
+  } catch {
+    lastSuccessfulProviderCall = null
+    lastFailedProviderCall = null
+  }
   const reachabilityStatus = classifyReachability(lastProviderCall)
   if (['reachable', 'provider_rejected', 'provider_authentication_rejected', 'provider_response_invalid', 'provider_result_failed'].includes(reachabilityStatus)) bankoneReachable = true
   else if (reachabilityStatus === 'unreachable') bankoneReachable = false
+
+  const endpointTested = Boolean(lastProviderCall)
+  const authenticationStatus = !lastProviderCall
+    ? 'not_tested'
+    : lastProviderCall.error_category === 'unauthorized' || lastProviderCall.error_category === 'forbidden'
+      ? 'rejected'
+      : lastProviderCall.http_status !== null && lastProviderCall.http_status !== undefined
+        ? 'tested'
+        : 'not_tested'
 
   const message = configurationHealthy
     ? reachabilityStatus === 'not_tested'
@@ -202,9 +252,25 @@ async function handleHealthRequest(req, origin, requestId) {
     databaseEnvironment: environment,
     configuration: {
       configured: configurationHealthy,
+      baseUrlConfigured,
+      baseUrlValid,
+      tokenConfigured,
+      secretPresent: tokenConfigured,
+      tokenHasWhitespace,
+      timeoutValid,
       authType: 'server-side secret',
       transactionStatusEndpoint: BANKONE_STATUS_ENDPOINT,
     },
+    configurationStatus: configurationHealthy ? 'configured' : 'incomplete',
+    baseUrlConfigured,
+    baseUrlValid,
+    tokenConfigured,
+    secretPresent: tokenConfigured,
+    tokenHasWhitespace,
+    authenticationTested: authenticationStatus !== 'not_tested',
+    authenticationStatus,
+    endpointTested,
+    endpointStatus: endpointTested ? 'tested' : 'not_tested',
     providerReachability: reachabilityStatus,
     message,
     transactionStatusEndpoint: BANKONE_STATUS_ENDPOINT,
@@ -213,6 +279,8 @@ async function handleHealthRequest(req, origin, requestId) {
     reachabilityStatus,
     errorCode: configurationHealthy ? null : 'BANKONE_CONFIGURATION_MISSING',
     lastProviderCall: safeProviderCall(lastProviderCall),
+    lastSuccessfulTransactionQuery: safeProviderCall(lastSuccessfulProviderCall),
+    lastFailedTransactionQuery: safeProviderCall(lastFailedProviderCall),
     providerEvidence: providerEvidence
       ? {
           status: providerEvidence.status,

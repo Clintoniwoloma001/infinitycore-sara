@@ -51,6 +51,22 @@ export function resolveBankoneEnvironment(baseUrl) {
   return String(baseUrl || '').toLowerCase().includes('staging') ? BANKONE_ENV_STAGING : BANKONE_ENV_LIVE
 }
 
+export function checkSecretHealth({ baseUrl = '', token = '', timeoutMs = '' } = {}) {
+  const baseUrlConfigured = Boolean(String(baseUrl).trim())
+  const tokenConfigured = Boolean(String(token).trim())
+  const tokenHasWhitespace = tokenConfigured && /\s/.test(String(token))
+  const baseUrlValid = baseUrlConfigured && isAllowedBankOneHost(String(baseUrl).trim())
+  const timeoutValid = !timeoutMs || (Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0)
+  return {
+    baseUrlConfigured,
+    tokenConfigured,
+    tokenHasWhitespace,
+    baseUrlValid,
+    timeoutValid,
+    configurationHealthy: baseUrlConfigured && tokenConfigured && baseUrlValid && timeoutValid && !tokenHasWhitespace,
+  }
+}
+
 // Roles permitted to run live BankOne queries. Mirrors the repository's
 // can_manage_bankone() gate (super_admin/admin/hr_manager/hr_officer/
 // operations_manager) so the Edge Function does not invent a second
@@ -132,15 +148,44 @@ export function buildTransactionStatusRequest({ baseUrl, token, input }) {
 }
 
 // ---------------------------------------------------------------------------
-// Response body parsing — non-JSON upstream bodies are treated as malformed.
+// Response body parsing — read the body as text first so content type and the
+// exact provider format are available to the caller before JSON parsing.
 // ---------------------------------------------------------------------------
 
-export function parseProviderBody(text) {
-  if (text === undefined || text === null || text === '') return { ok: true, value: null }
+export function parseProviderBody(text, contentType = '') {
+  if (text === undefined || text === null || String(text).trim() === '') return { ok: false, value: null, format: 'empty', error: 'empty_body' }
+  const source = String(text).replace(/^\uFEFF/, '').trim()
+  const declaredType = String(contentType || '').toLowerCase()
+  const looksJson = source.startsWith('{') || source.startsWith('[')
   try {
-    return { ok: true, value: JSON.parse(String(text)) }
+    return { ok: true, value: JSON.parse(source), format: 'json' }
   } catch {
-    return { ok: false, value: null, error: 'malformed_json' }
+    const format = declaredType.includes('html') || /^<!doctype\s+html|^<html[\s>]/i.test(source)
+      ? 'html'
+      : declaredType.includes('xml') || /^<\?xml|^<[^>]+>/i.test(source)
+        ? 'xml'
+        : looksJson || declaredType.includes('json')
+          ? 'malformed_json'
+          : 'text'
+    return { ok: false, value: null, error: format === 'malformed_json' ? 'malformed_json' : 'non_json_body', format }
+  }
+}
+
+export function classifyNonJsonCategory(format) {
+  switch (format) {
+    case 'html': return ERROR_CATEGORIES.PROVIDER_APPLICATION_RESPONSE_HTML
+    case 'empty': return ERROR_CATEGORIES.PROVIDER_EMPTY_RESPONSE
+    case 'malformed_json': return ERROR_CATEGORIES.PROVIDER_MALFORMED_JSON
+    default: return ERROR_CATEGORIES.PROVIDER_APPLICATION_RESPONSE_UNPARSEABLE
+  }
+}
+
+export function nonJsonMessage(format) {
+  switch (format) {
+    case 'html': return SAFE_MESSAGES.provider_application_response_html
+    case 'empty': return SAFE_MESSAGES.provider_empty_response
+    case 'malformed_json': return SAFE_MESSAGES.provider_malformed_json
+    default: return SAFE_MESSAGES.provider_application_response_unparseable
   }
 }
 
@@ -165,6 +210,10 @@ export const ERROR_CATEGORIES = {
   NETWORK: 'network',
   PROVIDER_HTTP: 'provider_http',
   MALFORMED_RESPONSE: 'malformed_response',
+  PROVIDER_APPLICATION_RESPONSE_UNPARSEABLE: 'provider_application_response_unparseable',
+  PROVIDER_APPLICATION_RESPONSE_HTML: 'provider_application_response_html',
+  PROVIDER_EMPTY_RESPONSE: 'provider_empty_response',
+  PROVIDER_MALFORMED_JSON: 'provider_malformed_json',
   UNAUTHORIZED: 'unauthorized',
   FORBIDDEN: 'forbidden',
   RATE_LIMITED: 'rate_limited',
@@ -179,6 +228,10 @@ const SAFE_MESSAGES = {
   timeout: 'BankOne did not respond in time. The request timed out.',
   network: 'BankOne could not be reached. Please try again later.',
   malformed_response: 'BankOne returned an unreadable response.',
+  provider_application_response_unparseable: 'BankOne responded, but the response format was not JSON.',
+  provider_application_response_html: 'BankOne responded with an HTML page instead of JSON.',
+  provider_empty_response: 'BankOne responded with an empty body.',
+  provider_malformed_json: 'BankOne responded with malformed JSON.',
   unauthorized: 'BankOne rejected the API credentials (HTTP 401).',
   forbidden: 'BankOne denied this request (HTTP 403).',
   rate_limited: 'BankOne rate limit reached (HTTP 429). Try again shortly.',
@@ -212,6 +265,10 @@ export function failureStatusForCategory(category) {
     case ERROR_CATEGORIES.NETWORK: return 502
     case ERROR_CATEGORIES.MISSING_CREDENTIALS: return 500
     case ERROR_CATEGORIES.MALFORMED_RESPONSE: return 502
+    case ERROR_CATEGORIES.PROVIDER_APPLICATION_RESPONSE_UNPARSEABLE: return 200
+    case ERROR_CATEGORIES.PROVIDER_APPLICATION_RESPONSE_HTML: return 200
+    case ERROR_CATEGORIES.PROVIDER_EMPTY_RESPONSE: return 200
+    case ERROR_CATEGORIES.PROVIDER_MALFORMED_JSON: return 200
     case ERROR_CATEGORIES.ENDPOINT_UNAVAILABLE: return 501
     case ERROR_CATEGORIES.PROVIDER_HTTP: return null
     default: return 500
@@ -250,25 +307,50 @@ export function normalizeResponse({
   environment = null,
   providerRequestSent = true,
   providerResponseReceived = true,
+  contentType = null,
+  bodyFormat = null,
+  diagnostics = null,
 }) {
   const safeRaw = sanitizeProviderValue(raw, secret)
-  const isObject = isPlainObject(safeRaw)
-  const meta = isObject ? safeRaw : null
   const providerResult = projectProviderResult(safeRaw)
+  const providerResultValid = hasProviderResultFields(safeRaw)
   const result = classifyProviderResult(safeRaw)
+  const providerPayload = findProviderPayload(safeRaw)
+  const responseCode = providerField(providerPayload, ['ResponseCode', 'ResultCode', 'Code'])
+  const responseMessage = providerField(providerPayload, ['ResponseMessage', 'ResultMessage', 'Message', 'Description'])
+  const transactionStatus = extractProviderStatus(providerPayload)
+  const transactionSuccess = classifyTransactionStatus(transactionStatus)
+  const retrievalReference = providerField(providerPayload, ['RetrievalReference', 'Reference', 'RRN', 'RetrievalReferenceNumber'])
+  const transactionDate = providerField(providerPayload, ['TransactionDate', 'Date'])
+  const transactionType = providerField(providerPayload, ['TransactionType', 'Type'])
+  const amount = providerField(providerPayload, ['Amount', 'TransactionAmount'])
+  const timestampValue = providerField(providerPayload, ['Timestamp', 'TransactionTimestamp', 'ResponseTimestamp'])
   return {
-    success: result.success,
+    // `success` describes the provider/application result. It is deliberately
+    // separate from transportSuccess and transactionSuccess below.
+    success: providerResultValid && result.success,
     provider: PROVIDER,
     operation,
     status: httpStatus,
     providerStatus: httpStatus,
     providerHttpStatus: httpStatus,
     providerReached: true,
+    transportSuccess: httpStatus >= 200 && httpStatus < 300,
+    providerResultValid,
+    queryProcessed: providerResultValid,
+    applicationSuccess: providerResultValid ? result.success : null,
+    transactionSuccess,
     requestId,
     correlationId: requestId,
-    responseCode: isObject ? String(meta?.ResponseCode ?? meta?.responseCode ?? '') : null,
-    responseMessage: isObject ? String(meta?.ResponseMessage ?? meta?.responseMessage ?? '') : null,
-    transactionStatus: isObject ? extractProviderStatus(meta) : null,
+    responseCode: providerScalar(responseCode),
+    responseMessage: providerScalar(responseMessage),
+    retrievalReference: maskReference(retrievalReference),
+    rrn: maskReference(retrievalReference),
+    transactionDate: providerScalar(transactionDate),
+    transactionType: providerScalar(transactionType),
+    amount: amount === undefined || amount === null || amount === '' ? null : amount,
+    timestamp: providerScalar(timestampValue),
+    transactionStatus,
     providerResult,
     providerResultClassification: result.classification,
     errorCode: result.success ? null : result.errorCode,
@@ -281,6 +363,130 @@ export function normalizeResponse({
     durationMs,
     providerRequestSent,
     providerResponseReceived,
+    providerContentType: contentType || null,
+    providerBodyFormat: bodyFormat || null,
+    providerApplicationStatus: providerResultValid ? (result.success ? 'success' : 'error') : null,
+    diagnostics,
+  }
+}
+
+export function buildUnparseableProviderResponse({
+  rawText = '',
+  httpStatus = 200,
+  contentType = null,
+  bodyFormat = null,
+  operation,
+  requestId,
+  durationMs,
+  secret = '',
+  request = null,
+  timestamp = null,
+  environment = null,
+  providerRequestSent = true,
+  providerResponseReceived = true,
+  diagnostics = null,
+}) {
+  const safePreview = providerResponsePreview(rawText, secret)
+  const category = classifyNonJsonCategory(bodyFormat)
+  return {
+    success: false,
+    provider: PROVIDER,
+    operation,
+    status: httpStatus,
+    providerStatus: httpStatus,
+    providerHttpStatus: httpStatus,
+    providerReached: true,
+    transportSuccess: httpStatus >= 200 && httpStatus < 300,
+    providerResultValid: false,
+    queryProcessed: false,
+    applicationSuccess: false,
+    transactionSuccess: null,
+    providerApplicationStatus: 'unparseable',
+    requestId,
+    correlationId: requestId,
+    responseCode: null,
+    responseMessage: null,
+    retrievalReference: null,
+    rrn: null,
+    transactionDate: null,
+    transactionType: null,
+    amount: null,
+    timestamp: null,
+    transactionStatus: null,
+    providerResult: null,
+    providerResultClassification: bodyFormat || 'unparseable',
+    errorCode: category,
+    error: nonJsonMessage(bodyFormat),
+    data: null,
+    raw: null,
+    request,
+    environment,
+    requestTimestamp: timestamp,
+    durationMs,
+    providerRequestSent,
+    providerResponseReceived,
+    providerContentType: contentType || null,
+    providerBodyFormat: bodyFormat || null,
+    providerResponsePreview: safePreview,
+    diagnostics,
+  }
+}
+
+export function providerResponsePreview(text, secret = '', maxLength = 500) {
+  if (text === undefined || text === null) return null
+  let raw = String(text).replace(/^\uFEFF/, '').trim()
+  if (!raw) return null
+  // Collapse whitespace and strip simple HTML tags before truncation/redaction
+  // so the preview is a safe, readable text fragment.
+  raw = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, maxLength)
+  if (secret) raw = redactText(raw, secret)
+  // Final defensive strip of any plausible bearer/token patterns that might
+  // appear in an error page.
+  raw = raw.replace(/(Bearer\s+)[A-Za-z0-9._~%!@#+=-]+/gi, '$1REDACTED')
+  return raw
+}
+
+export function sanitizeResponseHeaders(headers, secret = '') {
+  const safe = {}
+  for (const [key, value] of headers.entries()) {
+    const lower = key.toLowerCase()
+    if (['authorization', 'cookie', 'set-cookie', 'x-api-key'].includes(lower)) continue
+    let v = String(value || '')
+    if (secret) v = redactText(v, secret)
+    v = v.replace(/(Bearer\s+)[A-Za-z0-9._~%!@#+=-]+/gi, '$1REDACTED')
+    safe[key] = v.slice(0, 500)
+  }
+  return safe
+}
+
+export function providerResponseDiagnostics({
+  rawText = '',
+  response,
+  outgoingUrl = null,
+  secret = '',
+  maxPreviewLength = 500,
+}) {
+  if (!response) return null
+  const finalUrl = response.url || null
+  const redirectDetected = Boolean(outgoingUrl && finalUrl && outgoingUrl !== finalUrl)
+  const contentType = response.headers.get('content-type') || null
+  const contentLength = response.headers.get('content-length') || null
+  const location = response.headers.get('location') || null
+  const server = response.headers.get('server') || null
+  const safeHeaders = sanitizeResponseHeaders(response.headers, secret)
+  const bodyLength = typeof rawText === 'string' ? rawText.length : 0
+  const preview = providerResponsePreview(rawText, secret, maxPreviewLength)
+  return {
+    finalUrl,
+    redirectDetected,
+    outgoingUrl,
+    contentType,
+    contentLength,
+    location,
+    server,
+    safeHeaders,
+    bodyLength,
+    preview,
   }
 }
 
@@ -291,19 +497,108 @@ export function sanitizeProviderValue(value, secret = '') {
       if (/(token|authorization|secret|api[_-]?key|client[_-]?secret)/i.test(key)) {
         return [key, '[REDACTED]']
       }
+      if (/(retrieval[_-]?reference|reference|rrn)/i.test(key) && item !== null && item !== undefined) {
+        return [key, maskReference(item)]
+      }
       return [key, sanitizeProviderValue(item, secret)]
     }))
   }
   return typeof value === 'string' && secret ? redactText(value, secret) : value
 }
 
+function providerKey(value) {
+  return String(value || '').replace(/[^a-z0-9]/gi, '').toLowerCase()
+}
+
+const PROVIDER_ENVELOPE_KEYS = new Set(['data', 'result', 'response', 'transaction', 'payload'])
+const PROVIDER_FIELDS = new Set([
+  'amount',
+  'code',
+  'description',
+  'date',
+  'error',
+  'errormessage',
+  'issuccessful',
+  'message',
+  'reference',
+  'responsecode',
+  'responsemessage',
+  'responsetimestamp',
+  'result',
+  'resultcode',
+  'resultmessage',
+  'retrievalreference',
+  'retrievalreferencenumber',
+  'rrn',
+  'status',
+  'success',
+  'timestamp',
+  'transactionamount',
+  'transactiondate',
+  'transactionstatus',
+  'transactionstatuscode',
+  'transactiontimestamp',
+  'transactiontype',
+  'type',
+])
+
+function hasKnownProviderField(value) {
+  if (!isPlainObject(value)) return false
+  return Object.entries(value).some(([key, item]) => {
+    const normalizedKey = providerKey(key)
+    if (!PROVIDER_FIELDS.has(normalizedKey)) return false
+    // `result`, `data`, and similar keys can be envelopes rather than result
+    // fields. Only count a scalar Result as a direct provider field; nested
+    // objects are inspected recursively below.
+    if (PROVIDER_ENVELOPE_KEYS.has(normalizedKey)) return item === null || typeof item !== 'object'
+    return true
+  })
+}
+
+function findProviderPayload(value, depth = 0) {
+  if (!isPlainObject(value) || depth > 4) return value
+  if (hasKnownProviderField(value)) return value
+  for (const [key, nested] of Object.entries(value)) {
+    if (PROVIDER_ENVELOPE_KEYS.has(providerKey(key)) && isPlainObject(nested)) {
+      const found = findProviderPayload(nested, depth + 1)
+      if (hasKnownProviderField(found)) return found
+    }
+  }
+  return value
+}
+
+function providerField(value, aliases) {
+  const payload = findProviderPayload(value)
+  if (!isPlainObject(payload)) return undefined
+  const wanted = new Set(aliases.map(providerKey))
+  const entry = Object.entries(payload).find(([key, item]) => wanted.has(providerKey(key)) && item !== undefined)
+  return entry ? entry[1] : undefined
+}
+
+function providerScalar(value) {
+  if (value === undefined || value === null || value === '') return null
+  if (typeof value === 'object' || typeof value === 'function') return null
+  return String(value).slice(0, 500)
+}
+
+function hasProviderResultFields(value) {
+  if (!value || typeof value !== 'object') return false
+  if (hasKnownProviderField(value)) return true
+  if (Array.isArray(value)) return value.some((item) => hasProviderResultFields(item))
+  return Object.entries(value).some(([key, nested]) => PROVIDER_ENVELOPE_KEYS.has(providerKey(key)) && hasProviderResultFields(nested))
+}
+
 // BankOne field names vary by endpoint; sample a small known set without
 // fabricating a schema. Null when none are present.
 export function extractProviderStatus(meta) {
-  for (const key of ['TransactionStatus', 'Status', 'status', 'TransactionStatusCode']) {
-    const v = meta?.[key]
-    if (v !== undefined && v !== null && v !== '') return String(v)
-  }
+  return providerScalar(providerField(meta, ['TransactionStatus', 'Status', 'TransactionStatusCode']))
+}
+
+function classifyTransactionStatus(status) {
+  const marker = providerMarker(status)
+  if (!marker) return null
+  if (SUCCESS_MARKERS.has(marker)) return true
+  if (FAILURE_MARKERS.has(marker)) return false
   return null
 }
 
@@ -312,14 +607,13 @@ export function extractProviderStatus(meta) {
 // into an audit row.
 export function extractProviderMessage(value) {
   if (!isPlainObject(value)) return null
-  for (const key of ['ResponseMessage', 'responseMessage', 'ErrorMessage', 'errorMessage', 'Message', 'message', 'Description', 'description']) {
-    const candidate = value[key]
-    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim().slice(0, 500)
-  }
-  for (const key of ['Error', 'error', 'Response', 'response', 'Data', 'data']) {
-    const nested = value[key]
-    const message = extractProviderMessage(nested)
-    if (message) return message
+  const direct = providerField(value, ['ResponseMessage', 'ErrorMessage', 'Message', 'Description'])
+  if (typeof direct === 'string' && direct.trim()) return direct.trim().slice(0, 500)
+  for (const [key, nested] of Object.entries(value)) {
+    if (PROVIDER_ENVELOPE_KEYS.has(providerKey(key)) || providerKey(key) === 'error') {
+      const message = extractProviderMessage(nested)
+      if (message) return message
+    }
   }
   return null
 }
@@ -327,21 +621,38 @@ export function extractProviderMessage(value) {
 const PROVIDER_RESULT_KEYS = new Set([
   'amount',
   'code',
+  'data',
   'description',
+  'date',
+  'errormessage',
+  'issuccessful',
   'message',
+  'payload',
+  'reference',
   'responsecode',
   'responsemessage',
+  'responsetimestamp',
+  'response',
   'result',
   'resultcode',
   'resultmessage',
   'retrievalreference',
+  'retrievalreferencenumber',
+  'rrn',
   'status',
   'success',
+  'timestamp',
+  'transactionamount',
+  'transactiondate',
+  'transaction',
   'transactionstatus',
   'transactionstatuscode',
+  'transactiontimestamp',
+  'transactiontype',
+  'type',
 ])
 
-const SUCCESS_MARKERS = new Set(['0', '00', '000', '200', 'OK', 'SUCCESS', 'SUCCESSFUL', 'COMPLETED'])
+const SUCCESS_MARKERS = new Set(['0', '00', '000', '200', 'OK', 'SUCCESS', 'SUCCESSFUL', 'COMPLETED', 'FULFILLED'])
 const FAILURE_MARKERS = new Set(['1', '01', '99', 'ERROR', 'FAILED', 'FAILURE', 'REJECTED', 'DECLINED', 'DENIED'])
 
 // Only return fields needed to classify/display a transaction-status result.
@@ -355,7 +666,7 @@ export function projectProviderResult(value, depth = 0) {
 
   const projected = {}
   for (const [key, item] of Object.entries(value)) {
-    if (!PROVIDER_RESULT_KEYS.has(key.toLowerCase())) continue
+    if (!PROVIDER_RESULT_KEYS.has(providerKey(key))) continue
     projected[key] = projectProviderResult(item, depth + 1)
   }
   return projected
@@ -367,18 +678,19 @@ function providerMarker(value) {
 }
 
 function providerResultOutcome(value) {
-  if (!isPlainObject(value)) return null
-  const booleanSuccess = value.Success ?? value.success
+  const payload = findProviderPayload(value)
+  if (!isPlainObject(payload)) return null
+  const booleanSuccess = providerField(payload, ['IsSuccessful', 'Success'])
   if (typeof booleanSuccess === 'boolean') return booleanSuccess
 
-  const code = providerMarker(value.ResponseCode ?? value.responseCode ?? value.ResultCode ?? value.resultCode ?? value.Code ?? value.code)
+  const code = providerMarker(providerField(payload, ['ResponseCode', 'ResultCode', 'Code']))
   if (code) return SUCCESS_MARKERS.has(code) ? true : FAILURE_MARKERS.has(code) || code.length > 0 ? false : null
 
-  const marker = providerMarker(value.TransactionStatus ?? value.Status ?? value.status)
+  const marker = providerMarker(extractProviderStatus(payload))
   if (marker && SUCCESS_MARKERS.has(marker)) return true
   if (marker && FAILURE_MARKERS.has(marker)) return false
 
-  const message = providerMarker(value.ResponseMessage ?? value.responseMessage ?? value.ResultMessage ?? value.resultMessage ?? value.Message ?? value.message)
+  const message = providerMarker(providerField(payload, ['ResponseMessage', 'ResultMessage', 'Message']))
   if (message === 'OK' || message === 'SUCCESS' || message === 'SUCCESSFUL' || message === 'COMPLETED') return true
   if (message === 'ERROR' || message === 'FAILED' || message === 'FAILURE' || message === 'REJECTED' || message === 'DECLINED') return false
   return null

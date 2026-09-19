@@ -161,6 +161,56 @@ test('5c. Provider business failure stays failed even when HTTP is 200', () => {
   expectEq(out.errorCode, 'BANKONE_PROVIDER_RESULT_FAILED', 'business failure is classified')
 })
 
+test('5d. Observed BankOne envelope is parsed and normalized without a 502', () => {
+  const body = '{"IsSuccessful":false,"ResponseMessage":"Invalid Token","ResponseCode":"12","Reference":null,"Status":null}'
+  const parsed = core.parseProviderBody(body, 'application/json; charset=utf-8')
+  expect(parsed.ok, 'observed JSON body should parse')
+  expectEq(parsed.format, 'json', 'JSON format detected')
+  const out = core.normalizeResponse({
+    raw: parsed.value,
+    operation: 'transaction_status',
+    requestId: 'bea57044-5418-450e-a04a-a52e2bc4c1be',
+    httpStatus: 200,
+    durationMs: 42,
+    request: { retrievalReference: '09...86', transactionDate: '2026-09-18' },
+    contentType: 'application/json; charset=utf-8',
+    bodyFormat: parsed.format,
+  })
+  expectEq(out.providerResultValid, true, 'provider envelope is processable')
+  expectEq(out.success, false, 'provider application error remains unsuccessful')
+  expectEq(out.providerHttpStatus, 200, 'provider HTTP 200 is preserved')
+  expectEq(out.providerResultClassification, 'business_failure', 'application failure is classified')
+  expectEq(out.responseCode, '12', 'provider response code is preserved')
+  expectEq(out.responseMessage, 'Invalid Token', 'provider response message is preserved')
+  expectEq(out.correlationId, 'bea57044-5418-450e-a04a-a52e2bc4c1be', 'correlation ID is preserved')
+  expectEq(out.providerContentType, 'application/json; charset=utf-8', 'content type is preserved')
+})
+
+test('5e. Provider fields are normalized from the observed casing and masked', () => {
+  const out = core.normalizeResponse({
+    raw: {
+      IsSuccessful: true,
+      ResponseCode: '00',
+      ResponseMessage: 'Successful',
+      Reference: '090157260918085052132578224586',
+      Status: 'FULFILLED',
+      TransactionDate: '2026-09-18',
+      TransactionType: 'Interbank personal transfer',
+      Amount: '5000000',
+      Timestamp: '2026-09-18T08:50:52.132Z',
+    },
+    operation: 'transaction_status',
+    requestId: 'r',
+    httpStatus: 200,
+  })
+  expectEq(out.success, true, 'successful provider response is successful')
+  expectEq(out.transactionSuccess, true, 'transaction status is confirmed')
+  expectEq(out.retrievalReference, '09...86', 'RRN is masked')
+  expectEq(out.transactionType, 'Interbank personal transfer', 'transaction type preserved')
+  expectEq(out.amount, '5000000', 'amount preserved')
+  expect(!JSON.stringify(out).includes('090157260918085052132578224586'), 'full RRN is not exposed')
+})
+
 // --- 6-8. Provider HTTP classification (preserve status, never leak body) -------
 test('6. BankOne 400 → invalid_request, status preserved, no provider body', () => {
   const err = core.classifyProviderStatus(400)
@@ -213,13 +263,29 @@ test('9. Timeout is a safe, distinct error (504, never hangs)', () => {
   expectEq(core.resolveTimeoutMs('garbage'), core.DEFAULT_TIMEOUT_MS, 'bad timeout falls back')
 })
 
-// --- 10. Malformed JSON --------------------------------------------------------
-test('10. Malformed JSON provider body is detected', () => {
-  const r = core.parseProviderBody('<html>error</html>')
+// --- 10. Body format detection -------------------------------------------------
+test('10a. HTML provider body is classified as html', () => {
+  const r = core.parseProviderBody('<html><body>error</body></html>')
   expectEq(r.ok, false, 'non-JSON recognised')
-  const good = core.parseProviderBody('{"a":1}')
-  expectEq(good.ok, true, 'valid JSON ok')
-  expectEq(core.parseProviderBody('').ok, true, 'empty body ok')
+  expectEq(r.format, 'html', 'HTML format detected')
+})
+
+test('10b. Empty provider body is classified as empty', () => {
+  const r = core.parseProviderBody('')
+  expectEq(r.ok, false, 'empty body is not valid JSON')
+  expectEq(r.format, 'empty', 'empty format detected')
+})
+
+test('10c. Malformed JSON is classified as malformed_json', () => {
+  const r = core.parseProviderBody('{"a":')
+  expectEq(r.ok, false, 'malformed JSON recognised')
+  expectEq(r.format, 'malformed_json', 'malformed JSON format detected')
+})
+
+test('10d. JSON with unexpected content-type is still parsed', () => {
+  const r = core.parseProviderBody('{"ResponseCode":"00"}', 'text/plain')
+  expectEq(r.ok, true, 'JSON parsed despite text/plain')
+  expectEq(r.format, 'json', 'JSON format detected')
 })
 
 // --- 11. Token never returned --------------------------------------------------
@@ -244,6 +310,138 @@ test('12. maskedLogSummary + redaction never include the token', () => {
   expect(!core.containsSecret(scrubbed, secret), 'redactText must scrub the token')
   expect(!scrubbed.includes(secret), 'scrubbed text must not contain the token')
   expect(!core.containsSecret(core.maskedLogSummary({ operation: 'transaction_status', status: 'error', httpStatus: 500, requestId: 'r', errorCode: 'upstream_error', durationMs: 5 }), secret), 'summary never holds a token')
+})
+
+test('15a. HTML provider HTTP 200 is classified as HTML, not unreachable', () => {
+  const html = '<html><body>BankOne staging error page for test-token-that-must-never-leak</body></html>'
+  const out = core.buildUnparseableProviderResponse({
+    rawText: html,
+    httpStatus: 200,
+    contentType: 'text/html; charset=utf-8',
+    bodyFormat: 'html',
+    operation: 'transaction_status',
+    requestId: 'req-html',
+    durationMs: 88,
+    secret: TOKEN,
+  })
+  expectEq(out.success, false, 'HTML remains failed')
+  expectEq(out.providerHttpStatus, 200, 'provider HTTP 200 is preserved')
+  expectEq(out.providerApplicationStatus, 'unparseable', 'application status is unparseable')
+  expectEq(out.errorCode, core.ERROR_CATEGORIES.PROVIDER_APPLICATION_RESPONSE_HTML, 'error category is HTML')
+  expectEq(out.providerResultClassification, 'html', 'classification is html')
+  expect(out.providerResponsePreview, 'HTML preview must exist')
+  expect(!out.providerResponsePreview.includes(TOKEN), 'preview must redact the token')
+  expect(!out.providerResponsePreview.includes('<html'), 'preview is plain text')
+})
+
+test('15b. Empty provider HTTP 200 is classified as empty response', () => {
+  const out = core.buildUnparseableProviderResponse({
+    rawText: '',
+    httpStatus: 200,
+    contentType: null,
+    bodyFormat: 'empty',
+    operation: 'transaction_status',
+    requestId: 'req-empty',
+    durationMs: 50,
+    secret: TOKEN,
+  })
+  expectEq(out.errorCode, core.ERROR_CATEGORIES.PROVIDER_EMPTY_RESPONSE, 'empty category')
+  expectEq(out.providerResultClassification, 'empty', 'classification is empty')
+  expectEq(out.providerResponsePreview, null, 'empty preview is null')
+})
+
+test('15c. Malformed JSON provider HTTP 200 is classified as malformed JSON', () => {
+  const out = core.buildUnparseableProviderResponse({
+    rawText: '{"a":',
+    httpStatus: 200,
+    contentType: 'application/json',
+    bodyFormat: 'malformed_json',
+    operation: 'transaction_status',
+    requestId: 'req-malformed',
+    durationMs: 60,
+    secret: TOKEN,
+  })
+  expectEq(out.errorCode, core.ERROR_CATEGORIES.PROVIDER_MALFORMED_JSON, 'malformed JSON category')
+  expectEq(out.providerResultClassification, 'malformed_json', 'classification is malformed_json')
+})
+
+test('15d. Provider response preview truncates long non-JSON safely', () => {
+  const long = 'x'.repeat(1000)
+  const out = core.providerResponsePreview(long, TOKEN)
+  expect(out.length <= 520, 'preview is bounded to safe max')
+  expect(!out.includes(TOKEN), 'token redacted from preview')
+})
+
+test('15e. JSON application error carries providerApplicationStatus error', () => {
+  const out = core.normalizeResponse({
+    raw: { IsSuccessful: false, ResponseCode: '12', ResponseMessage: 'Invalid Token' },
+    operation: 'transaction_status',
+    requestId: 'r',
+    httpStatus: 200,
+  })
+  expectEq(out.providerApplicationStatus, 'error', 'JSON app error status is error')
+  expectEq(out.providerResultClassification, 'business_failure', 'classified as business failure')
+})
+
+test('16a. Secret health helper detects missing credentials', () => {
+  const h = core.checkSecretHealth({ baseUrl: '', token: '', timeoutMs: '' })
+  expectEq(h.configurationHealthy, false, 'empty config unhealthy')
+  expectEq(h.baseUrlConfigured, false, 'baseUrl missing')
+  expectEq(h.tokenConfigured, false, 'token missing')
+})
+
+test('16b. Secret health helper detects token whitespace', () => {
+  const h = core.checkSecretHealth({ baseUrl: core.DEFAULT_BANKONE_BASE_URL, token: `token with space ${TOKEN}`, timeoutMs: '30000' })
+  expectEq(h.tokenHasWhitespace, true, 'whitespace detected')
+  expectEq(h.configurationHealthy, false, 'whitespace makes config unhealthy')
+})
+
+test('16c. Secret health helper accepts valid configuration', () => {
+  const h = core.checkSecretHealth({ baseUrl: core.DEFAULT_BANKONE_BASE_URL, token: TOKEN, timeoutMs: '30000' })
+  expectEq(h.baseUrlValid, true, 'default base URL allowed')
+  expectEq(h.tokenHasWhitespace, false, 'no whitespace')
+  expectEq(h.configurationHealthy, true, 'valid config is healthy')
+})
+
+test('16d. Request builder omits empty optional fields', () => {
+  const req = core.buildTransactionStatusRequest({
+    baseUrl: core.DEFAULT_BANKONE_BASE_URL,
+    token: TOKEN,
+    input: { RetrievalReference: 'R1', TransactionDate: '2026-09-18', TransactionType: '', Amount: '' },
+  })
+  expectEq(req.body.TransactionType, undefined, 'empty TransactionType omitted')
+  expectEq(req.body.Amount, undefined, 'empty Amount omitted')
+  expectEq(req.body.RetrievalReference, 'R1', 'required field kept')
+})
+
+test('17. Response diagnostics redact secrets and dangerous headers', () => {
+  const headers = new Map([
+    ['content-type', 'text/html'],
+    ['content-length', '1234'],
+    ['server', 'Microsoft-IIS'],
+    ['location', 'https://staging.mybankone.com/login'],
+    ['authorization', 'Bearer ' + TOKEN],
+    ['set-cookie', 'session=abc'],
+  ])
+  const diag = core.providerResponseDiagnostics({
+    rawText: `<html>${TOKEN}</html>`,
+    response: {
+      url: 'https://staging.mybankone.com/login',
+      headers: {
+        get: (k) => headers.get(k.toLowerCase()) || null,
+        entries: () => headers.entries(),
+      },
+    },
+    outgoingUrl: 'https://staging.mybankone.com/thirdpartyapiservice/apiservice/CoreTransactions/TransactionStatusQuery',
+    secret: TOKEN,
+    maxPreviewLength: 100,
+  })
+  expectEq(diag.redirectDetected, true, 'redirect detected when URLs differ')
+  expectEq(diag.contentType, 'text/html', 'content type captured')
+  expectEq(diag.server, 'Microsoft-IIS', 'server captured')
+  expect(!diag.preview.includes(TOKEN), 'preview redacts token')
+  expect(!Object.keys(diag.safeHeaders).includes('authorization'), 'authorization header omitted')
+  expect(!Object.keys(diag.safeHeaders).includes('set-cookie'), 'set-cookie header omitted')
 })
 
 // --- 13. Frontend never sends Token (source-level) ------------------------------

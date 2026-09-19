@@ -32,6 +32,7 @@ const DIAGNOSTIC_STAGE_LABELS = {
   edge_function: 'Supabase Edge Function returned an error',
   edge_to_bankone: 'Edge Function -> BankOne failed',
   bankone_http: 'BankOne returned an HTTP error',
+  bankone_response_processing: 'BankOne response could not be processed',
 }
 
 function diagnosticFromError(error, fallback = 'BankOne integration call failed.') {
@@ -52,6 +53,23 @@ function diagnosticFromError(error, fallback = 'BankOne integration call failed.
     providerResponseReceived: source.providerResponseReceived ?? error?.providerResponseReceived ?? null,
     httpStatus: source.httpStatus ?? error?.httpStatus ?? error?.rawStatus ?? null,
     providerHttpStatus: source.providerHttpStatus ?? error?.providerHttpStatus ?? null,
+    providerResultValid: source.providerResultValid ?? error?.providerResultValid ?? false,
+    providerResultClassification: source.providerResultClassification ?? error?.providerResultClassification ?? null,
+    transactionStatus: source.transactionStatus ?? error?.transactionStatus ?? null,
+    transactionSuccess: source.transactionSuccess ?? error?.transactionSuccess ?? null,
+    responseCode: source.responseCode ?? error?.responseCode ?? null,
+    responseMessage: source.responseMessage ?? error?.responseMessage ?? null,
+    retrievalReference: source.retrievalReference ?? error?.retrievalReference ?? null,
+    transactionDate: source.transactionDate ?? error?.transactionDate ?? null,
+    transactionType: source.transactionType ?? error?.transactionType ?? null,
+    amount: source.amount ?? error?.amount ?? null,
+    timestamp: source.timestamp ?? error?.timestamp ?? null,
+    providerContentType: source.providerContentType ?? error?.providerContentType ?? null,
+    providerBodyFormat: source.providerBodyFormat ?? error?.providerBodyFormat ?? null,
+    providerApplicationStatus: source.providerApplicationStatus ?? error?.providerApplicationStatus ?? null,
+    providerResponsePreview: source.providerResponsePreview ?? error?.providerResponsePreview ?? null,
+    diagnostics: source.diagnostics ?? error?.diagnostics ?? null,
+    correlationId: source.correlationId ?? error?.correlationId ?? source.requestId ?? error?.requestId ?? null,
     requestTimestamp: source.requestTimestamp || error?.requestTimestamp || null,
     durationMs: source.durationMs ?? error?.durationMs ?? null,
     requestId: source.requestId || error?.requestId || null,
@@ -90,6 +108,7 @@ function boolDiagnostic(value) {
 
 function diagnosticResponseMessage(diagnostic) {
   const body = diagnostic?.responseBody
+  if (body?.responseMessage) return body.responseMessage
   if (body?.error?.providerMessage) return body.error.providerMessage
   if (typeof body?.error === 'string') return body.error
   if (body?.error?.message) return body.error.message
@@ -412,17 +431,20 @@ function OverviewGrid({ health, config, providerHealth, logs, latency, environme
   const authenticationRejected = logs.some((l) => l.error_category === 'unauthorized' || l.error_category === 'forbidden')
   const providerCallState = logs.length ? 'Tested' : 'Not tested yet'
   const authenticationState = logs.length ? (authenticationRejected ? 'Rejected' : 'Tested') : 'Not tested yet'
-  const configurationState = providerHealth?.configurationHealthy
+  const configuration = providerHealth?.configuration || {}
+  const configurationState = providerHealth?.configurationHealthy ?? providerHealth?.configured ?? null
   const edgeFunctionState = providerHealth?.functionOperational
   const reachability = reachabilityPresentation(providerHealth)
-  const serverBaseUrl = providerHealth?.baseUrlConfigured === true
+  const baseUrlConfigured = providerHealth?.baseUrlConfigured ?? configuration.baseUrlConfigured
+  const tokenConfigured = providerHealth?.tokenConfigured ?? providerHealth?.secretPresent ?? configuration.tokenConfigured ?? configuration.secretPresent
+  const serverBaseUrl = baseUrlConfigured === true || (baseUrlConfigured === undefined && configurationState === true)
     ? 'Configured'
-    : providerHealth?.baseUrlConfigured === false
+    : baseUrlConfigured === false
       ? 'Not configured'
       : 'Unable to verify'
-  const serverCredentials = providerHealth?.tokenConfigured === true
+  const serverCredentials = tokenConfigured === true || (tokenConfigured === undefined && configurationState === true)
     ? 'Server-side secret configured'
-    : providerHealth?.tokenConfigured === false
+    : tokenConfigured === false
       ? 'Not configured'
       : 'Unable to verify'
 
@@ -500,6 +522,8 @@ function OverviewGrid({ health, config, providerHealth, logs, latency, environme
             <div className="flex flex-wrap gap-x-8 gap-y-3 text-xs text-slate-600">
               <div><span className="text-slate-400 font-medium">Base URL</span><div className="font-mono mt-0.5">{serverBaseUrl}</div></div>
               <div><span className="text-slate-400 font-medium">Credentials</span><div className="mt-0.5">{serverCredentials}</div></div>
+              <div><span className="text-slate-400 font-medium">Authentication test</span><div className="mt-0.5">{providerHealth?.authenticationStatus === 'rejected' ? 'Rejected' : providerHealth?.authenticationTested ? 'Tested' : 'Not tested'}</div></div>
+              <div><span className="text-slate-400 font-medium">Endpoint test</span><div className="mt-0.5">{providerHealth?.endpointTested ? 'Tested' : 'Not tested'}</div></div>
               <div><span className="text-slate-400 font-medium">Auth type</span><div className="mt-0.5">{config?.authentication_type || 'server-side secret'}</div></div>
               <div><span className="text-slate-400 font-medium">Read/Write/Webhook</span><div className="mt-0.5">{config ? `${String(config.read_enabled)}/${String(config.write_enabled)}/${String(config.webhook_enabled)}` : '—/—/—'}</div></div>
               <div><span className="text-slate-400 font-medium">Queue depth</span><div className="mt-0.5">{health?.queue_depth ?? '—'}</div></div>
@@ -564,8 +588,11 @@ function ConnectionTestPanel({ test }) {
         <div className="grid gap-2 sm:grid-cols-2">
           <ConnectionStep label="InfinityCore authentication" state={test.status === 'checking_health' ? 'pending' : 'ok'} />
           <ConnectionStep label="Supabase Edge Function reached" state="pending" />
-          <ConnectionStep label="BankOne provider request sent" state="pending" />
-          <ConnectionStep label="BankOne provider response received" state="pending" />
+          <ConnectionStep label="BankOne network reachability" state="pending" />
+          <ConnectionStep label="BankOne authentication" state="pending" />
+          <ConnectionStep label="BankOne endpoint response" state="pending" />
+          <ConnectionStep label="Provider response parsing" state="pending" />
+          <ConnectionStep label="Transaction confirmation" state="pending" />
         </div>
       </div>
     )
@@ -573,38 +600,78 @@ function ConnectionTestPanel({ test }) {
 
   const diagnostic = test.diagnostic || {}
   const response = test.response || diagnostic.responseBody || {}
-  const success = test.status === 'responded' && response.success !== false
+  const responseProcessed = test.status === 'responded' && (response.providerResultValid === true || response.queryProcessed === true)
+  const success = responseProcessed && response.success === true
   const providerRequestSent = response.providerRequestSent ?? diagnostic.providerRequestSent ?? ['edge_to_bankone', 'bankone_http'].includes(diagnostic.stage)
   const providerResponseReceived = response.providerResponseReceived ?? diagnostic.providerResponseReceived ?? diagnostic.stage === 'bankone_http'
+  const providerConnectionOk = providerRequestSent && providerResponseReceived
+  const bankoneAuthRejected = isBankoneAuthRejected(response, diagnostic)
+  const bankoneAuthOk = providerConnectionOk && !bankoneAuthRejected
+  const endpointResponded = providerResponseReceived
+  const parsingOk = response.providerBodyFormat === 'json' && response.providerResultValid === true
+  const parsingWarn = providerResponseReceived && !parsingOk
+  const transactionQueryOk = responseProcessed && response.applicationSuccess === true
   const edgeReached = diagnostic.functionResponseReceived || providerRequestSent || providerResponseReceived || test.status === 'responded'
   const authOk = test.status === 'responded' || diagnostic.sessionPresent === true
-  const httpStatus = response.providerStatus ?? diagnostic.providerHttpStatus ?? diagnostic.httpStatus ?? '—'
-  const timestamp = response.requestTimestamp || diagnostic.requestTimestamp
+  const httpStatus = response.providerHttpStatus ?? response.providerStatus ?? diagnostic.providerHttpStatus ?? diagnostic.httpStatus ?? '—'
+  const timestamp = response.timestamp || response.requestTimestamp || diagnostic.timestamp || diagnostic.requestTimestamp
   const latency = response.durationMs ?? diagnostic.durationMs
-  const safeError = response.error || diagnosticResponseMessage(diagnostic) || 'The BankOne provider request failed.'
+  const safeError = response.responseMessage || response.error || diagnosticResponseMessage(diagnostic) || 'The BankOne provider request failed.'
+  const classification = response.providerResultClassification || diagnostic.providerResultClassification
+  const resultLabel = providerResultLabel(classification, success, responseProcessed)
+  const panelTone = success ? 'border-emerald-200 bg-emerald-50/30' : responseProcessed || parsingWarn ? 'border-amber-200 bg-amber-50/30' : 'border-rose-200 bg-rose-50/30'
+  const tokenDiagnostic = bankoneAuthRejected ? bankoneTokenDiagnostic(response, diagnostic) : null
+  const diagnostics = response.diagnostics || null
 
   return (
-    <div className={`${cardCls} ${success ? 'border-emerald-200 bg-emerald-50/30' : 'border-rose-200 bg-rose-50/30'}`} aria-live="polite">
+    <div className={`${cardCls} ${panelTone}`} aria-live="polite">
       <div className="flex items-center gap-2 mb-3">
-        {success ? <CheckCircle2 size={17} className="text-emerald-600" /> : <XCircle size={17} className="text-rose-600" />}
+        {success ? <CheckCircle2 size={17} className="text-emerald-600" /> : responseProcessed || parsingWarn ? <Activity size={17} className="text-amber-600" /> : <XCircle size={17} className="text-rose-600" />}
         <h3 className="text-lg font-semibold text-slate-900">Connection Test</h3>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         <ConnectionStep label="InfinityCore authentication" state={authOk ? 'ok' : 'fail'} />
         <ConnectionStep label="Supabase Edge Function reached" state={edgeReached ? 'ok' : 'fail'} />
-        <ConnectionStep label="BankOne provider request sent" state={providerRequestSent ? 'ok' : 'fail'} />
-        <ConnectionStep label={success ? 'BankOne provider response received' : 'BankOne provider response failed'} state={success ? 'ok' : 'fail'} />
+        <ConnectionStep label="BankOne network reachability" state={providerConnectionOk ? 'ok' : providerResponseReceived ? 'warn' : 'fail'} />
+        <ConnectionStep label="BankOne authentication" state={bankoneAuthOk ? 'ok' : bankoneAuthRejected ? 'fail' : 'warn'} />
+        <ConnectionStep label="BankOne endpoint response" state={endpointResponded ? 'ok' : 'fail'} />
+        <ConnectionStep label="Provider response parsing" state={parsingOk ? 'ok' : parsingWarn ? 'warn' : 'fail'} />
+        <ConnectionStep label="Transaction confirmation" state={transactionQueryOk ? 'ok' : responseProcessed ? 'warn' : 'fail'} />
       </div>
-      {!success && <p className="mt-3 text-sm text-rose-700">{safeError}</p>}
+      <p className={`mt-3 text-sm ${success ? 'text-emerald-700' : responseProcessed || parsingWarn ? 'text-amber-800' : 'text-rose-700'}`}>
+        {responseProcessed ? resultLabel : safeError}
+      </p>
+      {tokenDiagnostic && <p className="mt-2 text-sm text-amber-800">{tokenDiagnostic}</p>}
       <div className="mt-3 grid gap-x-6 gap-y-1 text-xs text-slate-500 sm:grid-cols-2">
-        <span>HTTP status: {httpStatus}</span>
-        <span>Provider response classification: {success ? 'Successful provider response' : bankoneErrorLabel(response.errorCode || diagnostic.code)}</span>
+        <span>Provider HTTP status: {httpStatus}</span>
+        <span>Provider result: {resultLabel}</span>
+        <span>Transaction status: {response.transactionStatus || diagnostic.transactionStatus || '—'}</span>
+        <span>Transaction confirmation: {transactionConfirmationLabel(response.transactionSuccess ?? diagnostic.transactionSuccess)}</span>
+        <span>Response code: {response.responseCode || diagnostic.responseCode || '—'}</span>
+        <span>Response message: {response.responseMessage || diagnostic.responseMessage || safeError || '—'}</span>
+        <span>RRN: {response.rrn || response.retrievalReference || diagnostic.retrievalReference || '—'}</span>
         <span>Latency: {fmtMs(latency)}</span>
         <span>Timestamp: {timestamp ? fmtDate(timestamp) : '—'}</span>
+        <span>Content type: {response.providerContentType || diagnostic.providerContentType || '—'}</span>
         <span className="sm:col-span-2">Endpoint: POST {TRANSACTION_STATUS_ENDPOINT}</span>
-        <span className="sm:col-span-2">Request ID: {response.requestId || '—'}</span>
+        <span className="sm:col-span-2">Correlation ID: {response.correlationId || response.requestId || diagnostic.correlationId || diagnostic.requestId || '—'}</span>
       </div>
-      {!success && <p className="mt-3 text-xs text-slate-600"><span className="font-medium">Suggested next action:</span> {suggestedNextAction(response.errorCode || diagnostic.code)}</p>}
+      {diagnostics && (
+        <div className="mt-3 rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
+          <div className="font-semibold mb-1">Safe provider diagnostics</div>
+          <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
+            {diagnostics.finalUrl && <span>Final URL: {diagnostics.finalUrl}</span>}
+            {diagnostics.redirectDetected != null && <span>Redirect detected: {diagnostics.redirectDetected ? 'yes' : 'no'}</span>}
+            {diagnostics.contentLength != null && <span>Content-Length: {diagnostics.contentLength}</span>}
+            {diagnostics.bodyLength != null && <span>Body length: {diagnostics.bodyLength}</span>}
+            {diagnostics.server && <span>Server: {diagnostics.server}</span>}
+            {diagnostics.location && <span>Location: {diagnostics.location}</span>}
+            {diagnostics.preview && <span className="sm:col-span-2">Preview: <span className="font-mono">{diagnostics.preview}</span></span>}
+          </div>
+        </div>
+      )}
+      {!success && !responseProcessed && <p className="mt-3 text-xs text-slate-600"><span className="font-medium">Suggested next action:</span> {suggestedNextAction(response.errorCode || diagnostic.code)}</p>}
+      {response.providerResponsePreview && !diagnostics?.preview && <div className="mt-3 text-xs text-slate-500"><span className="font-medium">Response preview:</span> <span className="font-mono">{response.providerResponsePreview}</span></div>}
       {response.details && <StructuredData label="Safe provider details" value={response.details} />}
     </div>
   )
@@ -615,11 +682,20 @@ function ConnectionStep({ label, state }) {
     ? <CheckCircle2 size={16} className="text-emerald-600" />
     : state === 'fail'
       ? <XCircle size={16} className="text-rose-600" />
-      : <Loader2 size={16} className="animate-spin text-blue-600" />
+      : state === 'warn'
+        ? <Activity size={16} className="text-amber-600" />
+        : <Loader2 size={16} className="animate-spin text-blue-600" />
+  const toneClass = state === 'ok'
+    ? 'border-emerald-200 bg-emerald-50/50'
+    : state === 'fail'
+      ? 'border-rose-200 bg-rose-50/50'
+      : state === 'warn'
+        ? 'border-amber-200 bg-amber-50/50'
+        : 'border-slate-200 bg-white'
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+    <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm text-slate-700 ${toneClass}`}>
       {icon}
-      <span>{state === 'ok' ? `✓ ${label}` : state === 'fail' ? `✗ ${label}` : label}</span>
+      <span>{state === 'ok' ? `✓ ${label}` : state === 'fail' ? `✗ ${label}` : state === 'warn' ? `! ${label}` : label}</span>
     </div>
   )
 }
@@ -627,10 +703,49 @@ function ConnectionStep({ label, state }) {
 function suggestedNextAction(code) {
   if (code === 'invalid_request') return 'Confirm the retrieval reference, date, optional transaction type, and kobo/CENT amount.'
   if (code === 'unauthorized' || code === 'forbidden') return 'Verify the BankOne staging secret configuration with the integration administrator.'
+  if (code === 'provider_application_response_unparseable' || code === 'provider_application_response_html' || code === 'provider_malformed_json') return 'BankOne returned a non-JSON response. Confirm the endpoint URL, request body, and that the staging environment is not returning an HTML error/redirect page.'
+  if (code === 'provider_empty_response') return 'BankOne returned an empty body. Confirm the staging RRN exists and the endpoint is the documented TransactionStatusQuery path.'
   if (code === 'timeout' || code === 'network') return 'Retry after confirming staging availability and the Edge Function network path.'
   if (code === 'rate_limited') return 'Wait briefly and retry the staging request.'
   if (code === 'missing_credentials') return 'Configure the server-side BankOne staging secrets before retrying.'
   return 'Review the safe provider details and the audit record, then retry with the supplied staging reference.'
+}
+
+function isBankoneAuthRejected(response, diagnostic) {
+  const responseCode = response.responseCode ?? diagnostic.responseCode
+  const responseMessage = ((response.responseMessage ?? diagnostic.responseMessage) || '').toLowerCase()
+  const providerHttpStatus = response.providerHttpStatus ?? response.providerStatus ?? diagnostic.providerHttpStatus
+  if (providerHttpStatus === 401 || providerHttpStatus === 403) return true
+  if (responseCode === '12' && responseMessage.includes('invalid token')) return true
+  if (responseMessage.includes('invalid token') || responseMessage.includes('unauthorized')) return true
+  return false
+}
+
+function bankoneTokenDiagnostic(response, diagnostic) {
+  const responseCode = response.responseCode ?? diagnostic.responseCode
+  const responseMessage = response.responseMessage ?? diagnostic.responseMessage
+  if (responseCode === '12' || (responseMessage || '').toLowerCase().includes('invalid token')) {
+    return 'BankOne reached successfully, but BankOne rejected the authentication token. Verify the server-side BankOne API token in Supabase Secrets and confirm that the token belongs to this staging environment/institution.'
+  }
+  return 'BankOne authentication was rejected. Verify the server-side BankOne credentials.'
+}
+
+function providerResultLabel(classification, success, processed) {
+  if (success || classification === 'success') return 'Successful provider response'
+  if (classification === 'business_failure') return 'Application-level provider failure'
+  if (classification === 'unconfirmed') return 'Provider response processed but transaction result is unconfirmed'
+  if (classification === 'html') return 'Provider returned HTML instead of JSON'
+  if (classification === 'empty') return 'Provider returned an empty body'
+  if (classification === 'malformed_json') return 'Provider returned malformed JSON'
+  if (classification === 'unparseable') return 'Provider response format was not JSON'
+  if (!processed) return 'Provider response could not be processed'
+  return 'Provider response processed'
+}
+
+function transactionConfirmationLabel(value) {
+  if (value === true) return 'Confirmed'
+  if (value === false) return 'Provider reported failure'
+  return 'Not returned'
 }
 
 function DiagnosticPanel({ diagnostic, query, title }) {
@@ -654,7 +769,13 @@ function DiagnosticPanel({ diagnostic, query, title }) {
             <div><span className="text-rose-500">Edge Function:</span> {diagnostic?.functionName || '—'}</div>
             <div><span className="text-rose-500">HTTP status:</span> {diagnostic?.httpStatus ?? '—'}</div>
             <div><span className="text-rose-500">BankOne HTTP status:</span> {diagnostic?.providerHttpStatus ?? '—'}</div>
-            <div className="sm:col-span-2"><span className="text-rose-500">Correlation ID:</span> {correlationId || '—'}</div>
+            <div><span className="text-rose-500">Provider result:</span> {providerResultLabel(diagnostic?.providerResultClassification, false, diagnostic?.providerResultValid)}</div>
+            <div><span className="text-rose-500">Transaction status:</span> {diagnostic?.transactionStatus || '—'}</div>
+            <div><span className="text-rose-500">Transaction confirmation:</span> {transactionConfirmationLabel(diagnostic?.transactionSuccess)}</div>
+            <div><span className="text-rose-500">Response code:</span> {diagnostic?.responseCode || '—'}</div>
+            <div><span className="text-rose-500">Response message:</span> {diagnostic?.responseMessage || message || '—'}</div>
+            <div><span className="text-rose-500">Content type:</span> {diagnostic?.providerContentType || '—'}</div>
+            <div className="sm:col-span-2"><span className="text-rose-500">Correlation ID:</span> {diagnostic?.correlationId || correlationId || '—'}</div>
             <div className="sm:col-span-2 break-all"><span className="text-rose-500">Supabase target:</span> {diagnostic?.functionTarget || '—'}</div>
           </div>
           {query && (
@@ -722,33 +843,36 @@ function MiniStat({ icon, label, value, hint }) {
 }
 
 function ResultPanel({ result }) {
-  const success = result.success !== false
-  const providerData = result.data ?? result.raw
-  const providerStatus = result.providerStatus ?? result.status
-  const transactionStatus = result.transactionStatus
-    || providerData?.TransactionStatus
-    || providerData?.Status
-    || providerData?.status
+  const success = result.success === true
+  const processed = result.providerResultValid === true || result.queryProcessed === true
+  const providerData = result.providerResult ?? result.data ?? result.raw
+  const providerStatus = result.providerHttpStatus ?? result.providerStatus ?? result.status
+  const resultLabel = providerResultLabel(result.providerResultClassification, success, processed)
   const rows = [
     ['Provider', 'BankOne/Qore'],
     ['Environment', result.environment === 'staging' ? 'Staging' : (result.environment || 'Staging')],
     ['Endpoint', 'TransactionStatusQuery'],
     ['Retrieval reference', result.request?.retrievalReference || 'masked'],
-    ['Transaction date', result.request?.transactionDate || result.query?.TransactionDate || '—'],
-    ['HTTP status', providerStatus ?? '—'],
-    ['Provider result', success ? 'Successful provider response' : (typeof result.error === 'string' ? result.error : 'Provider response failed')],
-    ['Transaction status', transactionStatus || '—'],
+    ['RRN', result.rrn || result.retrievalReference || '—'],
+    ['Transaction date', result.transactionDate || result.query?.TransactionDate || '—'],
+    ['Transaction type', result.transactionType || '—'],
+    ['Amount', result.amount ?? '—'],
+    ['Provider HTTP status', providerStatus ?? '—'],
+    ['Provider result', resultLabel],
+    ['Transaction status', result.transactionStatus || '—'],
+    ['Transaction confirmation', transactionConfirmationLabel(result.transactionSuccess)],
     ['Response code', result.responseCode || '—'],
-    ['Response message', result.responseMessage || '—'],
-    ['Timestamp', result.requestTimestamp ? fmtDate(result.requestTimestamp) : '—'],
-    ['Correlation ID', result.requestId || '—'],
+    ['Response message', result.responseMessage || result.error || '—'],
+    ['Timestamp', result.timestamp ? fmtDate(result.timestamp) : (result.requestTimestamp ? fmtDate(result.requestTimestamp) : '—')],
+    ['Correlation ID', result.correlationId || result.requestId || '—'],
     ['Latency', fmtMs(result.durationMs)],
+    ['Response content type', result.providerContentType || '—'],
   ]
   return (
-    <div className={`mt-4 rounded-lg border p-4 ${success ? 'border-emerald-200 bg-emerald-50/50' : 'border-rose-200 bg-rose-50/50'}`}>
+    <div className={`mt-4 rounded-lg border p-4 ${success ? 'border-emerald-200 bg-emerald-50/50' : processed ? 'border-amber-200 bg-amber-50/50' : 'border-rose-200 bg-rose-50/50'}`}>
       <div className="flex items-center gap-2 mb-3">
-        {success ? <CheckCircle2 size={18} className="text-emerald-600" /> : <XCircle size={18} className="text-rose-600" />}
-        <h4 className="font-semibold text-slate-900">{success ? 'Successful provider response' : 'BankOne provider response failed'}</h4>
+        {success ? <CheckCircle2 size={18} className="text-emerald-600" /> : processed ? <Activity size={18} className="text-amber-600" /> : <XCircle size={18} className="text-rose-600" />}
+        <h4 className="font-semibold text-slate-900">{resultLabel}</h4>
       </div>
       <div className="grid gap-x-8 gap-y-1.5 sm:grid-cols-2">
         {rows.map(([k, v]) => (
@@ -758,7 +882,7 @@ function ResultPanel({ result }) {
           </div>
         ))}
       </div>
-      {!success && <p className="mt-3 text-xs text-slate-600"><span className="font-medium">Suggested next action:</span> {suggestedNextAction(result.errorCode)}</p>}
+      {!success && !processed && <p className="mt-3 text-xs text-slate-600"><span className="font-medium">Suggested next action:</span> {suggestedNextAction(result.errorCode)}</p>}
       {providerData && <StructuredData label="Provider response fields" value={providerData} />}
       {!success && result.details && <StructuredData label="Safe provider details" value={result.details} />}
     </div>

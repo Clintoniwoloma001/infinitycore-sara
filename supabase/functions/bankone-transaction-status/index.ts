@@ -45,6 +45,8 @@ import {
   resolveTimeoutMs,
   classifyProviderStatus,
   normalizeResponse,
+  buildUnparseableProviderResponse,
+  providerResponseDiagnostics,
   parseProviderBody,
   sanitizeProviderValue,
   extractProviderMessage,
@@ -250,6 +252,7 @@ Deno.serve(async (req) => {
   clearTimeout(timer)
 
   const httpStatus = response.status
+  const providerContentType = response.headers.get('content-type') || null
   let rawText = ''
   try {
     rawText = await response.text()
@@ -273,12 +276,21 @@ Deno.serve(async (req) => {
       startedAt,
       input: validation.value,
       providerStatus: httpStatus,
+      providerContentType,
       providerRequestSent: true,
       providerResponseReceived: false,
     }), 502, origin)
   }
 
-  const parsedRes = parseProviderBody(rawText)
+  const diagnostics = providerResponseDiagnostics({
+    rawText,
+    response,
+    outgoingUrl: outgoing.url,
+    secret: token,
+    maxPreviewLength: 500,
+  })
+
+  const parsedRes = parseProviderBody(rawText, providerContentType)
   if (!parsedRes.ok) {
     if (!response.ok) {
       const error = classifyProviderStatus(httpStatus) || safeError({ category: ERROR_CATEGORIES.UPSTREAM_ERROR, status: httpStatus })
@@ -300,33 +312,46 @@ Deno.serve(async (req) => {
         startedAt,
         input: validation.value,
         providerStatus: httpStatus,
+        providerContentType,
+        providerBodyFormat: parsedRes.format,
         providerRequestSent: true,
         providerResponseReceived: true,
       }), httpStatus, origin)
     }
 
-    const error = safeError({ category: ERROR_CATEGORIES.MALFORMED_RESPONSE, status: 502 })
+    // BankOne answered HTTP 200 but the body is not JSON. Treat this as a
+    // transport success with an unparseable application response, not as a
+    // generic Edge 502 / "provider unreachable" failure.
+    const unparseable = buildUnparseableProviderResponse({
+      rawText,
+      httpStatus,
+      contentType: providerContentType,
+      bodyFormat: parsedRes.format,
+      operation: OPERATION,
+      requestId,
+      durationMs: Date.now() - startedAt,
+      secret: token,
+      request: safeRequest(validation.value),
+      timestamp: new Date(startedAt).toISOString(),
+      environment: environmentLabel(environment),
+      diagnostics,
+    })
     await recordFailure(admin, {
       requestId,
       environment,
-      error,
+      error: {
+        code: unparseable.errorCode,
+        message: unparseable.error,
+        status: httpStatus,
+      },
       httpStatus,
       startedAt,
       actorName,
       userRef,
       reference: validation.value.RetrievalReference,
       secret: token,
-    })
-    return json(failureEnvelope({
-      requestId,
-      environment,
-      error,
-      startedAt,
-      input: validation.value,
-      providerStatus: httpStatus,
-      providerRequestSent: true,
-      providerResponseReceived: true,
-    }), 502, origin)
+    }).catch(() => {})
+    return json(unparseable, httpStatus, origin)
   }
 
   const providerData = sanitizeProviderValue(parsedRes.value, token)
@@ -358,8 +383,11 @@ Deno.serve(async (req) => {
       input: validation.value,
       providerStatus: httpStatus,
       details: providerData,
+      providerContentType,
+      providerBodyFormat: parsedRes.format,
       providerRequestSent: true,
       providerResponseReceived: true,
+      diagnostics,
     }), httpStatus, origin)
   }
 
@@ -377,7 +405,42 @@ Deno.serve(async (req) => {
     environment: environmentLabel(environment),
     providerRequestSent: true,
     providerResponseReceived: true,
+    contentType: providerContentType,
+    bodyFormat: parsedRes.format,
+    diagnostics,
   })
+
+  // A syntactically valid JSON body is not enough to claim that the query was
+  // processed. Return 502 only when the provider body has no recognizable
+  // transaction-status envelope; a recognized application-level error stays a
+  // provider HTTP 200 and is returned below for the UI to display.
+  if (!normalized.providerResultValid) {
+    const error = safeError({ category: ERROR_CATEGORIES.MALFORMED_RESPONSE, status: 502 })
+    await recordFailure(admin, {
+      requestId,
+      environment,
+      error,
+      httpStatus,
+      startedAt,
+      actorName,
+      userRef,
+      reference: validation.value.RetrievalReference,
+      secret: token,
+    }).catch(() => {})
+    return json(failureEnvelope({
+      requestId,
+      environment,
+      error,
+      startedAt,
+      input: validation.value,
+      providerStatus: httpStatus,
+      details: providerData,
+      providerContentType,
+      providerBodyFormat: parsedRes.format,
+      providerRequestSent: true,
+      providerResponseReceived: true,
+    }), 502, origin)
+  }
 
   // A transport-level 200 only means BankOne answered the HTTP request. Keep
   // the audit state aligned with the provider's business-level result so a
@@ -434,8 +497,11 @@ function failureEnvelope({
   input,
   providerStatus = null,
   details = null,
+  providerContentType = null,
+  providerBodyFormat = null,
   providerRequestSent = false,
   providerResponseReceived = false,
+  diagnostics = null,
 }) {
   const errorMessage = error.providerMessage
     || (providerStatus === 400 ? 'BankOne rejected the transaction-status request.' : error.message)
@@ -447,6 +513,8 @@ function failureEnvelope({
     status: providerStatus ?? error.status ?? 500,
     providerStatus,
     providerHttpStatus: providerStatus,
+    providerContentType,
+    providerBodyFormat,
     providerReached: providerResponseReceived,
     statusCode: providerStatus ?? error.status ?? 500,
     requestId,
@@ -460,6 +528,7 @@ function failureEnvelope({
     durationMs: Date.now() - startedAt,
     providerRequestSent,
     providerResponseReceived,
+    diagnostics,
   }
 }
 

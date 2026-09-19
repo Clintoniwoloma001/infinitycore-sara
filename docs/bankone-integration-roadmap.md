@@ -112,7 +112,7 @@ Migration (idempotent, additive): `schema_phase43_bankone_live_api.sql`
 
 ## Verification
 
-- `npm run test:bankone` — 27 tests: validation, creds safety, status
+- `npm run test:bankone` — 30 tests: validation, creds safety, status
   classification, timeout, malformed JSON, token-never-returned /
   never-logged / never-sent-from-frontend (source-level).
 - `npm run build` — Vite production build succeeds.
