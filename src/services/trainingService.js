@@ -1,5 +1,7 @@
 import { supabase } from '../supabaseClient'
 import { logAction } from './supabaseService'
+import { md5Hex } from './onboardingService'
+import { APP_URL } from '../config/siteUrl'
 export { TRAINING_TYPES, formatTrainingType, hours, buildQuestionSets, calculateTrainingManHours, calculateManHourSummary, aggregateManHourRows } from './trainingCalculations'
 
 async function currentUser() {
@@ -23,7 +25,7 @@ export const trainingService = {
   async listSessions({ startDate, endDate } = {}) {
     let query = supabase
       .from('training_sessions')
-      .select('*, branches(id, branch_name)')
+      .select('*, branches!branch_id(id, branch_name)')
       .order('training_date', { ascending: false })
       .order('created_at', { ascending: false })
     if (startDate) query = query.gte('training_date', startDate)
@@ -40,6 +42,17 @@ export const trainingService = {
       .eq('is_archived', false)
       .order('full_name')
       .limit(1000)
+    if (error) throw error
+    return data || []
+  },
+
+  // Authoritative physical venues for virtual/physical session delivery.
+  async listVenues() {
+    const { data, error } = await supabase
+      .from('branches')
+      .select('id, branch_name, location')
+      .eq('status', 'active')
+      .order('branch_name')
     if (error) throw error
     return data || []
   },
@@ -113,10 +126,50 @@ export const trainingService = {
   async getMyAssignments() {
     const { data, error } = await supabase
       .from('training_participants')
-      .select('id, status, assigned_at, opened_at, submitted_at, completed_at, training_sessions(id, title, training_type, description, facilitator, training_date, start_time, end_time, duration_minutes, location, virtual_link, assessment_required, certificate_enabled)')
+      .select('id, status, assigned_at, opened_at, submitted_at, completed_at, training_sessions(id, title, training_type, description, facilitator, training_date, start_time, end_time, duration_minutes, delivery_type, location, venue_name, virtual_link, meeting_platform, meeting_url, assessment_required, certificate_enabled)')
       .order('assigned_at', { ascending: false })
     if (error) throw error
     return data || []
+  },
+
+  // Creates a REAL provider meeting through the existing server-side edge
+  // functions (Google Calendar / Zoom API). Provider credentials stay
+  // server-side; only the join URL + safe metadata are returned.
+  async generateMeetingLink({ platform, title, description = '', startDateTime, endDateTime, durationMinutes, sessionId = null }) {
+    const fn = platform === 'zoom' ? 'create-zoom-meeting' : 'create-google-meet'
+    const body = platform === 'zoom'
+      ? { topic: title, description, startDateTime, durationMinutes: Number(durationMinutes) || 30, interviewId: sessionId }
+      : { summary: title, description, startDateTime, endDateTime, interviewId: sessionId }
+    const { data, error } = await supabase.functions.invoke(fn, { body })
+    if (error) throw error
+    return data || { status: 'failed', error: 'No response from meeting provider' }
+  },
+
+  // Persist a generated meeting onto an existing session (idempotent: only
+  // overwrites when a meeting result is actually provided). The join URL also
+  // flows into virtual_link so the existing MyTraining/attendance views work.
+  async attachMeeting(sessionId, meeting) {
+    if (!sessionId) return null
+    const user = await currentUser()
+    const patch = {
+      delivery_type: 'virtual',
+      virtual_link: meeting?.meetingUrl || null,
+      meeting_platform: meeting?.platform || null,
+      meeting_url: meeting?.meetingUrl || null,
+      meeting_provider_id: meeting?.externalMeetingId || null,
+      meeting_created_at: meeting?.meetingCreatedAt || new Date().toISOString(),
+      updated_by: user.id,
+    }
+    const { data, error } = await supabase.from('training_sessions').update(patch).eq('id', sessionId).select().single()
+    if (error) throw error
+    await logAction({
+      action: 'TRAINING_MEETING_ATTACHED',
+      entityType: 'TrainingSession',
+      entityId: sessionId,
+      details: `${meeting?.platform || 'unknown'} meeting persisted: ${meeting?.meetingUrl || 'none'}`,
+      severity: 'info',
+    })
+    return data
   },
 
   async getMyAssignment(participantId) {
@@ -215,6 +268,90 @@ export const trainingService = {
       departments: data?.departments || [],
       employees: data?.employees || [],
     }
+  },
+
+  // ---- Attendance / completion link (HR) ----
+
+  async generateTrainingAttendanceLink(sessionId, regenerate = false) {
+    const { data, error } = await supabase.rpc('generate_training_attendance_link', {
+      p_session_id: sessionId,
+      p_regenerate: regenerate,
+    })
+    if (error) throw error
+    return data
+  },
+
+  buildTrainingAttendanceUrl(token) {
+    return `${APP_URL}/#/training-attendance/${encodeURIComponent(token)}`
+  },
+
+  async getTrainingSessionCompletion(sessionId) {
+    const { data, error } = await supabase.rpc('get_training_session_completion', { p_session_id: sessionId })
+    if (error) throw error
+    return data
+  },
+
+  // ---- Public training attendance flow (no login) ----
+
+  async getPublicTrainingAttendance(token) {
+    const { data, error } = await supabase.rpc('get_training_attendance_context', { p_token: token })
+    if (error) throw error
+    return data
+  },
+
+  async resolvePublicTrainingEmployee(token, employeeId) {
+    const { data, error } = await supabase.rpc('resolve_training_attendance_employee', {
+      p_token: token,
+      p_employee_id: employeeId,
+    })
+    if (error) throw error
+    return data
+  },
+
+  async loadPublicTrainingQuestions(token, employeeId) {
+    const { data, error } = await supabase.rpc('load_training_attendance_questions', {
+      p_token: token,
+      p_employee_id: employeeId,
+    })
+    if (error) throw error
+    return data
+  },
+
+  async submitPublicTrainingQuiz(token, employeeId, answers) {
+    const { data, error } = await supabase.rpc('submit_training_attendance_quiz', {
+      p_token: token,
+      p_employee_id: employeeId,
+      p_answers: answers || [],
+    })
+    if (error) throw error
+    return data
+  },
+
+  // Upload the captured signature for the public flow. The file lands in the
+  // private documents bucket under training-attendance/<token-hash>/ and is
+  // never publicly readable; the completion RPC re-validates the path.
+  async uploadPublicTrainingSignature(token, signatureDataUrl) {
+    if (!signatureDataUrl) throw new Error('Please sign below to confirm your attendance.')
+    const signatureBlob = dataUrlToBlob(signatureDataUrl)
+    if (signatureBlob.size > 1024 * 1024) throw new Error('The signature image is too large. Clear and sign again.')
+    const tokenHash = md5Hex(String(token || '').trim())
+    const signaturePath = `training-attendance/${tokenHash}/${crypto.randomUUID()}.png`
+    const { error: uploadError } = await supabase.storage.from('documents').upload(signaturePath, signatureBlob, {
+      contentType: 'image/png',
+      upsert: false,
+    })
+    if (uploadError) throw uploadError
+    return signaturePath
+  },
+
+  async completePublicTraining(token, employeeId, signaturePath) {
+    const { data, error } = await supabase.rpc('complete_training_attendance', {
+      p_token: token,
+      p_employee_id: employeeId,
+      p_signature_path: signaturePath,
+    })
+    if (error) throw error
+    return data
   },
 }
 

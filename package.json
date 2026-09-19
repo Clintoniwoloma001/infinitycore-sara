@@ -20,6 +20,8 @@
     "test:recruitment": "node tests/recruitmentPipeline.test.mjs",
     "test:training": "node tests/trainingCalculations.test.mjs",
     "test:training-schema": "node tests/trainingSchema.test.mjs",
+    "test:training-delivery": "node tests/trainingDeliveryMeetings.test.mjs",
+    "test:training-attendance": "node tests/trainingAttendanceLink.test.mjs",
     "test:bankone": "node scripts/test-bankone-integration.mjs",
     "test:termination-auth": "node scripts/verify-termination-auth.mjs"
   },

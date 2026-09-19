@@ -101,3 +101,28 @@ credentials arrive; the platform file overrides them (listed last in `env_file:`
   (employee number / designation / department / branch).
 - Hosted Supabase Auth Site URL + email templates for invite/recovery are dashboard
   config outside this repo — must include `https://infinitymfbcore.vercel.app`.
+
+## Phase 58 — Training Delivery Type + Real Meeting Links
+- SQL migration: `schema_phase58_training_delivery_meeting_links.sql` — run in Supabase
+  SQL Editor after Phase 57. Idempotent/additive.
+  - Adds `training_sessions.delivery_type` (`physical|virtual`, required, default
+    physical), `venue_id` (FK→branches), `venue_name`, `venue_address`,
+    `meeting_platform` (`google_meet|zoom`), `meeting_url`, `meeting_provider_id`,
+    `meeting_created_at`. Backfills virtual sessions from the legacy `virtual_link`
+    and venue fields from `branches`.
+  - Zoom `start_url` is intentionally NOT persisted (host-control link stays server-only).
+- `Training.jsx` creation form: required "Training delivery" select; Physical shows a
+  venue dropdown sourced from `branches` (via `get_dashboard_filter_options`), Virtual
+  shows platform select + real meeting generation. Free-typed meeting links are
+  rejected at save.
+- Meeting creation is server-side only via the existing edge functions
+  `create-google-meet` / `create-zoom-meeting` (Google Calendar / Zoom APIs, OAuth on
+  `integration_connections`, no provider secrets in the browser). Not-configured /
+  not-connected states return clear admin messages instead of fake URLs.
+- `trainingService.generateMeetingLink()` invokes the provider edge function;
+  `trainingService.attachMeeting()` persists the join URL (also into `virtual_link` so
+  MyTraining/attendance views keep working). Sessions list + `MyTraining.jsx` show
+  venue/delivery and a join link for virtual sessions; session-meeting panel supports
+  Copy/Open/Regenerate (regenerate only before the session starts).
+- No new assessment/certificate/attendance tables — the existing training_* flow is
+  untouched.
