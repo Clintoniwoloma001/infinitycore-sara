@@ -121,9 +121,10 @@ export function maskReference(value) {
 }
 
 // Validation for the transaction status query. The Qore docs mark all five
-// body fields as required for a successful response; InfinityCore treats
-// RetrievalReference + TransactionDate as mandatory and forwards
-// TransactionType/Amount when supplied. Never converts any value.
+// body fields as required for a successful response: RetrievalReference,
+// TransactionDate, TransactionType, Amount and Token (server-injected). Type
+// and amount are therefore mandatory inputs here; nothing is invented or
+// converted. Amount must be a numeric kobo/CENT string as the API requires.
 export function validateTransactionStatusRequest(body) {
   const errors = []
   const raw = isPlainObject(body) ? body : {}
@@ -139,14 +140,12 @@ export function validateTransactionStatusRequest(body) {
   if (!RetrievalReference) errors.push('RetrievalReference is required')
   if (!TransactionDate) errors.push('TransactionDate is required')
   else if (!isDateValidYYYYMMDD(TransactionDate)) errors.push('TransactionDate must be a valid YYYY-MM-DD date')
-  if (amountProvided && (!Amount || !isAmountKoboString(Amount))) errors.push('Amount must be a numeric kobo/CENT amount (digits, optionally with up to two decimals)')
+  if (!TransactionType) errors.push('TransactionType is required')
+  if (!amountProvided || !Amount || !isAmountKoboString(Amount)) errors.push('Amount is required and must be a numeric kobo/CENT amount (digits, optionally with up to two decimals)')
 
   if (errors.length > 0) return { ok: false, errors }
 
-  const value = { RetrievalReference, TransactionDate }
-  if (TransactionType) value.TransactionType = TransactionType
-  if (Amount) value.Amount = Amount
-  return { ok: true, value }
+  return { ok: true, value: { RetrievalReference, TransactionDate, TransactionType, Amount } }
 }
 
 // ---------------------------------------------------------------------------
@@ -162,10 +161,10 @@ export function buildTransactionStatusRequest({ baseUrl, token, input }) {
   const body = {
     RetrievalReference: input.RetrievalReference,
     TransactionDate: input.TransactionDate,
+    TransactionType: input.TransactionType,
+    Amount: String(input.Amount),
     Token: normalizedToken,
   }
-  if (input.TransactionType) body.TransactionType = input.TransactionType
-  if (input.Amount) body.Amount = String(input.Amount)
   return {
     url: `${cleanBase}${BANKONE_STATUS_ENDPOINT}`,
     headers: {

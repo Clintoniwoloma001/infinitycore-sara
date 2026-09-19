@@ -320,7 +320,7 @@ export default function BankOneIntegration() {
         </div>
          <p className="text-sm text-slate-500 mb-4">
            POST {endpoint.endpoint}
-           <span className="block text-xs text-slate-400 mt-0.5">BankOne/Qore staging. Retrieval Reference and Transaction Date are required; Transaction Type and Amount are optional.</span>
+           <span className="block text-xs text-slate-400 mt-0.5">BankOne/Qore staging. All five documented fields are required: Retrieval Reference, Transaction Date, Transaction Type, Amount (kobo/CENT), and the server-side Token.</span>
         </p>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -343,21 +343,21 @@ export default function BankOneIntegration() {
             />
           </div>
           <div>
-            <label className={labelCls}>Transaction Type</label>
+            <label className={labelCls}>Transaction Type *</label>
             <input
               className={inputCls}
               value={form.TransactionType}
               onChange={(e) => setForm((f) => ({ ...f, TransactionType: e.target.value }))}
-              placeholder="optional"
+              placeholder="e.g. Interbank personal transfer"
             />
           </div>
           <div>
-            <label className={labelCls}>Amount (kobo/CENT)</label>
+            <label className={labelCls}>Amount (kobo/CENT) *</label>
             <input
               className={inputCls}
               value={form.Amount}
               onChange={(e) => setForm((f) => ({ ...f, Amount: e.target.value }))}
-              placeholder="optional — numeric only"
+              placeholder="e.g. 5000000"
             />
           </div>
         </div>
@@ -372,8 +372,8 @@ export default function BankOneIntegration() {
 
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
           {!form.RetrievalReference.trim()
-            ? 'No real staging Retrieval Reference has been supplied yet. Do not use fabricated transaction data; this query is intended for a real BankOne reference and date.'
-            : 'Use only a real BankOne Retrieval Reference and its matching transaction date. The browser sends this request only to the authenticated Supabase Edge Function.'}
+            ? 'No real staging Retrieval Reference has been supplied yet. Do not use fabricated transaction data; this query is intended for a real BankOne reference, date, transaction type and kobo/CENT amount.'
+            : 'Use only real BankOne transaction data (Retrieval Reference, its matching transaction date and type, and the actual kobo/CENT amount). The browser sends this request only to the authenticated Supabase Edge Function.'}
         </div>
 
         {queryError && <DiagnosticPanel diagnostic={queryError} query={result?.query} />}
@@ -701,7 +701,7 @@ function ConnectionStep({ label, state }) {
 }
 
 function suggestedNextAction(code) {
-  if (code === 'invalid_request') return 'Confirm the retrieval reference, date, optional transaction type, and kobo/CENT amount.'
+  if (code === 'invalid_request') return 'All five documented fields are required: confirm the Retrieval Reference, Transaction Date, Transaction Type, and the kobo/CENT Amount.'
   if (code === 'unauthorized' || code === 'forbidden') return 'Verify the BankOne staging secret configuration with the integration administrator.'
   if (code === 'provider_application_response_unparseable' || code === 'provider_application_response_html' || code === 'provider_malformed_json') return 'BankOne returned a non-JSON response. Confirm the endpoint URL, request body, and that the staging environment is not returning an HTML error/redirect page.'
   if (code === 'provider_empty_response') return 'BankOne returned an empty body. Confirm the staging RRN exists and the endpoint is the documented TransactionStatusQuery path.'
@@ -716,16 +716,17 @@ function isBankoneAuthRejected(response, diagnostic) {
   const responseMessage = ((response.responseMessage ?? diagnostic.responseMessage) || '').toLowerCase()
   const providerHttpStatus = response.providerHttpStatus ?? response.providerStatus ?? diagnostic.providerHttpStatus
   if (providerHttpStatus === 401 || providerHttpStatus === 403) return true
-  if (responseCode === '12' && responseMessage.includes('invalid token')) return true
-  if (responseMessage.includes('invalid token') || responseMessage.includes('unauthorized')) return true
+  if (responseCode === '12' && (responseMessage.includes('invalid token') || responseMessage.includes('unknown token'))) return true
+  if (responseCode === '12') return true
+  if (responseMessage.includes('invalid token') || responseMessage.includes('unknown token') || responseMessage.includes('unauthorized')) return true
   return false
 }
 
 function bankoneTokenDiagnostic(response, diagnostic) {
   const responseCode = response.responseCode ?? diagnostic.responseCode
   const responseMessage = response.responseMessage ?? diagnostic.responseMessage
-  if (responseCode === '12' || (responseMessage || '').toLowerCase().includes('invalid token')) {
-    return 'BankOne reached successfully, but BankOne rejected the authentication token. Verify the server-side BankOne API token in Supabase Secrets and confirm that the token belongs to this staging environment/institution.'
+  if (responseCode === '12' || (responseMessage || '').toLowerCase().includes('unknown token') || (responseMessage || '').toLowerCase().includes('invalid token')) {
+    return 'BankOne was reached and authenticated at the transport level (HTTP 200 JSON), but BankOne rejected the application token: the supplied token is not recognized for Transaction Status Query in this staging environment. Re-issue/confirm the Qore Channels API token with BankOne/AppZone — the current token is not a Channels/Transactions API credential.'
   }
   return 'BankOne authentication was rejected. Verify the server-side BankOne credentials.'
 }
@@ -848,6 +849,17 @@ function ResultPanel({ result }) {
   const providerData = result.providerResult ?? result.data ?? result.raw
   const providerStatus = result.providerHttpStatus ?? result.providerStatus ?? result.status
   const resultLabel = providerResultLabel(result.providerResultClassification, success, processed)
+  const providerReached = result.providerReached === true
+  const transportOk = providerReached && result.transportSuccess === true
+  const authRejected = isBankoneAuthRejected(result, {}) && result.responseCode === '12'
+  const authBoundary = authRejected
+    ? {
+        reachable: 'YES',
+        authTransport: 'YES',
+        applicationAuth: 'FAILED',
+        providerResponse: result.responseMessage || 'Unknown Token',
+      }
+    : null
   const rows = [
     ['Provider', 'BankOne/Qore'],
     ['Environment', result.environment === 'staging' ? 'Staging' : (result.environment || 'Staging')],
@@ -874,6 +886,18 @@ function ResultPanel({ result }) {
         {success ? <CheckCircle2 size={18} className="text-emerald-600" /> : processed ? <Activity size={18} className="text-amber-600" /> : <XCircle size={18} className="text-rose-600" />}
         <h4 className="font-semibold text-slate-900">{resultLabel}</h4>
       </div>
+      {authBoundary && (
+        <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs">
+          <div className="font-semibold text-amber-900 mb-1">BankOne authentication boundary</div>
+          <div className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
+            <span>BankOne reachable: <b>{authBoundary.reachable}</b></span>
+            <span>BankOne authentication transport (HTTP 200 JSON): <b>{authBoundary.authTransport}</b></span>
+            <span>BankOne application authentication: <b className="text-rose-700">{authBoundary.applicationAuth}</b></span>
+            <span>Provider response: <b>{authBoundary.providerResponse}</b></span>
+          </div>
+          <p className="mt-2 text-amber-800">Network reachability and transport succeeded; the token was rejected at the BankOne application boundary. The staging token must be confirmed/re-issued by BankOne/AppZone as a Qore Channels API credential.</p>
+        </div>
+      )}
       <div className="grid gap-x-8 gap-y-1.5 sm:grid-cols-2">
         {rows.map(([k, v]) => (
           <div key={k} className="flex gap-2 text-sm">

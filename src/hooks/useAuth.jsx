@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../supabaseClient'
 import { ROLES, ROLE_METADATA, ROLE_MODULES, ROLE_PERMISSIONS } from '../constants/roles'
 import { canTerminateEmployee, canArchiveEmployee, canDeleteEmployee } from '../services/terminationAuthorization'
-import { SIGNUP_REDIRECT_URL } from '../config/siteUrl'
+import { AUTH_REDIRECT_URL, SIGNUP_REDIRECT_URL } from '../config/siteUrl'
 
 const AuthContext = createContext(null)
 
@@ -100,6 +100,14 @@ export function AuthProvider({ children }) {
     return data
   }
 
+  const forgotPassword = async (email) => {
+    const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: AUTH_REDIRECT_URL,
+    })
+    if (error) throw error
+    return data
+  }
+
   const refreshProfile = async () => {
     const { data: { session } } = await supabase.auth.getSession()
     setUser(session?.user || null)
@@ -178,6 +186,7 @@ export function AuthProvider({ children }) {
     profileError,
     signIn,
     signUp,
+    forgotPassword,
     refreshProfile,
     signOut,
 

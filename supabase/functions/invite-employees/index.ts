@@ -169,6 +169,8 @@ async function reconcileAuthIdentity(admin, employee, email, actorName) {
         phone: employee.phone || profile.phone,
         department: employee.department || profile.department,
         branch: employee.branch || profile.branch,
+        employee_number: employee.employee_number || profile.employee_number,
+        designation: employee.position || profile.designation,
         status: profile.status === 'active' ? 'active' : 'pending',
       })
       .eq('id', authUser.id)

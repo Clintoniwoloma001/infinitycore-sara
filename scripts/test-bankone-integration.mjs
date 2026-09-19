@@ -94,13 +94,17 @@ test('3c. Invalid Amount rejected (letters / symbols)', () => {
   expect(d.ok, 'two-decimal amount ok')
 })
 
-test('3d. Optional fields forwarded verbatim, never converted', () => {
-  const noOpt = core.validateTransactionStatusRequest({ RetrievalReference: 'R1', TransactionDate: '2026-01-01' })
-  expect(noOpt.ok, 'optional fields not required client-side')
-  expect(!('Amount' in noOpt.value), 'Amount not invented when omitted')
-  const withOccur = core.validateTransactionStatusRequest({ RetrievalReference: 'R1', TransactionDate: '2026-01-01', Amount: '00100', TransactionType: 'FUND' })
-  expectEq(withOccur.value.Amount, '00100', 'Amount forwarded unchanged')
-  expectEq(withOccur.value.TransactionType, 'FUND', 'TransactionType forwarded unchanged')
+test('3d. All five documented fields are required and forwarded verbatim', () => {
+  const missingType = core.validateTransactionStatusRequest({ RetrievalReference: 'R1', TransactionDate: '2026-01-01', Amount: '100' })
+  expect(!missingType.ok, 'TransactionType required')
+  expect(missingType.errors.some((e) => e.includes('TransactionType')), 'should mention TransactionType')
+  const missingAmount = core.validateTransactionStatusRequest({ RetrievalReference: 'R1', TransactionDate: '2026-01-01', TransactionType: 'FUND' })
+  expect(!missingAmount.ok, 'Amount required')
+  expect(missingAmount.errors.some((e) => e.includes('Amount')), 'should mention Amount')
+  const ok = core.validateTransactionStatusRequest({ RetrievalReference: 'R1', TransactionDate: '2026-01-01', Amount: '00100', TransactionType: 'FUND' })
+  expect(ok.ok, 'all fields present validates')
+  expectEq(ok.value.Amount, '00100', 'Amount forwarded unchanged')
+  expectEq(ok.value.TransactionType, 'FUND', 'TransactionType forwarded unchanged')
 })
 
 test('3e. Non-object request body rejected as malformed', () => {
@@ -403,15 +407,22 @@ test('16c. Secret health helper accepts valid configuration', () => {
   expectEq(h.configurationHealthy, true, 'valid config is healthy')
 })
 
-test('16d. Request builder omits empty optional fields', () => {
+test('16d. Request builder emits all five documented body fields', () => {
   const req = core.buildTransactionStatusRequest({
     baseUrl: core.DEFAULT_BANKONE_BASE_URL,
     token: TOKEN,
-    input: { RetrievalReference: 'R1', TransactionDate: '2026-09-18', TransactionType: '', Amount: '' },
+    input: {
+      RetrievalReference: 'R1',
+      TransactionDate: '2026-09-18',
+      TransactionType: 'Interbank personal transfer',
+      Amount: '5000000',
+    },
   })
-  expectEq(req.body.TransactionType, undefined, 'empty TransactionType omitted')
-  expectEq(req.body.Amount, undefined, 'empty Amount omitted')
-  expectEq(req.body.RetrievalReference, 'R1', 'required field kept')
+  expectEq(req.body.RetrievalReference, 'R1', 'RetrievalReference present')
+  expectEq(req.body.TransactionDate, '2026-09-18', 'TransactionDate present')
+  expectEq(req.body.TransactionType, 'Interbank personal transfer', 'TransactionType present')
+  expectEq(req.body.Amount, '5000000', 'Amount present')
+  expectEq(req.body.Token, TOKEN, 'Token present')
 })
 
 test('17. Response diagnostics redact secrets and dangerous headers', () => {

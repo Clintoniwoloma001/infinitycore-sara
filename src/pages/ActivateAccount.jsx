@@ -46,9 +46,16 @@ function activationError(code) {
   return 'This invitation is invalid or has already been used. Ask HR to send a new invitation.'
 }
 
+function recoveryError(code) {
+  if (code === 'expired') return 'This password reset link has expired. Request a new one from the Sign In page.'
+  if (code === 'invalid_recovery') return 'This password reset link is invalid. Request a new one from the Sign In page.'
+  return 'We could not process this password reset link. Request a new one from the Sign In page.'
+}
+
 export default function ActivateAccount() {
   const navigate = useNavigate()
   const { refreshProfile } = useAuth()
+  const [mode, setMode] = useState('invite') // 'invite' | 'recovery'
   const [email, setEmail] = useState('')
   const [context, setContext] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -66,14 +73,16 @@ export default function ActivateAccount() {
     const initialize = async () => {
       setLoading(true)
       setError('')
+      let isRecovery = false
       try {
         const params = readAuthParams()
+        isRecovery = params.type === 'recovery'
 
         if (params.code) {
           const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(params.code)
           if (exchangeError) throw exchangeError
         } else if (params.tokenHash) {
-          const tokenType = params.type === 'recovery' ? 'recovery' : 'invite'
+          const tokenType = isRecovery ? 'recovery' : 'invite'
           const { error: verifyError } = await supabase.auth.verifyOtp({ token_hash: params.tokenHash, type: tokenType })
           if (verifyError) throw verifyError
         } else if (params.accessToken && params.refreshToken) {
@@ -85,12 +94,25 @@ export default function ActivateAccount() {
         }
 
         const { data: { session } } = await supabase.auth.getSession()
-        if (!session?.user?.email) throw new Error('invalid_invitation')
+        if (!session?.user?.email) throw new Error(isRecovery ? 'invalid_recovery' : 'invalid_invitation')
 
         const sessionEmail = session.user.email
         // Do not leave access/recovery tokens in browser history after the
         // session has been established, even if invitation validation fails.
         clearAuthParams()
+
+        // Password reset (type=recovery) never goes through the invitation
+        // gate — it must work for any existing/activated account too. A
+        // pending employee invitation is finalized after the new password
+        // is set (see submit).
+        if (isRecovery) {
+          if (mounted) {
+            setEmail(sessionEmail)
+            setMode('recovery')
+          }
+          return
+        }
+
         const { data: invitation, error: invitationError } = await supabase.rpc('get_employee_invitation_context')
         if (invitationError) throw invitationError
         if (!invitation?.ok) {
@@ -106,7 +128,10 @@ export default function ActivateAccount() {
           setContext(invitation)
         }
       } catch (e) {
-        if (mounted) setError(activationError(e?.message || e?.code))
+        if (mounted) {
+          const code = e?.message || e?.code
+          setError(isRecovery ? recoveryError(code) : activationError(code))
+        }
       } finally {
         if (mounted) setLoading(false)
       }
@@ -139,17 +164,27 @@ export default function ActivateAccount() {
       const { error: passwordError } = await supabase.auth.updateUser({ password })
       if (passwordError) throw passwordError
 
-      const { data: activation, error: activationRpcError } = await supabase.rpc('activate_employee_invitation')
-      if (activationRpcError) throw activationRpcError
-      if (!activation?.ok && activation?.code !== 'already_activated') {
-        throw new Error(activation?.code || 'activation_failed')
+      if (mode === 'invite') {
+        const { data: activation, error: activationRpcError } = await supabase.rpc('activate_employee_invitation')
+        if (activationRpcError) throw activationRpcError
+        if (!activation?.ok && activation?.code !== 'already_activated') {
+          throw new Error(activation?.code || 'activation_failed')
+        }
+      } else {
+        // Recovery: finalize any still-pending employee invitation so a
+        // reset can also complete a first-time activation. Best-effort only
+        // — an already-active account (or a non-employee account) is fine.
+        await supabase.rpc('activate_employee_invitation').catch(() => null)
       }
 
       await refreshProfile()
       setComplete(true)
       setTimeout(() => navigate('/', { replace: true }), 900)
     } catch (e) {
-      setError(e?.message?.includes('expired') ? activationError('expired') : activationError(e?.message || 'activation_failed'))
+      const code = e?.message || e?.code || 'activation_failed'
+      setError(mode === 'recovery'
+        ? recoveryError(code)
+        : (code.includes('expired') ? activationError('expired') : activationError(code)))
     } finally {
       setSaving(false)
     }
@@ -164,6 +199,8 @@ export default function ActivateAccount() {
     </div>
   )
 
+  const isRecovery = mode === 'recovery'
+
   if (loading) {
     return shell(<div className="py-12 flex justify-center"><Loader2 className="w-8 h-8 text-[#009944] animate-spin" /></div>)
   }
@@ -172,18 +209,29 @@ export default function ActivateAccount() {
     return shell(
       <div className="text-center py-7">
         <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-4"><CheckCircle2 className="w-7 h-7 text-emerald-600" /></div>
-        <h1 className="text-xl font-semibold text-slate-900">Account activated</h1>
+        <h1 className="text-xl font-semibold text-slate-900">{isRecovery ? 'Password updated' : 'Account activated'}</h1>
         <p className="text-sm text-slate-500 mt-2">Your password is saved. Taking you to InfinityCore…</p>
       </div>
     )
   }
 
-  if (error || !context) {
+  if (error) {
+    return shell(
+      <div className="text-center py-5">
+        <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center mx-auto mb-4"><AlertCircle className="w-7 h-7 text-rose-600" /></div>
+        <h1 className="text-xl font-semibold text-slate-900">{isRecovery ? 'Reset link unavailable' : 'Invitation unavailable'}</h1>
+        <p className="text-sm text-slate-500 mt-2">{error}</p>
+        <button onClick={() => navigate('/login')} className="mt-6 w-full h-11 rounded-lg bg-[#009944] text-white font-medium hover:bg-[#007a35]">Go to Sign In</button>
+      </div>
+    )
+  }
+
+  if (!isRecovery && !context) {
     return shell(
       <div className="text-center py-5">
         <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center mx-auto mb-4"><AlertCircle className="w-7 h-7 text-rose-600" /></div>
         <h1 className="text-xl font-semibold text-slate-900">Invitation unavailable</h1>
-        <p className="text-sm text-slate-500 mt-2">{error || activationError('invalid_invitation')}</p>
+        <p className="text-sm text-slate-500 mt-2">This invitation is invalid or has already been used. Ask HR to send a new invitation.</p>
         <button onClick={() => navigate('/login')} className="mt-6 w-full h-11 rounded-lg bg-[#009944] text-white font-medium hover:bg-[#007a35]">Go to Sign In</button>
       </div>
     )
@@ -193,9 +241,13 @@ export default function ActivateAccount() {
     <>
       <div className="text-center mb-6">
         <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center mx-auto mb-3"><LockKeyhole className="w-6 h-6 text-[#009944]" /></div>
-        <h1 className="text-2xl font-semibold text-slate-900">Welcome to InfinityCore</h1>
-        <p className="text-sm text-slate-500 mt-2">Set Your Password</p>
-        <p className="text-xs text-slate-400 mt-1">Your InfinityCore account has been created. Set your password to activate your account.</p>
+        <h1 className="text-2xl font-semibold text-slate-900">{isRecovery ? 'Reset Your Password' : 'Welcome to InfinityCore'}</h1>
+        <p className="text-sm text-slate-500 mt-2">{isRecovery ? 'Choose a New Password' : 'Set Your Password'}</p>
+        <p className="text-xs text-slate-400 mt-1">
+          {isRecovery
+            ? 'Enter a new password for your InfinityCore account.'
+            : 'Your InfinityCore account has been created. Set your password to activate your account.'}
+        </p>
       </div>
 
       <form onSubmit={submit} className="space-y-4">
@@ -205,7 +257,7 @@ export default function ActivateAccount() {
             <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input value={email} readOnly aria-readonly="true" className="w-full h-11 rounded-lg border border-slate-200 bg-slate-50 px-3 pl-9 text-sm text-slate-600" />
           </div>
-          <p className="text-xs text-slate-400 mt-1">This is the email address your InfinityCore invitation was sent to.</p>
+          <p className="text-xs text-slate-400 mt-1">{isRecovery ? 'Recovery link sent to this email address.' : 'This is the email address your InfinityCore invitation was sent to.'}</p>
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1.5">New Password</label>
@@ -228,7 +280,7 @@ export default function ActivateAccount() {
         </div>
         {error && <div className="rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-sm p-3">{error}</div>}
         <button type="submit" disabled={saving} className="w-full h-11 rounded-lg bg-[#009944] hover:bg-[#007a35] text-white font-medium disabled:opacity-50">
-          {saving ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Set Password'}
+          {saving ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : isRecovery ? 'Reset Password' : 'Set Password'}
         </button>
       </form>
     </>

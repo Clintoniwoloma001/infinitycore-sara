@@ -73,3 +73,31 @@ credentials arrive; the platform file overrides them (listed last in `env_file:`
   `useAuth` as `accessModules`, checked in `canAccessRoute`.
 - SARA integration: `saraStats.js` now exposes `getWorkforceStats()` for pending
   exceptions, issues, task reports, KPI submissions, and user approvals.
+
+## Phase 57 — Employee Provisioning & Auth Flow Fix
+- SQL migration: `schema_phase57_employee_provisioning_auth_fix.sql` — run in Supabase
+  SQL Editor after Phase 53. Idempotent/additive.
+  - Adds `profiles.employee_number`/`designation` columns + backfill from `employees`
+    (`employee_number` / `"position"` / `designations.title` via helper
+    `employee_designation_label`).
+  - `provision_employee_account` now uses `coalesce` so employee-provided values win;
+    blank phone/department/branch no longer null-wipes existing profile data.
+  - Both `approve_user` overloads rewritten: (5-arg `uuid,text,text,text,text` used by
+    `Users.jsx`; 4-arg `uuid,text,text,jsonb` used by `userApprovalService.js`/`WorkManagement`).
+    Approval looks up the linked employee (user_id → employee_id → email), only
+    overwrites department/branch when the approver supplies a value, auto-creates the
+    employee record when missing (`generate_employee_code` + `generate_employee_number`),
+    snapshots `employee_number`/`designation` onto the profile, and the 4-arg form now
+    sets `approved = true` + clears `rejected_reason`.
+- Auth redirect hardening: `src/config/siteUrl.js` only accepts
+  `https://infinitymfbcore.vercel.app` (or localhost dev); anything else falls back to
+  the canonical URL. Mirrors the edge-side `getAuthRedirectUrl()` in
+  `supabase/functions/_shared/appUrl.ts`.
+- Forgot-password flow: "Forgot password?" on `Login.jsx` → `useAuth.forgotPassword()`
+  → `resetPasswordForEmail` with `redirectTo` = canonical `/activate-account`.
+- `ActivateAccount.jsx` handles `type=recovery`: skips the invitation gate, sets only
+  the password (best-effort `activate_employee_invitation`), mode-aware copy.
+- `Users.jsx` ReviewUserModal prefills department/branch and shows the employee record
+  (employee number / designation / department / branch).
+- Hosted Supabase Auth Site URL + email templates for invite/recovery are dashboard
+  config outside this repo — must include `https://infinitymfbcore.vercel.app`.

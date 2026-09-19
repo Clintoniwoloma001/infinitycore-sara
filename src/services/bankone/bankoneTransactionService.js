@@ -13,15 +13,14 @@ const TRANSACTION_STATUS_FN = 'bankone-transaction-status'
 const HEALTH_FN = 'bankone-health'
 
 // Convert the user's form input into the Qore-documented body field names.
+// All five documented fields are required (RetrievalReference, TransactionDate,
+// TransactionType, Amount and the server-injected Token).
 export function toStatusPayload(input) {
   const payload = {
     RetrievalReference: String(input?.RetrievalReference || '').trim(),
     TransactionDate: String(input?.TransactionDate || '').trim(),
-  }
-  // Optional documented fields — forwarded verbatim when supplied.
-  if (input?.TransactionType) payload.TransactionType = String(input.TransactionType).trim()
-  if (input?.Amount !== undefined && input?.Amount !== null && String(input.Amount).trim() !== '') {
-    payload.Amount = String(input.Amount).trim()
+    TransactionType: String(input?.TransactionType || '').trim(),
+    Amount: String(input?.Amount ?? '').trim(),
   }
   return payload
 }
@@ -29,13 +28,16 @@ export function toStatusPayload(input) {
 export function validateTransactionStatusInput(input) {
   const retrievalReference = String(input?.RetrievalReference || '').trim()
   const transactionDate = String(input?.TransactionDate || '').trim()
+  const transactionType = String(input?.TransactionType || '').trim()
   const amount = input?.Amount === undefined || input?.Amount === null ? '' : String(input.Amount).trim()
   const errors = []
 
   if (!retrievalReference) errors.push('Retrieval Reference is required.')
   if (!transactionDate) errors.push('Transaction Date is required.')
   else if (!isDateValidYYYYMMDD(transactionDate)) errors.push('Transaction Date must be a valid YYYY-MM-DD date.')
-  if (amount && !isAmountKoboString(amount)) errors.push('Amount must be numeric, with up to two decimal places.')
+  if (!transactionType) errors.push('Transaction Type is required.')
+  if (!amount) errors.push('Amount is required.')
+  else if (!isAmountKoboString(amount)) errors.push('Amount must be numeric kobo/CENT, with up to two decimal places.')
 
   return { ok: errors.length === 0, errors }
 }

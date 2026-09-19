@@ -418,7 +418,7 @@ function CreateUserModal({ onClose, onCreated, actorRole, showToast }) {
 // REVIEW USER MODAL
 // ============================================================
 function ReviewUserModal({ user, onClose, onApprove, onReject, busyId, actorRole }) {
-  const [assignment, setAssignment] = useState({ role: 'staff', department: '', branch: '', user_type: 'staff' })
+  const [assignment, setAssignment] = useState({ role: 'staff', department: user?.department || '', branch: user?.branch || '', user_type: 'staff' })
   const [rejectReason, setRejectReason] = useState('')
   const [mode, setMode] = useState('approve')
   const myRoles = assignableRoles(actorRole)
@@ -439,6 +439,17 @@ function ReviewUserModal({ user, onClose, onApprove, onReject, busyId, actorRole
             <div><p className="text-xs font-semibold text-slate-400 uppercase">Email</p><p className="text-slate-800">{user.email || '-'}</p></div>
             <div><p className="text-xs font-semibold text-slate-400 uppercase">Phone</p><p className="text-slate-800">{user.phone || '-'}</p></div>
             <div><p className="text-xs font-semibold text-slate-400 uppercase">Registered</p><p className="text-slate-800">{user.created_at ? new Date(user.created_at).toLocaleDateString() : '-'}</p></div>
+            {(user.employee_number || user.designation || user.department || user.branch) && (
+              <div className="col-span-2 mt-1 rounded-lg bg-white border border-slate-200 p-3">
+                <p className="text-xs font-semibold text-slate-400 uppercase">Employee Record</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-1.5">
+                  {user.employee_number && <div><p className="text-xs font-semibold text-slate-400 uppercase">Employee No.</p><p className="text-slate-800">{user.employee_number}</p></div>}
+                  {user.designation && <div><p className="text-xs font-semibold text-slate-400 uppercase">Designation</p><p className="text-slate-800">{user.designation}</p></div>}
+                  {user.department && <div><p className="text-xs font-semibold text-slate-400 uppercase">Department</p><p className="text-slate-800">{user.department}</p></div>}
+                  {user.branch && <div><p className="text-xs font-semibold text-slate-400 uppercase">Branch</p><p className="text-slate-800">{user.branch}</p></div>}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
