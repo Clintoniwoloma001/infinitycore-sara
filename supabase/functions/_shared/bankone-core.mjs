@@ -47,15 +47,41 @@ export function isAllowedBankOneHost(baseUrl) {
   return host === 'staging.mybankone.com' || host === 'api.mybankone.com' || host === 'mybankone.com'
 }
 
+export function baseUrlContainsApiPath(baseUrl) {
+  const path = String(baseUrl || '').toLowerCase()
+  return path.includes('/thirdpartyapiservice') || path.includes('/apiservice') || path.includes('/coretransactions')
+}
+
 export function resolveBankoneEnvironment(baseUrl) {
   return String(baseUrl || '').toLowerCase().includes('staging') ? BANKONE_ENV_STAGING : BANKONE_ENV_LIVE
 }
 
+export function normalizeBankoneToken(token) {
+  let normalized = String(token || '').trim()
+  if ((normalized.startsWith("'") && normalized.endsWith("'")) || (normalized.startsWith('"') && normalized.endsWith('"'))) {
+    normalized = normalized.slice(1, -1)
+  }
+  return normalized
+}
+
+export function tokenFormatDiagnostics(token) {
+  const raw = String(token || '')
+  const normalized = normalizeBankoneToken(token)
+  return {
+    tokenPresent: Boolean(raw.trim()),
+    tokenLength: normalized.length,
+    tokenHasSurroundingQuotes: Boolean(raw.trim()) && raw.trim() !== normalized,
+    tokenHasWhitespace: /\s/.test(raw),
+    tokenNormalizedLength: normalized.length,
+  }
+}
+
 export function checkSecretHealth({ baseUrl = '', token = '', timeoutMs = '' } = {}) {
   const baseUrlConfigured = Boolean(String(baseUrl).trim())
-  const tokenConfigured = Boolean(String(token).trim())
-  const tokenHasWhitespace = tokenConfigured && /\s/.test(String(token))
-  const baseUrlValid = baseUrlConfigured && isAllowedBankOneHost(String(baseUrl).trim())
+  const normalizedToken = normalizeBankoneToken(token)
+  const tokenConfigured = Boolean(normalizedToken)
+  const tokenHasWhitespace = /\s/.test(String(token))
+  const baseUrlValid = baseUrlConfigured && isAllowedBankOneHost(String(baseUrl).trim()) && !baseUrlContainsApiPath(String(baseUrl).trim())
   const timeoutValid = !timeoutMs || (Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0)
   return {
     baseUrlConfigured,
@@ -129,11 +155,14 @@ export function validateTransactionStatusRequest(body) {
 
 export function buildTransactionStatusRequest({ baseUrl, token, input }) {
   const cleanBase = cleanString(baseUrl, 200).replace(/\/+$/, '')
-  if (!cleanBase || !token || !isAllowedBankOneHost(cleanBase)) throw new Error('missing_bankone_credentials')
+  const normalizedToken = normalizeBankoneToken(token)
+  if (!cleanBase || !normalizedToken || !isAllowedBankOneHost(cleanBase) || baseUrlContainsApiPath(cleanBase)) {
+    throw new Error('missing_bankone_credentials')
+  }
   const body = {
     RetrievalReference: input.RetrievalReference,
     TransactionDate: input.TransactionDate,
-    Token: token,
+    Token: normalizedToken,
   }
   if (input.TransactionType) body.TransactionType = input.TransactionType
   if (input.Amount) body.Amount = String(input.Amount)
@@ -144,6 +173,12 @@ export function buildTransactionStatusRequest({ baseUrl, token, input }) {
       'Content-Type': 'application/json',
     },
     body,
+    diagnostics: {
+      outgoingUrl: `${cleanBase}${BANKONE_STATUS_ENDPOINT}`,
+      baseUrl: cleanBase,
+      endpointPath: BANKONE_STATUS_ENDPOINT,
+      tokenFormat: tokenFormatDiagnostics(token),
+    },
   }
 }
 

@@ -56,6 +56,9 @@ import {
   maskedLogSummary,
   newRequestId,
   ERROR_CATEGORIES,
+  normalizeBankoneToken,
+  tokenFormatDiagnostics,
+  baseUrlContainsApiPath,
 } from '../_shared/bankone-core.mjs'
 
 const OPERATION = 'transaction_status'
@@ -178,11 +181,13 @@ Deno.serve(async (req) => {
 
   // ---- 3. Read server-side credentials ----
   const baseUrl = Deno.env.get('BANKONE_API_BASE_URL') || ''
-  const token = Deno.env.get('BANKONE_API_TOKEN') || ''
+  const rawToken = Deno.env.get('BANKONE_API_TOKEN') || ''
+  const token = normalizeBankoneToken(rawToken)
+  const tokenDiagnostics = tokenFormatDiagnostics(rawToken)
   const timeoutMs = resolveTimeoutMs(Deno.env.get('BANKONE_TIMEOUT_MS'))
   const environment = resolveEnvironment(baseUrl || DEFAULT_BANKONE_BASE_URL)
 
-  if (!baseUrl || !token) {
+  if (!baseUrl || !token || baseUrlContainsApiPath(baseUrl)) {
     const error = safeError({ category: ERROR_CATEGORIES.MISSING_CREDENTIALS })
     return json(failureEnvelope({
       requestId,
@@ -192,13 +197,19 @@ Deno.serve(async (req) => {
       input: validation.value,
       providerRequestSent: false,
       providerResponseReceived: false,
+      diagnostics: {
+        baseUrlConfigured: Boolean(baseUrl?.trim()),
+        baseUrlContainsApiPath: baseUrlContainsApiPath(baseUrl),
+        tokenConfigured: tokenDiagnostics.tokenPresent,
+        tokenFormat: tokenDiagnostics,
+      },
     }), 500, origin)
   }
 
   // ---- 4. Build + call BankOne ----
   let outgoing
   try {
-    outgoing = buildTransactionStatusRequest({ baseUrl, token, input: validation.value })
+    outgoing = buildTransactionStatusRequest({ baseUrl, token: rawToken, input: validation.value })
   } catch (e) {
     const error = safeError({ category: ERROR_CATEGORIES.MISSING_CREDENTIALS })
     return json(failureEnvelope({
@@ -209,6 +220,13 @@ Deno.serve(async (req) => {
       input: validation.value,
       providerRequestSent: false,
       providerResponseReceived: false,
+      diagnostics: {
+        baseUrlConfigured: Boolean(baseUrl?.trim()),
+        baseUrlContainsApiPath: baseUrlContainsApiPath(baseUrl),
+        tokenConfigured: tokenDiagnostics.tokenPresent,
+        tokenFormat: tokenDiagnostics,
+        buildError: String(e?.message || 'build_failed').slice(0, 100),
+      },
     }), 500, origin)
   }
 
@@ -282,13 +300,18 @@ Deno.serve(async (req) => {
     }), 502, origin)
   }
 
-  const diagnostics = providerResponseDiagnostics({
+  const responseDiagnostics = providerResponseDiagnostics({
     rawText,
     response,
     outgoingUrl: outgoing.url,
     secret: token,
     maxPreviewLength: 500,
   })
+  const diagnostics = {
+    ...outgoing.diagnostics,
+    ...responseDiagnostics,
+    tokenFormat: tokenDiagnostics,
+  }
 
   const parsedRes = parseProviderBody(rawText, providerContentType)
   if (!parsedRes.ok) {

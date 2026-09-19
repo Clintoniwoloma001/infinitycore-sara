@@ -20,8 +20,10 @@ import {
   BANKONE_STATUS_ENDPOINT,
   BANKONE_QUERY_ROLES,
   isAllowedBankOneHost,
+  baseUrlContainsApiPath,
   checkSecretHealth,
   resolveBankoneEnvironment,
+  tokenFormatDiagnostics,
   newRequestId,
 } from '../_shared/bankone-core.mjs'
 
@@ -145,7 +147,7 @@ async function handleHealthRequest(req, origin, requestId) {
 
   // ---- Configuration health (secret presence only — values never exposed) ----
   const baseUrlRaw = (Deno.env.get('BANKONE_API_BASE_URL') || '').trim()
-  const tokenRaw = (Deno.env.get('BANKONE_API_TOKEN') || '').trim()
+  const tokenRaw = Deno.env.get('BANKONE_API_TOKEN') || ''
   const timeoutRaw = Deno.env.get('BANKONE_TIMEOUT_MS') || ''
   const {
     baseUrlConfigured,
@@ -155,12 +157,29 @@ async function handleHealthRequest(req, origin, requestId) {
     timeoutValid,
     configurationHealthy,
   } = checkSecretHealth({ baseUrl: baseUrlRaw, token: tokenRaw, timeoutMs: timeoutRaw })
+  const baseUrlContainsApiPathResult = baseUrlContainsApiPath(baseUrlRaw)
+  const tokenFormat = tokenFormatDiagnostics(tokenRaw)
 
   const checks = [{
     name: 'bankone_server_configuration',
     ok: configurationHealthy,
     detail: configurationHealthy ? 'Server-side BankOne configuration is valid' : 'Server-side BankOne configuration is incomplete or invalid',
   }]
+
+  const configuration = {
+    configured: configurationHealthy,
+    baseUrlConfigured,
+    baseUrlValid,
+    baseUrlContainsApiPath: baseUrlContainsApiPathResult,
+    tokenConfigured,
+    secretPresent: tokenConfigured,
+    tokenHasWhitespace,
+    tokenHasSurroundingQuotes: tokenFormat.tokenHasSurroundingQuotes,
+    tokenLength: tokenFormat.tokenLength,
+    timeoutValid,
+    authType: 'server-side secret',
+    transactionStatusEndpoint: BANKONE_STATUS_ENDPOINT,
+  }
 
   // ---- Provider reachability (historical evidence only) ----
   let bankoneReachable = null
@@ -250,16 +269,11 @@ async function handleHealthRequest(req, origin, requestId) {
     authType: 'server-side secret',
     environment: environment === BANKONE_ENV_STAGING ? 'staging' : 'production',
     databaseEnvironment: environment,
-    configuration: {
-      configured: configurationHealthy,
-      baseUrlConfigured,
-      baseUrlValid,
-      tokenConfigured,
-      secretPresent: tokenConfigured,
-      tokenHasWhitespace,
-      timeoutValid,
-      authType: 'server-side secret',
-      transactionStatusEndpoint: BANKONE_STATUS_ENDPOINT,
+    configuration,
+    configurationDetail: {
+      baseUrlContainsApiPath: baseUrlContainsApiPathResult,
+      tokenHasSurroundingQuotes: tokenFormat.tokenHasSurroundingQuotes,
+      tokenLength: tokenFormat.tokenLength,
     },
     configurationStatus: configurationHealthy ? 'configured' : 'incomplete',
     baseUrlConfigured,
