@@ -152,3 +152,27 @@ credentials arrive; the platform file overrides them (listed last in `env_file:`
   the Production environment in Vercel Project Settings, and keep Supabase Auth
   Site URL + Redirect URLs set to `https://infinitymfbcore.vercel.app` (never a
   `*.vercel.app` preview/branch URL).
+
+## Phase 62 — QR Terminal Management (list / suspend / resume / revoke / delete)
+- SQL migration: `schema_phase62_qr_terminal_management.sql` — run in Supabase SQL
+  Editor after Phase 61. Idempotent/additive.
+  - `attendance_devices.status` now also admits `'revoked'`; legacy token-less
+    `status='suspended'` attendance terminals are re-labelled `revoked`.
+  - **Semantics**: `active` = usable at scan points; `suspended` = reversible pause
+    (token preserved, Resume needs no reprint); `revoked` = permanent kill (token
+    removed — this is what the existing Revoke QR button now records); `delete` is
+    reserved for revoked rows only. The public gates
+    `validate_attendance_terminal_employee()` / `validate_attendance_terminal_location()`
+    / `clock_attendance_terminal()` already require `status='active'`, so suspended
+    and revoked rows are rejected automatically (no scan-path change).
+  - New SECURITY DEFINER RPCs (super_admin/admin/hr_manager only): `suspend_attendance_terminal`,
+    `resume_attendance_terminal`, `delete_attendance_terminal`, plus
+    `revoke_attendance_terminal` repointed to the `revoked` state. All write to
+    `audit_logs` (`ATTENDANCE_TERMINAL_SUSPENDED/RESUMED/REVOKED/DELETED`).
+- `attendanceService.js` gains `suspendTerminal` / `resumeTerminal` / `deleteTerminal`
+  wrappers; `listTerminalDevices()` now also selects `created_at`.
+- `AttendanceManagement.jsx` QR Attendance tab: existing Generate/Revoke panel kept;
+  a **Terminal devices** table is added below it (name, status badge, last seen,
+  View QR / Suspend / Resume / Revoke / Delete per row, all with `window.confirm`).
+  The View QR modal re-displays a link generated this session, otherwise offers a
+  Generate QR button (which reactivates suspended/revoked terminals with a new token).

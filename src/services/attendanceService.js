@@ -479,7 +479,7 @@ export const attendanceService = {
   async listTerminalDevices() {
     const { data, error } = await supabase
       .from('attendance_devices')
-      .select('id, device_name, device_type, status, active, branch_id, last_seen_at, updated_at')
+      .select('id, device_name, device_type, status, active, branch_id, last_seen_at, created_at, updated_at')
       .eq('device_type', 'attendance_terminal')
       .order('created_at', { ascending: true })
     if (error) throw error
@@ -501,10 +501,29 @@ export const attendanceService = {
     return data
   },
 
-  async validatePublicTerminalEmployee(token, employeeIdentifier) {
+  async suspendTerminal(deviceId) {
+    const { data, error } = await supabase.rpc('suspend_attendance_terminal', { p_device_id: deviceId })
+    if (error) throw error
+    return data
+  },
+
+  async resumeTerminal(deviceId) {
+    const { data, error } = await supabase.rpc('resume_attendance_terminal', { p_device_id: deviceId })
+    if (error) throw error
+    return data
+  },
+
+  async deleteTerminal(deviceId) {
+    const { data, error } = await supabase.rpc('delete_attendance_terminal', { p_device_id: deviceId })
+    if (error) throw error
+    return data
+  },
+
+  async validatePublicTerminalEmployee(token, employeeIdentifier, deviceFingerprint) {
     const { data, error } = await supabase.rpc('validate_attendance_terminal_employee', {
       p_token: token,
       p_employee_identifier: employeeIdentifier,
+      p_device_fingerprint: deviceFingerprint || null,
     })
     if (error) throw error
     return data
@@ -526,7 +545,7 @@ export const attendanceService = {
     return data
   },
 
-  async clockPublicTerminal({ token, employeeIdentifier, eventType, geo }) {
+  async clockPublicTerminal({ token, employeeIdentifier, eventType, geo, deviceFingerprint }) {
     const coords = geo || await getPosition()
     if (!coords || !Number.isFinite(Number(coords.lat)) || !Number.isFinite(Number(coords.lng))) {
       throw new Error('A valid location is required to record attendance.')
@@ -538,9 +557,41 @@ export const attendanceService = {
       p_lat: coords.lat,
       p_lng: coords.lng,
       p_accuracy: coords.accuracy ?? null,
+      p_device_fingerprint: deviceFingerprint || null,
     })
     if (error) throw new Error(normalizeAttendanceError(error.message))
     if (data?.success === false) throw new Error(normalizeAttendanceError(data.error))
+    return data
+  },
+
+  // ---- Attendance device binding oversight (HR/admin) ----
+  // One device may clock only one employee per day. HR can inspect the
+  // active bindings, review blocked attempts, and clear a specific
+  // (device, date) binding so the device can be used again.
+  async listDeviceBindings(date) {
+    const { data, error } = await supabase.rpc('list_attendance_device_bindings', {
+      p_date: date || null,
+    })
+    if (error) throw error
+    return data || []
+  },
+
+  async listDeviceBindingBlocks(date, limit = 20) {
+    const { data, error } = await supabase.rpc('list_attendance_device_binding_blocks', {
+      p_date: date || null,
+      p_limit: limit,
+    })
+    if (error) throw error
+    return data || []
+  },
+
+  async clearDeviceBinding(fingerprintHash, date, reason) {
+    const { data, error } = await supabase.rpc('clear_attendance_device_binding', {
+      p_device_fingerprint_hash: fingerprintHash,
+      p_binding_date: date || null,
+      p_reason: reason || null,
+    })
+    if (error) throw error
     return data
   },
 

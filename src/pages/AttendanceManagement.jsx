@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
-import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw } from 'lucide-react'
+import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw, Eye, Trash2, Pause, Play } from 'lucide-react'
 import { attendanceService, platformDateKey, formatWorkedHours } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { platformSettingsService } from '../services/platformSettingsService'
@@ -735,8 +735,11 @@ function QrTerminalTab({ setNotice }) {
   const [devices, setDevices] = useState([])
   const [selectedId, setSelectedId] = useState('')
   const [terminalLink, setTerminalLink] = useState('')
+  const [linksByDevice, setLinksByDevice] = useState({})
+  const [showQr, setShowQr] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [busyId, setBusyId] = useState('')
 
   const load = async () => {
     setLoading(true)
@@ -753,12 +756,18 @@ function QrTerminalTab({ setNotice }) {
 
   useEffect(() => { load() }, [])
 
+  const rememberLink = (deviceId, link) => {
+    setLinksByDevice((prev) => (prev[deviceId] === link ? prev : { ...prev, [deviceId]: link }))
+  }
+
   const generate = async () => {
     setBusy(true)
     try {
       const result = await attendanceService.generateTerminalToken(selectedId || null)
       setSelectedId(result.device_id)
-      setTerminalLink(buildTerminalUrl(result.token))
+      const link = buildTerminalUrl(result.token)
+      setTerminalLink(link)
+      rememberLink(result.device_id, link)
       setNotice({ kind: 'ok', text: 'QR attendance terminal generated. The raw token is shown only in this link.' })
       await load()
     } catch (e) {
@@ -774,6 +783,7 @@ function QrTerminalTab({ setNotice }) {
     try {
       await attendanceService.revokeTerminal(selectedId)
       setTerminalLink('')
+      setLinksByDevice((prev) => { const next = { ...prev }; delete next[selectedId]; return next })
       setNotice({ kind: 'ok', text: 'Terminal link revoked. Existing QR codes will no longer work.' })
       await load()
     } catch (e) {
@@ -783,14 +793,14 @@ function QrTerminalTab({ setNotice }) {
     }
   }
 
-  const copyLink = async () => {
-    if (!terminalLink) return
-    await navigator.clipboard?.writeText(terminalLink)
+  const copyLink = async (link) => {
+    if (!link) return
+    await navigator.clipboard?.writeText(link)
     setNotice({ kind: 'ok', text: 'Terminal link copied.' })
   }
 
-  const downloadQr = () => {
-    const canvas = document.getElementById('attendance-terminal-qr')
+  const downloadQr = (id = 'attendance-terminal-qr') => {
+    const canvas = document.getElementById(id)
     if (!canvas) return
     const anchor = document.createElement('a')
     anchor.href = canvas.toDataURL('image/png')
@@ -798,10 +808,152 @@ function QrTerminalTab({ setNotice }) {
     anchor.click()
   }
 
+  const statusMeta = (device) => {
+    const s = device?.status
+    if (s === 'active') return { label: 'Active', cls: 'bg-emerald-100 text-emerald-700' }
+    if (s === 'suspended') return { label: 'Suspended', cls: 'bg-amber-100 text-amber-700' }
+    if (s === 'revoked') return { label: 'Revoked', cls: 'bg-rose-100 text-rose-700' }
+    return { label: s || 'Unknown', cls: 'bg-slate-100 text-slate-600' }
+  }
+
+  const runFor = async (id, fn, okText, errorText) => {
+    setBusyId(id)
+    try {
+      await fn(id)
+      setNotice({ kind: 'ok', text: okText })
+      await load()
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || errorText })
+    } finally {
+      setBusyId('')
+    }
+  }
+
+  const suspendDevice = (device) => {
+    if (!window.confirm(`Suspend "${device.device_name}"? Scans are blocked until you resume it. The QR token is kept so it can resume without reprinting.`)) return
+    runFor(device.id, attendanceService.suspendTerminal, 'Terminal suspended. Scans are now blocked.', 'Could not suspend terminal')
+  }
+
+  const resumeDevice = (device) => {
+    if (!window.confirm(`Resume "${device.device_name}"? Scans work again with the existing QR token.`)) return
+    runFor(device.id, attendanceService.resumeTerminal, 'Terminal resumed. Scans re-enabled.', 'Could not resume terminal')
+  }
+
+  const revokeDevice = (device) => {
+    if (!window.confirm(`Revoke "${device.device_name}"? This permanently destroys its QR token. Existing printed QRs stop working and cannot be re-enabled — a brand-new QR must be generated to bring the terminal back.`)) return
+    setBusyId(device.id)
+    attendanceService.revokeTerminal(device.id)
+      .then(async () => {
+        setLinksByDevice((prev) => { const next = { ...prev }; delete next[device.id]; return next })
+        setTerminalLink((cur) => (device.id === selectedId ? '' : cur))
+        if (showQr === device.id) setShowQr('')
+        setNotice({ kind: 'ok', text: 'Terminal revoked. The QR token is destroyed.' })
+        await load()
+      })
+      .catch((e) => setNotice({ kind: 'error', text: e?.message || 'Could not revoke terminal' }))
+      .finally(() => setBusyId(''))
+  }
+
+  const deleteDevice = (device) => {
+    if (!window.confirm(`Delete "${device.device_name}"? Only revoked terminals can be deleted. This permanently removes the terminal record and its scan-attempt history.`)) return
+    setBusyId(device.id)
+    attendanceService.deleteTerminal(device.id)
+      .then(async () => {
+        if (showQr === device.id) setShowQr('')
+        setNotice({ kind: 'ok', text: 'Terminal deleted.' })
+        await load()
+      })
+      .catch((e) => setNotice({ kind: 'error', text: e?.message || 'Could not delete terminal' }))
+      .finally(() => setBusyId(''))
+  }
+
+  const ensureQr = async (device) => {
+    setBusy(true)
+    try {
+      const result = await attendanceService.generateTerminalToken(device.id)
+      rememberLink(device.id, buildTerminalUrl(result.token))
+      await load()
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Could not generate terminal QR' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const actionBtn = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-slate-50'
+  const dangerBtn = 'border-rose-200 text-rose-700 hover:bg-rose-50'
+  const plainBtn = 'border-slate-300 text-slate-600'
+
+  const renderActions = (device) => (
+    <div className="flex flex-wrap gap-1.5">
+      <button onClick={() => setShowQr(device.id)} className={`${actionBtn} ${plainBtn}`}><Eye className="w-3.5 h-3.5" /> View QR</button>
+      {device.status === 'active' && (
+        <button onClick={() => suspendDevice(device)} className={`${actionBtn} bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100`}><Pause className="w-3.5 h-3.5" /> Suspend</button>
+      )}
+      {device.status === 'suspended' && (
+        <button onClick={() => resumeDevice(device)} className={`${actionBtn} border-emerald-200 text-emerald-700 hover:bg-emerald-50`}><Play className="w-3.5 h-3.5" /> Resume</button>
+      )}
+      {device.status !== 'revoked' && (
+        <button onClick={() => revokeDevice(device)} className={`${actionBtn} ${dangerBtn}`}><Ban className="w-3.5 h-3.5" /> Revoke</button>
+      )}
+      {device.status === 'revoked' && (
+        <button onClick={() => deleteDevice(device)} className={`${actionBtn} ${dangerBtn}`}><Trash2 className="w-3.5 h-3.5" /> Delete</button>
+      )}
+    </div>
+  )
+
+  const qrDevice = devices.find((d) => d.id === showQr)
+  const qrModal = qrDevice ? (() => {
+    const link = linksByDevice[qrDevice.id] || ''
+    const meta = statusMeta(qrDevice)
+    return (
+      <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4" onClick={() => setShowQr('')}>
+        <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="font-semibold text-slate-900">{qrDevice.device_name}</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${meta.cls}`}>{meta.label}</span>
+                {qrDevice.last_seen_at && <span className="ml-2">Last seen {new Date(qrDevice.last_seen_at).toLocaleString()}</span>}
+              </p>
+            </div>
+            <button onClick={() => setShowQr('')} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"><X className="w-5 h-5" /></button>
+          </div>
+
+          {link ? (
+            <div className="space-y-3">
+              <div className="bg-white border border-slate-200 rounded-xl p-4 w-fit mx-auto">
+                <QRCodeCanvas id="attendance-terminal-qr-modal" value={link} size={220} level="H" includeMargin />
+              </div>
+              <p className="text-xs text-slate-500 break-all">{link}</p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                <button onClick={() => copyLink(link)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Copy className="w-3.5 h-3.5" /> Copy link</button>
+                <button onClick={() => downloadQr('attendance-terminal-qr-modal')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Download className="w-3.5 h-3.5" /> Download</button>
+                <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Printer className="w-3.5 h-3.5" /> Print</button>
+              </div>
+              <button onClick={() => ensureQr(qrDevice)} disabled={busy} className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-[#009944] text-[#009944] text-sm font-medium hover:bg-[#009944]/5 disabled:opacity-50">
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Regenerate QR
+              </button>
+              {qrDevice.status !== 'active' && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">Regenerating will reactivate this terminal with a brand-new QR.</p>}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-500">No QR is available for this terminal right now. Generate one to display, download, and print it.</p>
+              <button onClick={() => ensureQr(qrDevice)} disabled={busy} className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />} Generate QR
+              </button>
+              {qrDevice.status === 'revoked' && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">This terminal is revoked. Generating a QR will revive it with a brand-new token.</p>}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  })() : null
+
   if (loading) return <LoadingState label="Loading QR attendance terminals..." />
 
   return (
-    <div className="max-w-3xl space-y-5">
+    <div className="max-w-5xl space-y-5">
       <div>
         <p className="text-sm text-slate-500">Generate a public QR terminal link for reception or an office entrance. The QR contains only a revocable random terminal token, never employee credentials or employee data.</p>
       </div>
@@ -834,8 +986,8 @@ function QrTerminalTab({ setNotice }) {
               <p className="text-sm font-medium text-slate-800">Scan to open Attendance Terminal</p>
               <p className="text-xs text-slate-500 break-all">{terminalLink}</p>
               <div className="flex flex-wrap gap-2">
-                <button onClick={copyLink} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Copy className="w-3.5 h-3.5" /> Copy link</button>
-                <button onClick={downloadQr} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Download className="w-3.5 h-3.5" /> Download</button>
+                <button onClick={() => copyLink(terminalLink)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Copy className="w-3.5 h-3.5" /> Copy link</button>
+                <button onClick={() => downloadQr()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Download className="w-3.5 h-3.5" /> Download</button>
                 <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Printer className="w-3.5 h-3.5" /> Print</button>
               </div>
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">Regenerating or revoking invalidates the previous QR link. Employees still provide their own employee number and device location at the terminal.</p>
@@ -843,6 +995,49 @@ function QrTerminalTab({ setNotice }) {
           </div>
         )}
       </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
+        <div>
+          <h3 className="font-semibold text-slate-900">Terminal devices</h3>
+          <p className="text-sm text-slate-500 mt-1">Every QR attendance terminal. Active terminals accept scans, suspended ones are paused with their token kept, revoked terminals are permanently disabled, and only revoked terminals can be deleted.</p>
+        </div>
+
+        {devices.length === 0 ? (
+          <EmptyState title="No attendance terminals yet" description="Generate a QR above to create your first terminal." />
+        ) : (
+          <div className="overflow-x-auto -mx-6 px-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                  <th className="py-2 pr-3 font-medium">Terminal</th>
+                  <th className="py-2 pr-3 font-medium">Status</th>
+                  <th className="py-2 pr-3 font-medium">Last seen</th>
+                  <th className="py-2 pr-3 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {devices.map((device) => (
+                  <tr key={device.id} className="border-b border-slate-50 last:border-0">
+                    <td className="py-3 pr-3">
+                      <p className="font-medium text-slate-800">{device.device_name}</p>
+                      <p className="text-xs text-slate-400">QR terminal · {device.active === false ? 'disabled' : 'enabled'}</p>
+                    </td>
+                    <td className="py-3 pr-3">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${statusMeta(device).cls}`}>{statusMeta(device).label}</span>
+                    </td>
+                    <td className="py-3 pr-3 text-xs text-slate-500">{device.last_seen_at ? new Date(device.last_seen_at).toLocaleString() : 'Never scanned'}</td>
+                    <td className="py-3">
+                      {busyId === device.id ? <Loader2 className="w-4 h-4 animate-spin text-[#009944]" /> : renderActions(device)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {qrModal}
     </div>
   )
 }
