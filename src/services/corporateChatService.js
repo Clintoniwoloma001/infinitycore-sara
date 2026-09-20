@@ -1,4 +1,5 @@
 import { supabase } from '../supabaseClient'
+import { APP_URL } from '../config/siteUrl'
 
 // ------------------------------------------------------------------
 // Corporate Communication Service — Infinity Bank
@@ -1064,6 +1065,57 @@ export function extractMentions(body, wordMap) {
   return out
 }
 
+// ------------------------------------------------------------------
+// MEMBER MANAGEMENT / INVITES
+// ------------------------------------------------------------------
+
+// Build the shareable invite URL (never exposes a DB uuid — only the token).
+export function buildInviteUrl(token) {
+  return `${APP_URL}/#/chat?invite=${encodeURIComponent(String(token || ''))}`
+}
+
+// A ready-to-send WhatsApp share link for a conversation invite.
+export function waShareUrl(inviteUrl, conversationLabel) {
+  return `https://wa.me/?text=${encodeURIComponent(`Join "${conversationLabel || 'this conversation'}" on Infinity Core: ${inviteUrl}`)}`
+}
+
+export async function createMessageInvite(scope, contextId, { expiresAt = null, maxUses = null } = {}) {
+  const { data, error } = await supabase.rpc('create_message_invite', {
+    p_scope: scope,
+    p_context_id: contextId,
+    p_expires_at: expiresAt || null,
+    p_max_uses: maxUses == null ? null : Number(maxUses),
+  })
+  if (error) throw error
+  return data
+}
+
+export async function revokeMessageInvite(inviteId) {
+  const { data, error } = await supabase.rpc('revoke_message_invite', { p_invite_id: inviteId })
+  if (error) throw error
+  return data
+}
+
+export async function listMessageInvites(scope, contextId) {
+  const { data, error } = await supabase.rpc('list_message_invites', { p_scope: scope, p_context_id: contextId })
+  if (error) throw error
+  return Array.isArray(data) ? data : []
+}
+
+// Preview what an invite token opens (name, member count, joined already).
+export async function getInviteContext(token) {
+  const { data, error } = await supabase.rpc('get_message_invite_context', { p_token: token })
+  if (error) throw error
+  return data
+}
+
+// Accept an invite as a plain member.
+export async function joinViaInvite(token) {
+  const { data, error } = await supabase.rpc('join_via_message_invite', { p_token: token, p_role: 'member' })
+  if (error) throw error
+  return data
+}
+
 export default {
   resolveDirectory,
   displayName,
@@ -1103,4 +1155,11 @@ export default {
   unreadMessageTotal,
   conversationPins,
   listMessageAcks,
+  createMessageInvite,
+  revokeMessageInvite,
+  listMessageInvites,
+  getInviteContext,
+  joinViaInvite,
+  buildInviteUrl,
+  waShareUrl,
 }

@@ -85,7 +85,7 @@ begin
       'chat_messages','chat_threads',
       'message_channels','message_channel_members','message_groups','message_group_members',
       'message_acknowledgements','message_attachments','message_audit_log','message_bookmarks',
-      'message_exports','message_holds','message_mentions','message_reads','message_reactions',
+      'message_exports','message_holds','message_invites','message_mentions','message_reads','message_reactions',
       'message_reports','message_revisions','message_tasks'),
     'notifications', jsonb_build_array('notifications'),
     'payroll', jsonb_build_array(

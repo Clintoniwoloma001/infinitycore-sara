@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  AlertTriangle, Hash, Loader2, MailCheck, MessageSquare, Pin, Plus, Search, Send, UserPlus, Users, X,
+  AlertTriangle, Copy, Hash, Link2, Loader2, MailCheck, MessageSquare, Pin, Plus, RefreshCw, Search, Send, Share2, UserPlus, Users, X,
 } from 'lucide-react'
 import { supabase } from '../../supabaseClient'
 import { useAuth } from '../../hooks/useAuth'
 import {
   groups, channels, threads, messageActions, listReactions, listPinned, resolveDirectory,
   conversationPins, sendRichMessage, listAttachments, listMessageAcks, uploadChatAttachment,
+  createMessageInvite, revokeMessageInvite, listMessageInvites, buildInviteUrl, waShareUrl,
 } from '../../services/corporateChatService'
 import MessageBubble from './MessageBubble'
 import Composer from './Composer'
@@ -33,6 +34,14 @@ const fmtTime = (iso) => {
 }
 
 const COMM_ADMIN_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer']
+
+// A name resolver that never leaks a raw UUID for unknown directory entries.
+const displayPersonName = (person) => {
+  const raw = person?.full_name || person?.name || ''
+  return raw && (!person?.email || String(raw).toLowerCase() !== String(person?.email || '').toLowerCase())
+    ? raw
+    : 'Unknown User'
+}
 
 const typeLabel = (channel) => ({ branch: 'Branch', area: 'Area', department: 'Department', announcement: 'Announcements' })[channel.channel_type] || (channel.channel_type === 'role' ? 'Role' : 'Team')
 
@@ -528,7 +537,7 @@ export default function Conversations({ kind, people, identity }) {
               </div>
               <div className="flex items-center gap-1.5">
                 <button title="Search in conversation" onClick={() => setSearchOpen((v) => !v)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"><Search className="w-4 h-4" /></button>
-                 <button title={isGroup ? 'Add People' : 'Channel Members'} aria-label={isGroup ? 'Add People' : 'Channel Members'} onClick={() => setShowMembers((v) => !v)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"><Users className="w-4 h-4" /></button>
+                 <button title="Manage members" aria-label="Manage members" onClick={() => setShowMembers((v) => !v)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"><Users className="w-4 h-4" /></button>
               </div>
             </div>
 
@@ -727,20 +736,48 @@ export default function Conversations({ kind, people, identity }) {
 }
 
 function MemberPanel({ kind, conversation, members, identity, people, me, myRole, onClose, onChange }) {
-  const canManage = ['owner', 'admin'].includes(myRole)
-  const canChangeRoles = myRole === 'owner'
+  const { profile } = useAuth()
+  const isCommAdmin = COMM_ADMIN_ROLES.includes(profile?.role)
+  const canManage = ['owner', 'admin'].includes(myRole) || isCommAdmin
+  const canChangeRoles = myRole === 'owner' || isCommAdmin
   const isGroup = kind === 'group'
   const svc = isGroup ? groups : channels
   const cname = isGroup ? conversation.name : conversation.display_name || conversation.name
-  const panelTitle = isGroup ? 'Add People' : 'Channel Members'
+  const panelTitle = isGroup ? 'Group Members' : 'Channel Members'
   const [pickerOpen, setPickerOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [memberSearch, setMemberSearch] = useState('')
   const [suspendFor, setSuspendFor] = useState(null)
   const [suspendDays, setSuspendDays] = useState(7)
   const [suspendUntil, setSuspendUntil] = useState('')
   const [suspendReason, setSuspendReason] = useState('')
+  const [invites, setInvites] = useState([])
+  const [inviteBusy, setInviteBusy] = useState(false)
+  const [inviteError, setInviteError] = useState('')
+  const [newInviteUrl, setNewInviteUrl] = useState(null)
+  const [syncing, setSyncing] = useState(false)
 
-  const available = (people || []).filter((p) => p.id !== me && !members.some((m) => m.member_id === p.id))
+  const loadInvites = async () => {
+    try { setInvites(await listMessageInvites(kind, conversation.id)) } catch (_) {}
+  }
+  useEffect(() => { if (canManage) loadInvites() }, [conversation.id, kind, canManage])
+
+  const q = memberSearch.trim().toLowerCase()
+  const filteredMembers = (members || []).filter((m) => {
+    if (!q) return true
+    const ident = identity[m.member_id]
+    return `${ident?.name || ''} ${ident?.email || ''} ${ident?.department || ''} ${ident?.position || ''} ${ident?.staffId || ''} ${ident?.branch || ''}`.toLowerCase().includes(q)
+  })
+  const filteredAvailable = (people || []).filter((p) =>
+    p.id !== me &&
+    !members.some((m) => m.member_id === p.id) &&
+    (!q || `${displayPersonName(p)} ${p.email || ''} ${p.department || ''} ${p.position || ''}`.toLowerCase().includes(q))
+  )
+
+  // Automatic membership is a channel concept; groups are always manual.
+  const autoLabel = !isGroup && conversation?.is_auto
+    ? `Automatic · ${String(conversation.auto_source || conversation.channel_type || '').replace(/_/g, ' ')}`
+    : ''
 
   const addMember = async (id) => {
     setBusy(true)
@@ -795,6 +832,54 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
+  const createInvite = async () => {
+    setInviteBusy(true)
+    setInviteError('')
+    try {
+      const res = await createMessageInvite(kind, conversation.id, {})
+      if (res?.token) setNewInviteUrl(buildInviteUrl(res.token))
+      else setNewInviteUrl(null)
+      await loadInvites()
+    } catch (e) {
+      setInviteError(e?.message || 'Could not create an invite link')
+    } finally {
+      setInviteBusy(false)
+    }
+  }
+
+  const revokeInvite = async (id) => {
+    if (!window.confirm('Revoke this invite link? It stops working immediately.')) return
+    setInviteBusy(true)
+    setInviteError('')
+    try {
+      await revokeMessageInvite(id)
+      setNewInviteUrl(null)
+      await loadInvites()
+    } catch (e) {
+      setInviteError(e?.message || 'Could not revoke the invite')
+    } finally {
+      setInviteBusy(false)
+    }
+  }
+
+  const copyInvite = async (url) => {
+    try { await navigator.clipboard.writeText(url) } catch (_) { window.prompt('Copy this invite link:', url) }
+  }
+
+  const reSyncMembers = async () => {
+    setSyncing(true)
+    setInviteError('')
+    try {
+      const res = await channels.syncAuto(conversation.id)
+      alert(`Members re-synced from the org chart${res?.added || res?.removed ? ` (${res.added || 0} added, ${res.removed || 0} removed)` : ' — already up to date'}.`)
+      onChange(conversation)
+    } catch (e) {
+      setInviteError(e?.message || 'Could not re-sync members')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
       <div className="bg-white rounded-xl w-full max-w-lg max-h-[85vh] overflow-hidden">
@@ -802,31 +887,90 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
           <h3 className="text-lg font-semibold text-slate-900">{panelTitle} · {cname}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
         </div>
+
         {canManage && (
-          <div className="px-5 py-3 border-b border-slate-100">
-            <button onClick={() => setPickerOpen((v) => !v)} className="inline-flex items-center gap-2 text-sm font-medium text-[#009944] hover:underline">
-              <UserPlus className="w-4 h-4" /> {isGroup ? 'Add People' : 'Add channel member'}
-            </button>
-            <p className="text-[11px] text-slate-400 mt-1">Owners can promote members to admin. Admins can oversee membership and moderation.</p>
+          <div className="px-5 py-3 border-b border-slate-100 space-y-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={() => setPickerOpen((v) => !v)} className="inline-flex items-center gap-2 text-sm font-medium text-[#009944] hover:underline">
+                <UserPlus className="w-4 h-4" /> {isGroup ? 'Add People' : 'Add Channel Member'}
+              </button>
+              {!isGroup && conversation?.is_auto && (
+                <button onClick={reSyncMembers} disabled={syncing} className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg px-2.5 py-1.5 hover:bg-slate-50 disabled:opacity-50">
+                  {syncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Re-sync from org chart
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-400 -mt-1">Owners (and communication administrators) can promote members to admin. Admins can oversee membership and moderation.</p>
+
             {pickerOpen && (
-              <div className="mt-2 max-h-52 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-50">
-                {available.length === 0 && <div className="px-3 py-4 text-sm text-slate-400">Everyone is already a member.</div>}
-                 {available.map((p) => (
-                   <button key={p.id} onClick={() => addMember(p.id)} disabled={busy} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm text-slate-700 disabled:opacity-50">
-                     {displayPersonName(p)} · {p.department || p.position || ''}
-                   </button>
+              <div className="mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-50">
+                {filteredAvailable.length === 0 && <div className="px-3 py-4 text-sm text-slate-400">Everyone in the directory is already a member.</div>}
+                {filteredAvailable.map((p) => (
+                  <button key={p.id} onClick={() => addMember(p.id)} disabled={busy} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm text-slate-700 disabled:opacity-50">
+                    {displayPersonName(p)} · {p.department || p.position || ''}
+                  </button>
                 ))}
               </div>
             )}
+
+            <div className="border-t border-slate-100 pt-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium text-slate-800 inline-flex items-center gap-1.5"><Link2 className="w-4 h-4 text-[#009944]" /> Invite via link</p>
+                <button onClick={createInvite} disabled={inviteBusy} className="inline-flex items-center gap-1.5 text-xs font-medium bg-[#009944] text-white rounded-lg px-3 py-1.5 hover:bg-[#007a36] disabled:opacity-50">
+                  {inviteBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Create invite link
+                </button>
+              </div>
+              {inviteError && <p className="text-[11px] text-rose-600 mt-1.5">{inviteError}</p>}
+              {newInviteUrl && (
+                <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/50 p-2.5">
+                  <p className="text-[11px] text-emerald-700 mb-1.5">Anyone with this link can join as a member.</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <code className="flex-1 min-w-0 truncate text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2 py-1.5">{newInviteUrl}</code>
+                    <button onClick={() => copyInvite(newInviteUrl)} title="Copy link" className="p-1.5 rounded-lg border border-slate-200 hover:bg-white text-slate-600"><Copy className="w-3.5 h-3.5" /></button>
+                    <a href={waShareUrl(newInviteUrl, cname)} target="_blank" rel="noreferrer" title="Share on WhatsApp" className="p-1.5 rounded-lg border border-slate-200 hover:bg-white text-slate-600"><Share2 className="w-3.5 h-3.5" /></a>
+                  </div>
+                </div>
+              )}
+              {invites.length > 0 && (
+                <div className="mt-2 max-h-32 overflow-y-auto space-y-1">
+                  {invites.map((inv) => (
+                    <div key={inv.id} className="flex items-center gap-2 text-[11px] text-slate-500 bg-white border border-slate-100 rounded-lg px-2.5 py-1.5">
+                      <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide ${inv.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>{inv.status}</span>
+                      <span className="flex-1 truncate">{inv.used_count} {inv.used_count === 1 ? 'use' : 'uses'}{inv.max_uses ? ` / ${inv.max_uses}` : ''}{inv.expires_at ? ` · until ${new Date(inv.expires_at).toLocaleDateString()}` : ' · no expiry'}</span>
+                      {inv.status === 'active' && (
+                        <button onClick={() => revokeInvite(inv.id)} disabled={inviteBusy} className="text-rose-500 hover:text-rose-700 hover:underline disabled:opacity-50">Revoke</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
+
+        <div className="px-5 py-2.5 border-b border-slate-100">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Members · {members.length}</p>
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
+              <input
+                value={memberSearch}
+                onChange={(e) => setMemberSearch(e.target.value)}
+                placeholder="Search members…"
+                className="pl-7 h-8 w-44 rounded-lg border border-slate-200 px-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#009944]"
+              />
+            </div>
+          </div>
+        </div>
+
         <div className="overflow-y-auto divide-y divide-slate-50 max-h-[50vh]">
-           {members.map((m) => {
-             const ident = identity[m.member_id]
-             const memberName = ident?.name || 'Unknown User'
-             const isMe = m.member_id === me
-             const isOwner = m.role === 'owner'
-             const suspended = !!m.suspended_until
+          {filteredMembers.length === 0 && <div className="px-5 py-8 text-center text-sm text-slate-400">No members match your search.</div>}
+          {filteredMembers.map((m) => {
+            const ident = identity[m.member_id]
+            const memberName = displayPersonName(ident) || 'Unknown User'
+            const isMe = m.member_id === me
+            const isOwner = m.role === 'owner'
+            const suspended = !!m.suspended_until
             const isSuspendForm = suspendFor === m.member_id
             return (
               <div key={m.member_id} className="px-5 py-3">
@@ -836,7 +980,16 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-slate-800 truncate">{isMe ? 'You' : memberName}</p>
-                    <p className="text-xs text-slate-400 truncate">{ident?.position || ident?.department || ident?.role || ''}</p>
+                    <p className="text-xs text-slate-400 truncate">
+                      {[ident?.position, ident?.department, ident?.staffId ? `#${ident.staffId}` : ''].filter(Boolean).join(' · ') || ident?.role || ''}
+                    </p>
+                    {(ident?.branch || ident?.employmentStatus) && (
+                      <p className="text-[11px] text-slate-400 truncate">
+                        {[ident?.branch, ident?.employmentStatus].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                    {autoLabel && m.auto_added && <p className="text-[11px] font-medium text-emerald-600">Automatic · {String(conversation.auto_source || conversation.channel_type || '').replace(/_/g, ' ')}</p>}
+                    {!isGroup && m.auto_added && <p className="text-[11px] text-slate-400">Managed automatically from the org chart — manual edits are preserved.</p>}
                     {isOwner && !isMe && <p className="text-[11px] font-medium text-slate-500">Owner cannot be removed or suspended.</p>}
                     {suspended && (
                       <p className="text-[11px] font-medium text-amber-600 inline-flex items-center gap-1">
@@ -849,7 +1002,7 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
                       value={m.role}
                       onChange={(e) => setRole(m.member_id, e.target.value)}
                       disabled={busy}
-                       aria-label={`Role for ${memberName}`}
+                      aria-label={`Role for ${memberName}`}
                       className="text-xs rounded-lg border border-slate-200 px-2 py-1 bg-white disabled:opacity-50"
                     >
                       <option value="owner">Owner</option>

@@ -18,6 +18,7 @@
     "test:attendance": "node tests/attendanceCalculations.test.mjs",
     "test:dashboard-attendance": "node tests/dashboardAttendanceToday.test.mjs",
     "test:recruitment": "node tests/recruitmentPipeline.test.mjs",
+    "test:members": "node tests/memberManagement.test.mjs",
     "test:training": "node tests/trainingCalculations.test.mjs",
     "test:training-schema": "node tests/trainingSchema.test.mjs",
     "test:training-delivery": "node tests/trainingDeliveryMeetings.test.mjs",

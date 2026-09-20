@@ -4,7 +4,7 @@ import { logAction } from '../services/supabaseService'
 import { useAuth } from '../hooks/useAuth'
 import { ROLE_METADATA, ROLES, assignableRoles } from '../constants/roles'
 import { userProvisioningService } from '../services/userProvisioningService'
-import { Shield, UserPlus, CheckCircle2, XCircle, Loader2, Search, UserCog, Power, PowerOff, Mail, Phone, Building2, Calendar, Eye, X, MailPlus, Send, UserCheck, Clock, Layers } from 'lucide-react'
+import { Shield, UserPlus, CheckCircle2, XCircle, Loader2, Search, UserCog, Power, PowerOff, Mail, Phone, Building2, Calendar, Eye, X, MailPlus, Send, UserCheck, Clock, Layers, Trash2 } from 'lucide-react'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -120,6 +120,29 @@ export default function Users() {
       load()
     } catch (e) {
       setErr(e?.message || 'Failed to reject user')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const deleteInvite = async (u) => {
+    const confirmed = window.confirm(
+      `Delete the pending invitation for ${u.email || u.full_name || u.id}?\n\n` +
+      'This permanently removes the Supabase Auth account and its profile. ' +
+      'The employee record is NOT deleted and stays available for a clean re-invitation.'
+    )
+    if (!confirmed) return
+    setBusyId(u.id)
+    setErr(null)
+    try {
+      const { data, error } = await supabase.rpc('delete_pending_invite', { p_user_id: u.id })
+      if (error) throw error
+      if (!data?.ok) throw new Error(data?.message || 'Failed to delete invitation')
+      await logAction({ action: 'USER_INVITE_DELETED', entityType: 'User', entityId: u.id, details: `${u.email} pending invitation deleted. Employee record retained for re-invitation.`, userName, severity: 'warning' })
+      showToast(`Invitation for ${u.email} deleted. The employee can be re-invited from scratch.`)
+      load()
+    } catch (e) {
+      setErr(e?.message || 'Failed to delete invitation')
     } finally {
       setBusyId(null)
     }
@@ -281,6 +304,12 @@ export default function Users() {
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-medium hover:bg-rose-50 disabled:opacity-50">
                         <XCircle className="w-3.5 h-3.5" /> Reject
                       </button>
+                      {actorRole === 'super_admin' && (
+                        <button onClick={() => deleteInvite(u)} disabled={busyId === u.id}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium hover:bg-rose-50 hover:text-rose-600 hover:border-rose-300 disabled:opacity-50">
+                          <Trash2 className="w-3.5 h-3.5" /> Delete Invite
+                        </button>
+                      )}
                     </>
                   )}
 

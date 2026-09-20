@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { AtSign, Bookmark, Hash, Landmark, MessageSquare, Users } from 'lucide-react'
+import { AtSign, Bookmark, Hash, Landmark, Loader2, MessageSquare, Users, X } from 'lucide-react'
 import { supabase } from '../../supabaseClient'
 import { useAuth } from '../../hooks/useAuth'
-import { getUnreadMessageCounts, unreadMessageTotal } from '../../services/corporateChatService'
+import { getUnreadMessageCounts, unreadMessageTotal, getInviteContext, joinViaInvite } from '../../services/corporateChatService'
 import DirectTab from './DirectTab'
 import Conversations from './Conversations'
 import AnnouncementsTab from './AnnouncementsTab'
@@ -34,6 +34,10 @@ export default function MessagesPage() {
   const [identity, setIdentity] = useState({})
   const [loading, setLoading] = useState(true)
   const [directUnread, setDirectUnread] = useState(0)
+  const [inviteCtx, setInviteCtx] = useState(null)
+  const [inviteError, setInviteError] = useState('')
+  const [joiningInvite, setJoiningInvite] = useState(false)
+  const [reloadTick, setReloadTick] = useState(0)
 
   // Directory for pickers: staff across the platform (including me).
   // Sourced from the get_messaging_directory RPC — profiles/employees are
@@ -60,16 +64,31 @@ export default function MessagesPage() {
         if (!p.user_id) continue
         identityMap[p.user_id] = {
           userId: p.user_id,
+          employeeId: p.employee_id,
           name: realPersonName(p),
           email: p.email,
           role: p.role,
           department: p.department,
           position: p.position,
+          staffId: p.staff_id,
+          employmentStatus: p.employment_status,
+          branch: p.branch,
+          profileStatus: p.profile_status,
+          profilePicturePath: p.profile_picture_path,
+          isFormerEmployee: p.is_former_employee,
         }
       }
       // always include myself so the picker shows the whole platform
       identityMap[me] = identityMap[me] || {
-        userId: me, name: myName, email: user?.email, role: profile?.role, department: profile?.department,
+        userId: me,
+        name: myName,
+        email: user?.email,
+        role: profile?.role,
+        department: profile?.department,
+        position: profile?.designation,
+        staffId: profile?.employee_number,
+        employmentStatus: profile?.status,
+        branch: profile?.branch,
       }
       return { list, identityMap }
     }
@@ -121,17 +140,48 @@ export default function MessagesPage() {
     }
   }, [me])
 
-  // Support deep links like /chat?tab=announcements (used by notifications).
+  // Support deep links like /chat?tab=announcements (notifications) and
+  // /chat?invite=TOKEN (shareable channel/group invite links).
   useEffect(() => {
     const qs = new URLSearchParams(window.location.hash.split('?')[1] || '')
     const t = qs.get('tab')
     if (t && TABS.some((x) => x.key === t)) setTab(t)
+    const invite = qs.get('invite')
+    if (invite) {
+      getInviteContext(invite)
+        .then((ctx) => { if (ctx?.ok) setInviteCtx({ token: invite, ...ctx }) })
+        .catch(() => {})
+    }
   }, [])
 
   const setTabAndDeepLink = (key) => {
     setTab(key)
     const base = window.location.hash.split('?')[0]
     window.history.replaceState(null, '', `${base}?tab=${key}`)
+  }
+
+  const openInviteTarget = () => {
+    const targetTab = inviteCtx?.scope === 'group' ? 'groups' : 'channels'
+    setInviteCtx(null)
+    setTab(targetTab)
+    setReloadTick((t) => t + 1)
+    const base = window.location.hash.split('?')[0]
+    window.history.replaceState(null, '', `${base}?tab=${targetTab}`)
+  }
+
+  const handleJoinInvite = async () => {
+    if (!inviteCtx || joiningInvite) return
+    setJoiningInvite(true)
+    setInviteError('')
+    try {
+      const res = await joinViaInvite(inviteCtx.token)
+      if (res?.ok) openInviteTarget()
+      else setInviteError('This invite link could not be accepted.')
+    } catch (e) {
+      setInviteError(e?.message || 'Could not join via this link.')
+    } finally {
+      setJoiningInvite(false)
+    }
   }
 
   const activeTab = useMemo(() => TABS.find((t) => t.key === tab) || TABS[0], [tab])
@@ -173,11 +223,54 @@ export default function MessagesPage() {
       ) : (
         <>
           {activeTab.key === 'direct' && <DirectTab people={people} identity={identity} onUnreadChange={setDirectUnread} />}
-          {activeTab.key === 'groups' && <Conversations kind="group" people={people} identity={identity} />}
-          {activeTab.key === 'channels' && <Conversations kind="channel" people={people} identity={identity} />}
+          {activeTab.key === 'groups' && <Conversations key={`group-${reloadTick}`} kind="group" people={people} identity={identity} />}
+          {activeTab.key === 'channels' && <Conversations key={`channel-${reloadTick}`} kind="channel" people={people} identity={identity} />}
           {activeTab.key === 'announcements' && <AnnouncementsTab people={people} identity={identity} />}
           {(activeTab.key === 'saved' || activeTab.key === 'mentions') && <SavedTab identity={identity} />}
         </>
+      )}
+
+      {inviteCtx && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-md p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-900 inline-flex items-center gap-2">
+                {inviteCtx.scope === 'group' ? <Users className="w-5 h-5 text-[#009944]" /> : <Hash className="w-5 h-5 text-[#009944]" />}
+                {inviteCtx.scope === 'group' ? 'Group invite' : 'Channel invite'}
+              </h3>
+              <button onClick={() => setInviteCtx(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <p className="text-base font-medium text-slate-800">{inviteCtx.context_name}</p>
+            <p className="text-xs text-slate-500">
+              {inviteCtx.member_count} member{inviteCtx.member_count === 1 ? '' : 's'} · {inviteCtx.scope}
+              {inviteCtx.expires_at ? ` · open until ${new Date(inviteCtx.expires_at).toLocaleDateString()}` : ''}
+            </p>
+            {inviteCtx.already_member ? (
+              <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5 text-xs text-emerald-700">
+                You are already a member of this {inviteCtx.scope}.
+              </div>
+            ) : (
+              <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs text-slate-500">
+                Accepting adds you to “{inviteCtx.context_name}” as a member. You can leave at any time.
+              </div>
+            )}
+            {inviteError && <p className="text-xs text-rose-600">{inviteError}</p>}
+            <div className="text-right space-x-2">
+              <button onClick={() => setInviteCtx(null)} className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">
+                Close
+              </button>
+              {inviteCtx.already_member ? (
+                <button onClick={openInviteTarget} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+                  Open {inviteCtx.scope}
+                </button>
+              ) : (
+                <button onClick={handleJoinInvite} disabled={joiningInvite} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-40">
+                  {joiningInvite && <Loader2 className="w-4 h-4 animate-spin" />} Join {inviteCtx.scope}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

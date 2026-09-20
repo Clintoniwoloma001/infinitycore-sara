@@ -126,3 +126,29 @@ credentials arrive; the platform file overrides them (listed last in `env_file:`
   Copy/Open/Regenerate (regenerate only before the session starts).
 - No new assessment/certificate/attendance tables — the existing training_* flow is
   untouched.
+
+## Phase 61 — Delete Pending Invite + Production Invite-Link Verification
+- SQL migration: `schema_phase61_delete_pending_invite.sql` — run in Supabase SQL
+  Editor after Phase 60. Idempotent/additive.
+  - Adds `delete_pending_invite(uuid)` SECURITY DEFINER RPC, **super_admin only**.
+    Full retract of a pending/invited account: revokes open `employee_account_invites`
+    (audit history preserved), unlinks `employees.user_id`, removes
+    `user_access_profiles` + `notifications`, deletes the `profiles` row and the
+    Supabase Auth identity + user. Writes `USER_INVITE_DELETED` to `audit_logs`.
+  - The Employee record is never deleted or modified beyond clearing the account link —
+    the person stays re-invitable via "Create Users from Employees". Only
+    pending/status-less accounts are allowed; active/inactive/suspended/rejected
+    accounts raise an error.
+- `Users.jsx` Pending Approval rows gain a **Delete Invite** button (visible to
+  super_admin only, next to Review/Approve/Reject) with a `window.confirm` and a
+  best-effort client `logAction` mirroring `USER_APPROVED`.
+- Invite-link verification (why invites must never hit vercel.com): both
+  `invite-employees` and `create-user` edge functions build `redirectTo` from
+  `getAuthRedirectUrl()` in `supabase/functions/_shared/appUrl.ts`, which only
+  ever accepts `https://infinitymfbcore.vercel.app` (or localhost) and falls back
+  to that production URL otherwise — `VERCEL_URL` / preview origins are rejected
+  by design. A "No Vercel account for this email" landing page is Vercel's own
+  Deployment Protection gate, NOT an app bug: turn off "Vercel Authentication" for
+  the Production environment in Vercel Project Settings, and keep Supabase Auth
+  Site URL + Redirect URLs set to `https://infinitymfbcore.vercel.app` (never a
+  `*.vercel.app` preview/branch URL).
