@@ -148,6 +148,23 @@ export default function Users() {
     }
   }
 
+  const reInvite = async (u) => {
+    setBusyId(u.id)
+    setErr(null)
+    try {
+      const res = await userProvisioningService.resendInvitationForProfile(u, { role: u.role || 'staff', reason: 'Re-invite from User Management' })
+      const result = res?.results?.[0]
+      if (result?.result !== 'RESENT') throw new Error(result?.message || result?.error || 'Failed to resend the invitation')
+      await logAction({ action: 'USER_INVITE_RESENT', entityType: 'User', entityId: u.id, details: `${u.email} activation invitation resent.`, userName, severity: 'warning' })
+      showToast(`Invitation resent to ${u.email}.`)
+      load()
+    } catch (e) {
+      setErr(e?.message || 'Failed to resend the invitation')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const deactivateUser = async (u) => {
     setBusyId(u.id)
     setErr(null)
@@ -304,6 +321,12 @@ export default function Users() {
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-medium hover:bg-rose-50 disabled:opacity-50">
                         <XCircle className="w-3.5 h-3.5" /> Reject
                       </button>
+                      {['super_admin', 'admin', 'hr_manager'].includes(actorRole) && (
+                        <button onClick={() => reInvite(u)} disabled={busyId === u.id}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium hover:bg-slate-50 disabled:opacity-50">
+                          <Send className="w-3.5 h-3.5" /> Re-invite
+                        </button>
+                      )}
                       {actorRole === 'super_admin' && (
                         <button onClick={() => deleteInvite(u)} disabled={busyId === u.id}
                           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium hover:bg-rose-50 hover:text-rose-600 hover:border-rose-300 disabled:opacity-50">
@@ -450,8 +473,71 @@ function ReviewUserModal({ user, onClose, onApprove, onReject, busyId, actorRole
   const [assignment, setAssignment] = useState({ role: 'staff', department: user?.department || '', branch: user?.branch || '', user_type: 'staff' })
   const [rejectReason, setRejectReason] = useState('')
   const [mode, setMode] = useState('approve')
+  const [options, setOptions] = useState({ departments: [], branches: [] })
+  const [optionsError, setOptionsError] = useState('')
+  const [optionsLoading, setOptionsLoading] = useState(true)
+  const [matchedEmployee, setMatchedEmployee] = useState(null)
   const myRoles = assignableRoles(actorRole)
   const set = (k) => (e) => setAssignment((a) => ({ ...a, [k]: e.target.value }))
+
+  useEffect(() => {
+    let mounted = true
+    const load = async () => {
+      setOptionsLoading(true)
+      try {
+        const [opts, employee] = await Promise.all([
+          userProvisioningService.getDepartmentBranchOptions().catch(() => null),
+          userProvisioningService.findEmployeeForProfile(user).catch(() => null),
+        ])
+        if (!mounted) return
+        if (opts) setOptions(opts)
+        if (employee) {
+          setMatchedEmployee(employee)
+          const department = (employee.department && employee.department.trim()) || user?.department || ''
+          const branch = (employee.resolved_branch && employee.resolved_branch.trim()) || user?.branch || ''
+          setAssignment((a) => ({ ...a, department, branch }))
+        }
+      } catch (e) {
+        if (mounted) setOptionsError(e?.message || 'Could not load registration options')
+      } finally {
+        if (mounted) setOptionsLoading(false)
+      }
+    }
+    load()
+    return () => { mounted = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id])
+
+  // Guarantee the current value is selectable even when the source lists are
+  // missing it (messy/legacy data) — never silently drop HR's chosen value.
+  const deptOptions = options.departments.includes(assignment.department)
+    ? options.departments
+    : [...new Set([assignment.department, ...options.departments].filter(Boolean))]
+  const branchOptions = options.branches.includes(assignment.branch)
+    ? options.branches
+    : [...new Set([assignment.branch, ...options.branches].filter(Boolean))]
+
+  // If the option lookup itself failed entirely, fall back to free text so
+  // approval is never blocked. Normal path uses dropdowns.
+  const useInputFallback = Boolean(optionsError) || (optionsLoading === false && deptOptions.length === 0)
+
+  const DepartmentField = useInputFallback
+    ? <input className={inputCls} value={assignment.department} onChange={set('department')} placeholder="IT, Finance..." />
+    : (
+      <select className={inputCls} value={assignment.department} onChange={set('department')} disabled={optionsLoading}>
+        <option value="">Select department…</option>
+        {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+      </select>
+    )
+
+  const BranchField = useInputFallback
+    ? <input className={inputCls} value={assignment.branch} onChange={set('branch')} placeholder="HQ, Lagos..." />
+    : (
+      <select className={inputCls} value={assignment.branch} onChange={set('branch')} disabled={optionsLoading}>
+        <option value="">Select branch…</option>
+        {branchOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+      </select>
+    )
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
@@ -500,10 +586,23 @@ function ReviewUserModal({ user, onClose, onApprove, onReject, busyId, actorRole
                 {myRoles.map((r) => <option key={r} value={r}>{ROLE_METADATA[r]?.label || r}</option>)}
               </select>
             </div>
+            {matchedEmployee && (
+              <p className="rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs px-3 py-2">
+                Pre-filled from employee record: <strong>{matchedEmployee.full_name}</strong>
+                {matchedEmployee.employee_number || matchedEmployee.staff_id ? ` · ${matchedEmployee.employee_number || matchedEmployee.staff_id}` : ''}. You can still override either value.
+              </p>
+            )}
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>Department</label><input className={inputCls} value={assignment.department} onChange={set('department')} placeholder="IT, Finance..." /></div>
-              <div><label className={labelCls}>Branch</label><input className={inputCls} value={assignment.branch} onChange={set('branch')} placeholder="HQ, Lagos..." /></div>
+              <div>
+                <label className={labelCls}>Department</label>
+                {DepartmentField}
+              </div>
+              <div>
+                <label className={labelCls}>Branch</label>
+                {BranchField}
+              </div>
             </div>
+            {optionsError && <p className="text-xs text-amber-600">Could not load department/branch lists — free text fallback used.</p>}
             <div>
               <label className={labelCls}>User Type</label>
               <select className={inputCls} value={assignment.user_type} onChange={set('user_type')}>

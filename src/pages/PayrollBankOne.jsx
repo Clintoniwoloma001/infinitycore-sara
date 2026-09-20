@@ -6,6 +6,7 @@ import {
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import SignaturePad from '../components/SignaturePad'
+import CompensationEditorModal from '../components/payroll/CompensationEditorModal'
 import { payrollService } from '../services/payrollService'
 import { payrollPushService, PUSH_STATUS } from '../services/payrollPushService'
 import { date, money } from './hrShared'
@@ -39,6 +40,7 @@ export default function PayrollBankOne() {
   const { hasPermission, role, isAdmin, user } = useAuth()
   const canPush = hasPermission('payroll.push') || isAdmin
   const canApprove = hasPermission('payroll.approve') || isAdmin
+  const canEditCompensation = hasPermission('payroll.manage') || isAdmin
 
   const [tab, setTab] = useState('master')
   const [loading, setLoading] = useState(true)
@@ -61,6 +63,7 @@ export default function PayrollBankOne() {
   const [signature, setSignature] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
   const [showReject, setShowReject] = useState(false)
+  const [editEmployeeId, setEditEmployeeId] = useState('')
 
   const selected = useMemo(() => requests.find((r) => r.id === selectedId) || null, [requests, selectedId])
 
@@ -235,8 +238,12 @@ export default function PayrollBankOne() {
                       <th className="py-2 pr-3">Department</th>
                       <th className="py-2 pr-3">Bank</th>
                       <th className="py-2 pr-3">Account</th>
-                      <th className="py-2 pr-3 text-right">Salary</th>
-                      <th className="py-2 text-right">Allowances</th>
+                      <th className="py-2 pr-3 text-right">Basic</th>
+                      <th className="py-2 pr-3 text-right">Allowances</th>
+                      <th className="py-2 pr-3 text-right">Gross</th>
+                      <th className="py-2 pr-3 text-right">Deductions</th>
+                      <th className="py-2 pr-3 text-right">Net</th>
+                      {canEditCompensation && <th className="py-2 text-right">Compensation</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -247,8 +254,22 @@ export default function PayrollBankOne() {
                         <td className="py-2 pr-3">{m.department || '—'}</td>
                         <td className="py-2 pr-3">{m.bank_name || '—'}</td>
                         <td className="py-2 pr-3 font-mono text-xs">{m.account_number || '—'}</td>
-                        <td className="py-2 pr-3 text-right">{money(m.salary)}</td>
-                        <td className="py-2 text-right">{money(m.allowances)}</td>
+                        <td className="py-2 pr-3 text-right">{m.salary != null ? money(m.salary) : '—'}</td>
+                        <td className="py-2 pr-3 text-right">{m.allowances != null ? money(m.allowances) : '—'}</td>
+                        <td className="py-2 pr-3 text-right">{m.gross != null ? money(m.gross) : '—'}</td>
+                        <td className="py-2 pr-3 text-right">{m.deductions_total != null ? money(m.deductions_total) : '—'}</td>
+                        <td className="py-2 pr-3 text-right font-semibold text-slate-800">{m.net != null ? money(m.net) : '—'}</td>
+                        {canEditCompensation && (
+                          <td className="py-2 text-right">
+                            <button
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                              onClick={() => setEditEmployeeId(m.employee_id)}
+                              title={m.has_compensation ? 'Edit compensation' : 'Set compensation (basic + allowances + deductions)'}
+                            >
+                              <PenLine className="w-3.5 h-3.5" /> {m.has_compensation ? 'Edit' : 'Set'}
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -446,6 +467,14 @@ export default function PayrollBankOne() {
             </div>
           </div>
         </>
+      )}
+
+      {editEmployeeId && (
+        <CompensationEditorModal
+          employeeId={editEmployeeId}
+          onClose={() => setEditEmployeeId('')}
+          onSaved={() => { setNotice('Compensation updated.'); load() }}
+        />
       )}
     </div>
   )

@@ -12,10 +12,21 @@ const STORAGE_KEY = 'infinitycore_qr_device_id'
 
 let cachedFingerprint = null
 
+// Safe global lookup — works for browsers and SSR/node (where web globals
+// may exist but be uninitialized/TDZ and would throw on a bare typeof).
+function g(name) {
+  try {
+    return typeof globalThis !== 'undefined' ? globalThis[name] : undefined
+  } catch (_) {
+    return undefined
+  }
+}
+
 function randomHex(bytes = 16) {
   const arr = new Uint8Array(bytes)
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    crypto.getRandomValues(arr)
+  const cryptoObj = g('crypto')
+  if (cryptoObj && cryptoObj.getRandomValues) {
+    cryptoObj.getRandomValues(arr)
   } else {
     for (let i = 0; i < arr.length; i += 1) arr[i] = Math.floor(Math.random() * 256)
   }
@@ -36,9 +47,10 @@ function fnv1a64(text) {
 }
 
 export async function sha256Hex(text) {
-  if (typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.digest) {
+  const cryptoObj = g('crypto')
+  if (cryptoObj && cryptoObj.subtle && cryptoObj.subtle.digest) {
     try {
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+      const digest = await cryptoObj.subtle.digest('SHA-256', new TextEncoder().encode(text))
       return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('')
     } catch (_) {
       // fall through to the pure-JS fallback
@@ -48,8 +60,8 @@ export async function sha256Hex(text) {
 }
 
 function collectSignals(storageId) {
-  const screen = typeof screen !== 'undefined' ? screen : null
-  const nav = typeof navigator !== 'undefined' ? navigator : null
+  const screen = g('screen')
+  const nav = g('navigator')
   let tz = ''
   try {
     tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
@@ -75,7 +87,9 @@ function collectSignals(storageId) {
 // canvas is blocked. Wrapped in try/catch so any failure never breaks login.
 function canvasFingerprint() {
   try {
-    const el = document.createElement('canvas')
+    const documentObj = g('document')
+    if (!documentObj || typeof documentObj.createElement !== 'function') return ''
+    const el = documentObj.createElement('canvas')
     el.width = 220
     el.height = 40
     const ctx = el.getContext('2d')
@@ -95,15 +109,16 @@ function canvasFingerprint() {
 
 function initFingerprint() {
   if (cachedFingerprint) return cachedFingerprint
-  if (typeof localStorage === 'undefined') {
+  const storage = g('localStorage')
+  if (typeof storage === 'undefined') {
     cachedFingerprint = randomHex()
     return cachedFingerprint
   }
-  let storageId = localStorage.getItem(STORAGE_KEY)
+  let storageId = storage.getItem(STORAGE_KEY)
   if (!storageId) {
     storageId = randomHex()
     try {
-      localStorage.setItem(STORAGE_KEY, storageId)
+      storage.setItem(STORAGE_KEY, storageId)
     } catch (_) {
       // storage unavailable (private mode); the signal composite still applies
     }

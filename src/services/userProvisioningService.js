@@ -69,6 +69,80 @@ export const userProvisioningService = {
     return userInvitationService.resendInvitation(employee.id, role, reason)
   },
 
+  // Resolve the Employee record behind a pending profile: linked first
+  // (user_id / employee_id), then email. Returns the enriched employee row
+  // or null when there is no matching record (self-registration fallback).
+  async findEmployeeForProfile(profile) {
+    if (!profile) return null
+    let employee = null
+
+    if (profile.id || profile.employee_id) {
+      const filters = []
+      if (profile.id) filters.push(`user_id.eq.${profile.id}`)
+      if (profile.employee_id) filters.push(`id.eq.${profile.employee_id}`)
+      const { data } = await supabase
+        .from('employees')
+        .select('*')
+        .or(filters.join(','))
+        .limit(5)
+      employee = data?.[0] || null
+    }
+
+    if (!employee && profile.email) {
+      const { data } = await supabase
+        .from('employees')
+        .select('*')
+        .ilike('email', profile.email)
+        .limit(10)
+      const needle = String(profile.email).trim().toLowerCase()
+      employee = (data || []).find((e) => String(e.email || '').trim().toLowerCase() === needle) || data?.[0] || null
+    }
+
+    if (!employee) return null
+    try {
+      const [enriched] = await userInvitationService.enrichEmployeeLocations([employee])
+      return enriched || employee
+    } catch {
+      return employee
+    }
+  },
+
+  // Re-send the activation invitation for a pending profile using the exact
+  // same invite-employees mechanism (resend: true). Rejects when no employee
+  // record backs the profile — re-invites are for employee-derived invites,
+  // never a delete-and-recreate of the account.
+  async resendInvitationForProfile(profile, { role = 'staff', reason = null } = {}) {
+    const employee = await this.findEmployeeForProfile(profile)
+    if (!employee) throw new Error('No matching employee record. Send a fresh invitation from "Create Users from Employees".')
+    return this.resendInvitation(employee, { role, reason })
+  },
+
+  // Distinct Department and Branch values actually in use, unioned with the
+  // authoritative master lists (departments + branches tables). Sorted for
+  // the Review Registration dropdowns. No normalization — values are exactly
+  // as stored so an auto-fill always finds its source value.
+  async getDepartmentBranchOptions() {
+    const [employeeDepts, employeeBranches, masterDepts, masterBranches] = await Promise.all([
+      supabase.from('employees').select('department').not('department', 'is', null).neq('department', ''),
+      supabase.from('employees').select('branch').not('branch', 'is', null).neq('branch', ''),
+      supabase.from('departments').select('name').eq('is_active', true),
+      supabase.from('branches').select('branch_name'),
+    ])
+
+    const clean = (values) => [...new Set(values.filter(Boolean).map((v) => String(v).trim()))]
+
+    return {
+      departments: clean([
+        ...(employeeDepts.data || []).map((r) => r.department),
+        ...(masterDepts.data || []).map((r) => r.name),
+      ]).sort((a, b) => a.localeCompare(b)),
+      branches: clean([
+        ...(employeeBranches.data || []).map((r) => r.branch),
+        ...(masterBranches.data || []).map((r) => r.branch_name),
+      ]).sort((a, b) => a.localeCompare(b)),
+    }
+  },
+
   resultMeta(result) {
     return RESULT_META[result] || RESULT_META.FAILED
   },

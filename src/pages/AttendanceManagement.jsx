@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
-import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw, Eye, Trash2, Pause, Play } from 'lucide-react'
+import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw, Eye, Trash2, Pause, Play, Fingerprint, ShieldAlert } from 'lucide-react'
 import { attendanceService, platformDateKey, formatWorkedHours } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { platformSettingsService } from '../services/platformSettingsService'
+import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import SaraBriefing from '../components/attendance/SaraBriefing'
 import TrendChart from '../components/attendance/TrendChart'
@@ -13,8 +14,11 @@ const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm fo
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 
 export default function AttendanceManagement() {
+  const { role: actorRole } = useAuth()
   const [tab, setTab] = useState('records')
   const [notice, setNotice] = useState({ kind: '', text: '' })
+
+  const canManageDeviceBindings = ['super_admin', 'admin', 'hr_manager', 'hr_officer', 'branch_manager'].includes(actorRole)
 
   const tabs = [
     { id: 'records', label: 'Attendance Records' },
@@ -22,6 +26,7 @@ export default function AttendanceManagement() {
     { id: 'issues', label: 'Attendance Issues' },
     { id: 'config', label: 'Configuration' },
     { id: 'qr', label: 'QR Attendance' },
+    ...(canManageDeviceBindings ? [{ id: 'bindings', label: 'Device Binding' }] : []),
   ]
 
   return (
@@ -54,6 +59,7 @@ export default function AttendanceManagement() {
       {tab === 'issues' && <IssuesTab setNotice={setNotice} />}
       {tab === 'config' && <ConfigTab setNotice={setNotice} />}
       {tab === 'qr' && <QrTerminalTab setNotice={setNotice} />}
+      {tab === 'bindings' && canManageDeviceBindings && <DeviceBindingsTab setNotice={setNotice} />}
     </div>
   )
 }
@@ -1038,6 +1044,160 @@ function QrTerminalTab({ setNotice }) {
       </div>
 
       {qrModal}
+    </div>
+  )
+}
+
+// ============================================================
+// DEVICE BINDING TAB — one device, one employee per day.
+// HR/super-admin oversight for the QR terminal buddy-punching guard:
+// inspect the active bindings, review blocked attempts, and clear a
+// specific (device, date) binding when the block was a false positive.
+// ============================================================
+function DeviceBindingsTab({ setNotice }) {
+  const [date, setDate] = useState('')
+  const [bindings, setBindings] = useState(null)
+  const [blocks, setBlocks] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [busyHash, setBusyHash] = useState(null)
+  const [error, setError] = useState('')
+
+  const load = async (d) => {
+    setLoading(true)
+    setError('')
+    try {
+      const [rows, blockRows] = await Promise.all([
+        attendanceService.listDeviceBindings(d || null),
+        attendanceService.listDeviceBindingBlocks(d || null, 20),
+      ])
+      setBindings(rows || [])
+      setBlocks(blockRows || [])
+    } catch (e) {
+      setError(e?.message || 'Failed to load device bindings')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load(date) }, [])
+
+  const clear = async (binding) => {
+    const confirmed = window.confirm(
+      `Clear the device binding for ${binding.employee_full_name || binding.employee_number || 'employee'} on ${binding.binding_date}?\n\n` +
+      'The device can then be used by a different employee for this date.'
+    )
+    if (!confirmed) return
+    setBusyHash(binding.device_fingerprint_hash)
+    setError('')
+    try {
+      await attendanceService.clearDeviceBinding(binding.device_fingerprint_hash, binding.binding_date, 'Cleared by HR')
+      setNotice({ kind: 'ok', text: `Device binding cleared for ${binding.binding_date}.` })
+      await load(date)
+    } catch (e) {
+      setError(e?.message || 'Failed to clear device binding')
+    } finally {
+      setBusyHash(null)
+    }
+  }
+
+  const applyDate = () => { load(date || null) }
+
+  const shortHash = (h) => (h && h.length > 12 ? `${h.slice(0, 8)}…${h.slice(-4)}` : h || '—')
+
+  return (
+    <div className="max-w-3xl space-y-5">
+      <div className="flex flex-wrap items-end gap-3 justify-between">
+        <div>
+          <p className="text-sm text-slate-500">Each QR attendance terminal is bound to one employee per day. Another employee on the same device is blocked, including spoofed requests.</p>
+        </div>
+        <div className="flex items-end gap-2">
+          <div>
+            <label className={`${labelCls} !mb-1`}>Date (blank = today)</label>
+            <input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+          <button onClick={applyDate} className="inline-flex items-center gap-1.5 px-3 h-10 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+            <RefreshCw className="w-4 h-4" /> Load
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-sm p-3">{error}</div>}
+
+      {loading ? (
+        <LoadingState label="Loading device bindings..." />
+      ) : (
+        <>
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <Fingerprint className="w-5 h-5 text-[#009944]" />
+              <h3 className="font-semibold text-slate-900">Device → employee bindings</h3>
+            </div>
+            {!bindings || bindings.length === 0 ? (
+              <EmptyState title="No bindings" description="No QR terminal clock-ins on this date yet." />
+            ) : (
+              <div className="overflow-x-auto -mx-6 px-6">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                      <th className="py-2 pr-3 font-medium">Device ref</th>
+                      <th className="py-2 pr-3 font-medium">Employee</th>
+                      <th className="py-2 pr-3 font-medium">Terminal</th>
+                      <th className="py-2 pr-3 font-medium">First used</th>
+                      <th className="py-2 pr-3 font-medium">Last seen</th>
+                      <th className="py-2 font-medium">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bindings.map((b) => (
+                      <tr key={`${b.device_fingerprint_hash}-${b.binding_date}`} className="border-b border-slate-50 last:border-0">
+                        <td className="py-3 pr-3 font-mono text-xs text-slate-500">{shortHash(b.device_fingerprint_hash)}</td>
+                        <td className="py-3 pr-3">
+                          <p className="font-medium text-slate-800">{b.employee_full_name || '—'}</p>
+                          <p className="text-xs text-slate-400">{b.employee_number || ''}</p>
+                        </td>
+                        <td className="py-3 pr-3 text-xs text-slate-500">{b.terminal_name || '—'}</td>
+                        <td className="py-3 pr-3 text-xs text-slate-500">{b.first_used_at ? new Date(b.first_used_at).toLocaleString() : '—'}</td>
+                        <td className="py-3 pr-3 text-xs text-slate-500">{b.last_seen_at ? new Date(b.last_seen_at).toLocaleString() : '—'}</td>
+                        <td className="py-3">
+                          <button onClick={() => clear(b)} disabled={busyHash === b.device_fingerprint_hash}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-rose-200 text-rose-600 text-xs font-medium hover:bg-rose-50 disabled:opacity-50">
+                            {busyHash === b.device_fingerprint_hash ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} Clear
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="text-xs text-slate-400">Clearing a binding is audited and lets another employee use the device for this date.</p>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="w-5 h-5 text-amber-500" />
+              <h3 className="font-semibold text-slate-900">Blocked attempts</h3>
+              <span className="text-xs text-slate-400">(audit trail)</span>
+            </div>
+            {blocks.length === 0 ? (
+              <p className="text-sm text-slate-400">No blocked attempts on this date.</p>
+            ) : (
+              <div className="space-y-2 max-h-80 overflow-y-auto">
+                {blocks.map((blk, i) => {
+                  let details = blk.details || ''
+                  try { details = JSON.stringify(JSON.parse(details), null, 2) } catch (_) { /* raw text */ }
+                  return (
+                    <div key={i} className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs">
+                      <p className="text-slate-500">{new Date(blk.created_at).toLocaleString()} · severity: {blk.severity}</p>
+                      <pre className="mt-1 whitespace-pre-wrap font-mono text-slate-600">{details}</pre>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }

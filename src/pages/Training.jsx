@@ -41,6 +41,17 @@ function copyText(text, onDone) {
   onDone?.()
 }
 
+// Basic well-formed-URL check for the manual meeting-link fallback. No
+// domain whitelist — any https/http link the facilitator supplies is fine.
+function isValidHttpUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim())
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 // Build an ISO start/end for meeting providers from the session date + times.
 function meetingStartEnd(form) {
   const start = new Date(`${form.training_date}T${form.start_time || '09:00'}`)
@@ -120,7 +131,8 @@ export default function Training() {
       }
       if (form.delivery_type === 'virtual') {
         if (!form.meeting_platform) throw new Error('Select a meeting platform (Google Meet or Zoom).')
-        if (!form.meeting_url.trim()) throw new Error('Generate a real meeting link before creating the session. A free-typed link is not accepted.')
+        if (!form.meeting_url.trim()) throw new Error('Add a meeting link before creating the session — generate one via the provider, or paste a well-formed meeting link.')
+        if (!isValidHttpUrl(form.meeting_url)) throw new Error('The meeting link is not a well-formed URL (must start with http:// or https://).')
       }
       const isKss = form.training_type === 'kss' || form.assessment_required
       const needsAssessment = isKss || form.assessment_required
@@ -150,8 +162,31 @@ export default function Training() {
         await trainingService.generateQuestionSets(created.id, isKss ? questionSets : [questionSets[0]])
       }
       await trainingService.assignParticipants(created.id, form.employee_ids)
+
+      const inviteCount = form.employee_ids.length
+      let inviteSummary = ''
+      try {
+        const invites = await trainingService.sendInvites(created.id, form.employee_ids)
+        if (invites?.status === 'sent') {
+          const emailed = invites.emailSent ?? invites.emailed?.length ?? 0
+          const emailFailed = invites.emailFailed?.length ?? 0
+          const failedNames = (invites.emailFailed || []).slice(0, 3).map((item) => item.name || item.email).join(', ')
+          const failedSuffix = emailFailed > 0 ? ` (failed: ${failedNames}${emailFailed > 3 ? ` and ${emailFailed - 3} more` : ''})` : ''
+          const providerNote = invites.emailConfigured === false ? 'Email provider not configured — emails skipped. ' : ''
+          inviteSummary = invites.is_kss
+            ? ` ${providerNote}Emails: ${emailed} sent${failedSuffix}; KSS channel ${invites.channel?.ok ? 'updated' : 'post failed (create the Messages channel manually)'}.`
+            : ` ${providerNote}Emails: ${emailed} sent${failedSuffix}; ${invites.notifiedCount ?? 0} in-app notification${invites.notifiedCount === 1 ? '' : 's'} sent.`
+        } else if (invites?.status === 'not_configured') {
+          inviteSummary = ' Invites were not sent — the email provider is not configured. The session was still created.'
+        } else {
+          inviteSummary = ` Invites could not be delivered (${invites?.error || 'unknown error'}).`
+        }
+      } catch (inviteError) {
+        inviteSummary = ` Invites could not be sent (${inviteError?.message || 'unknown error'}). The session was still created.`
+      }
+
       setForm(blankForm)
-      setMessage(`Training session created and assigned to ${form.employee_ids.length} employee${form.employee_ids.length === 1 ? '' : 's'}.`)
+      setMessage(`Training session created and assigned to ${inviteCount} employee${inviteCount === 1 ? '' : 's'}.${inviteSummary}`)
       setTab('sessions')
       await load()
     } catch (e) {
@@ -511,12 +546,36 @@ function CreateTraining({ form, set, employees, venues, options, busy, onSubmit 
   const [meetingBusy, setMeetingBusy] = useState(false)
   const [meetingError, setMeetingError] = useState('')
   const [meetingOk, setMeetingOk] = useState('')
+  const [manualLinkInput, setManualLinkInput] = useState('')
+  const [meetingManual, setMeetingManual] = useState(false)
 
   const selectVenue = (branchId) => {
     const branch = venues.find((b) => b.id === branchId)
     set('venue_id', branchId || '')
     set('venue_name', branch?.branch_name || '')
     set('venue_address', branch?.location || '')
+  }
+
+  const attachManualLink = () => {
+    setMeetingError(''); setMeetingOk('')
+    if (!isValidHttpUrl(manualLinkInput)) {
+      setMeetingError('Enter a well-formed meeting link (https://...).')
+      return
+    }
+    set('meeting_url', manualLinkInput.trim())
+    set('meeting_provider_id', '')
+    set('meeting_created_at', null)
+    setMeetingManual(true)
+    setMeetingOk('Manual meeting link added. It takes precedence over any provider-generated link.')
+  }
+
+  const removeMeetingLink = () => {
+    set('meeting_url', '')
+    set('meeting_provider_id', '')
+    set('meeting_created_at', null)
+    setMeetingManual(false)
+    setManualLinkInput('')
+    setMeetingError(''); setMeetingOk('')
   }
 
   const generateMeeting = async () => {
@@ -535,14 +594,16 @@ function CreateTraining({ form, set, employees, venues, options, busy, onSubmit 
         durationMinutes: form.duration_minutes,
       })
       if (result.status !== 'created' || !result.meetingUrl) {
-        if (result.status === 'not_configured') throw new Error(form.meeting_platform === 'zoom' ? 'Zoom integration is not configured. Connect Zoom before generating a meeting link.' : 'Google Meet integration is not configured. Connect Google Calendar/Meet before generating a meeting link.')
-        if (result.status === 'not_connected') throw new Error('Your provider account is not connected. Complete the OAuth connection first.')
-        throw new Error(result.error || 'The meeting could not be created by the provider.')
+        if (result.status === 'not_configured') throw new Error(form.meeting_platform === 'zoom' ? 'Zoom integration is not configured. Connect Zoom — or paste a meeting link below.' : 'Google Meet integration is not configured. Connect Google Calendar/Meet in Supabase — or paste a meeting link below.')
+        if (result.status === 'not_connected') throw new Error('Your provider account is not connected. Complete the OAuth connection — or paste a meeting link below.')
+        throw new Error(`${result.error || 'The meeting could not be created by the provider.'} — or paste a meeting link below.`)
       }
       set('meeting_platform', form.meeting_platform)
       set('meeting_url', result.meetingUrl)
       set('meeting_provider_id', result.externalMeetingId || result.externalEventId || '')
       set('meeting_created_at', new Date().toISOString())
+      setMeetingManual(false)
+      setManualLinkInput('')
       setMeetingOk(`Real ${form.meeting_platform === 'zoom' ? 'Zoom' : 'Google Meet'} meeting created via the provider API.`)
     } catch (e) {
       setMeetingError(e?.message || 'Meeting could not be generated.')
@@ -581,18 +642,29 @@ function CreateTraining({ form, set, employees, venues, options, busy, onSubmit 
               <Field label="Meeting platform" type="select" value={form.meeting_platform} onChange={(v) => set('meeting_platform', v)} options={MEETING_PLATFORMS} />
               {form.meeting_url ? (
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-2">
-                  <p className="text-xs font-semibold text-emerald-700">Meeting link (created via provider API)</p>
+                  <p className="text-xs font-semibold text-emerald-700">{meetingManual ? 'Meeting link (added manually — takes precedence over provider-generated links)' : 'Meeting link (created via provider API)'}</p>
                   <div className="flex items-center gap-2">
                     <code className="flex-1 rounded-lg bg-white border border-emerald-200 px-3 py-2 text-xs text-slate-700 break-all">{form.meeting_url}</code>
                     <button type="button" onClick={() => copyText(form.meeting_url, () => setMeetingOk('Link copied.'))} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 hover:border-[#009944] hover:text-[#009944]"><Copy className="w-3.5 h-3.5" /> Copy</button>
                     <a href={form.meeting_url} target="_blank" rel="noreferrer" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 hover:border-[#009944] hover:text-[#009944]"><ExternalLink className="w-3.5 h-3.5" /> Open</a>
                   </div>
-                  <button type="button" onClick={generateMeeting} disabled={meetingBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"><RefreshCw className={`w-3.5 h-3.5 ${meetingBusy ? 'animate-spin' : ''}`} /> Regenerate meeting link</button>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button type="button" onClick={generateMeeting} disabled={meetingBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"><RefreshCw className={`w-3.5 h-3.5 ${meetingBusy ? 'animate-spin' : ''}`} /> Regenerate via provider</button>
+                    <button type="button" onClick={removeMeetingLink} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"><X className="w-3.5 h-3.5" /> Remove link</button>
+                  </div>
                 </div>
               ) : (
-                <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+                <div className="rounded-lg border border-slate-200 p-3 space-y-3">
                   <button type="button" onClick={generateMeeting} disabled={meetingBusy} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#009944] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#007a36] disabled:opacity-50"><Video className="w-4 h-4" /> {meetingBusy ? 'Creating meeting...' : 'Generate Meeting Link'}</button>
                   <p className="text-xs text-slate-400">Creates a real meeting using the training title, date and time through the secure server-side provider integration.</p>
+                  <div className="rounded-lg border border-dashed border-slate-300 p-3 space-y-2">
+                    <p className="text-xs font-medium text-slate-600">Or paste a meeting link</p>
+                    <div className="flex items-center gap-2">
+                      <input className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" placeholder="https://meet.google.com/..." value={manualLinkInput} onChange={(e) => setManualLinkInput(e.target.value)} />
+                      <button type="button" onClick={attachManualLink} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-[#009944] px-3 text-xs font-medium text-[#009944] hover:bg-emerald-50"><Link2 className="w-3.5 h-3.5" /> Use this link</button>
+                    </div>
+                    <p className="text-xs text-slate-400">Any well-formed video link works — copy the join URL from your meeting provider and paste it here. A manually pasted link is used as-is.</p>
+                  </div>
                 </div>
               )}
               {meetingOk && <p className="text-xs text-emerald-600">{meetingOk}</p>}

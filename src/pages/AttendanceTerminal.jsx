@@ -5,6 +5,7 @@ import { attendanceEngineService } from '../services/attendanceEngineService'
 import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, getPosition, normalizeAttendanceError } from '../services/attendanceService'
 import { biometricService } from '../services/biometricService'
 import { normalizeEmployeeId, canonicalEmployeeId } from '../utils/employeeId'
+import { getDeviceFingerprint } from '../utils/deviceFingerprint'
 import { useNetworkTime } from '../hooks/useNetworkTime'
 
 // ============================================================
@@ -36,11 +37,19 @@ export default function AttendanceTerminal() {
   const { now: currentTime, synced: networkTimeSynced } = useNetworkTime()
   // Confirmed identity — shown before recording attendance
   const [confirmed, setConfirmed] = useState(null)
+  // Device-scoped fingerprint (QR mode only) — one device, one employee/day
+  const [deviceFingerprint, setDeviceFingerprint] = useState('')
 
   useEffect(() => {
     const load = async () => {
       try {
         const requirements = await attendanceService.getAttendanceRequirements()
+        if (publicMode) {
+          // Browser composite fingerprint sent with every QR terminal call.
+          // The server enforces one-device-per-employee-per-day from it.
+          const fp = await getDeviceFingerprint().catch(() => '')
+          setDeviceFingerprint(fp)
+        }
         if (!publicMode) {
           const devs = await attendanceEngineService.listDevices()
           const terminals = devs.filter((d) => d.device_type === 'attendance_terminal' && d.status === 'active')
@@ -63,10 +72,15 @@ export default function AttendanceTerminal() {
     setConfirmed(null)
     try {
       const lookup = publicMode
-        ? await attendanceService.validatePublicTerminalEmployee(terminalToken, pin)
+        ? await attendanceService.validatePublicTerminalEmployee(terminalToken, pin, deviceFingerprint)
         : await attendanceEngineService.lookupAttendanceEmployee(pin)
       if (publicMode ? !lookup?.valid : !lookup?.found) {
         setError(lookup?.error || 'Employee ID not found. Please check the ID and try again.')
+        setBusy(false)
+        return
+      }
+      if (publicMode && lookup?.device_binding_blocked) {
+        setError(lookup?.device_binding_error || 'This device has already been used to clock in a different employee today. Contact your supervisor or HR if this is an error.')
         setBusy(false)
         return
       }
@@ -127,6 +141,7 @@ export default function AttendanceTerminal() {
           employeeIdentifier: confirmed.employee_number || pin,
           eventType,
           geo: actionGeo,
+          deviceFingerprint,
         })
         : await attendanceEngineService.simulateDeviceEvent({
           deviceId: selectedDevice.id,

@@ -87,6 +87,19 @@ export const trainingService = {
     return data
   },
 
+  // Send training invites (email + in-platform) for a created session via
+  // the server-side `send-training-invites` edge function. Emails leave via
+  // Resend; KSS sessions additionally land an announcement in the KSS
+  // channel; non-KSS participants get an in-app notification with a link.
+  async sendInvites(sessionId, employeeIds) {
+    if (!sessionId || !Array.isArray(employeeIds) || employeeIds.length === 0) return null
+    const { data, error } = await supabase.functions.invoke('send-training-invites', {
+      body: { sessionId, employeeIds },
+    })
+    if (error) throw error
+    return data || { status: 'failed', error: 'No response from the invite service' }
+  },
+
   async getDashboard(filters = {}) {
     const { data, error } = await supabase.rpc('get_training_dashboard', {
       p_start_date: filters.startDate || null,

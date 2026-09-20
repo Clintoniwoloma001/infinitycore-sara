@@ -99,6 +99,50 @@ export const payrollProfileService = {
     if (error) throw error
     return data || []
   },
+
+  // ---- Payroll Master compensation (Phase 63) -----------------------------
+
+  // Single-call bundle used by the Payroll Master editor and the
+  // Employee 360 Payroll tab. Returns basic + active packages + CURRENT
+  // snapshot from one SECURITY DEFINER RPC.
+  async getEmployeeCompensation(employeeId) {
+    const { data, error } = await supabase.rpc('get_employee_compensation', {
+      p_employee_id: employeeId,
+    })
+    if (error) throw error
+    return data
+  },
+
+  // Save compensation. Server-side only (super_admin/admin/hr_manager),
+  // reason required, audited to audit_logs. Inputs:
+  //   basic        – monthly basic salary
+  //   allowances   – [{ name?, component_id?, category?, amount }]
+  //   deductions   – [{ name?, component_id?, amount }]
+  //   reason       – required (>= 5 chars)
+  async upsertEmployeeCompensation({ employeeId, basic, allowances = [], deductions = [], reason = '' }) {
+    const { data, error } = await supabase.rpc('upsert_employee_compensation', {
+      p_employee_id: employeeId,
+      p_basic: Number(basic || 0),
+      p_allowances: allowances,
+      p_deductions: deductions,
+      p_reason: reason,
+    })
+    if (error) throw error
+    return data // { ok, employee_id, period_label, breakdown }
+  },
+
+  // Derived-totals preview, NO writes. Mirrors the exact breakdown the
+  // saved compensation will persist (shared _salary_breakdown engine).
+  async previewCompensation({ employeeId, basic, allowances = [], deductions = [] }) {
+    const { data, error } = await supabase.rpc('preview_employee_compensation', {
+      p_employee_id: employeeId,
+      p_basic: Number(basic || 0),
+      p_allowances: allowances,
+      p_deductions: deductions,
+    })
+    if (error) throw error
+    return data.breakdown || data
+  },
 }
 
 export default payrollProfileService

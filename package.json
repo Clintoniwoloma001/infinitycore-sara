@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "homepage": "https://clintoniwoloma001.github.io/infinitycore-sara",
   "type": "module",
-  "description": "Infinity Bank Operations Platform — Vite + React + Supabase SARA AI ENEABLED",
+  "description": "Infinity Bank Operations Platform \u2014 Vite + React + Supabase SARA AI ENEABLED",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -16,6 +16,7 @@
     "test:e2e:install": "playwright install chromium",
     "test:camera": "node tests/cameraCapture.test.mjs",
     "test:attendance": "node tests/attendanceCalculations.test.mjs",
+    "test:device-binding": "node tests/attendanceDeviceBinding.test.mjs",
     "test:dashboard-attendance": "node tests/dashboardAttendanceToday.test.mjs",
     "test:recruitment": "node tests/recruitmentPipeline.test.mjs",
     "test:members": "node tests/memberManagement.test.mjs",
@@ -24,7 +25,9 @@
     "test:training-delivery": "node tests/trainingDeliveryMeetings.test.mjs",
     "test:training-attendance": "node tests/trainingAttendanceLink.test.mjs",
     "test:bankone": "node scripts/test-bankone-integration.mjs",
-    "test:termination-auth": "node scripts/verify-termination-auth.mjs"
+    "test:termination-auth": "node scripts/verify-termination-auth.mjs",
+    "test:reinvite": "node tests/reinviteReviewModal.test.mjs",
+    "test:payroll-compensation": "node tests/payrollCompensation.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

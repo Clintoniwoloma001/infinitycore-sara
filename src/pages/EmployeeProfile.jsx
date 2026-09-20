@@ -10,6 +10,7 @@ import { documentService } from '../services/documentService'
 import { employmentLetterService } from '../services/employmentLetterService'
 import { guarantorVerificationService } from '../services/guarantorVerificationService'
 import { payrollService } from '../services/payrollService'
+import { payrollProfileService } from '../services/payrollProfileService'
 import { supabase } from '../supabaseClient'
 import EmployeeHRActions from '../components/EmployeeHRActions'
 import StaffIdCard from '../components/StaffIdCard'
@@ -151,6 +152,7 @@ export default function EmployeeProfile() {
   const [letterMsg, setLetterMsg] = useState('')
   const [payrollItems, setPayrollItems] = useState([])
   const [payrollPeriods, setPayrollPeriods] = useState([])
+  const [compensation, setCompensation] = useState(null)
   const [events, setEvents] = useState([])
   const [showAddPayroll, setShowAddPayroll] = useState(false)
   const [selectedPeriod, setSelectedPeriod] = useState('')
@@ -270,6 +272,8 @@ export default function EmployeeProfile() {
         setPayrollItems(items)
         const periods = await payrollService.listPeriods().catch(() => [])
         setPayrollPeriods(periods)
+        const comp = await payrollProfileService.getEmployeeCompensation(id).catch(() => null)
+        setCompensation(comp)
       }
 
       // Load onboarding submission, appraisals, queries, leave requests
@@ -1116,6 +1120,51 @@ export default function EmployeeProfile() {
             <EmptyState title="No access" description="You do not have permission to view payroll records." />
           ) : (
             <>
+              {compensation && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-4 mb-6">
+                  <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+                    <h4 className="text-sm font-semibold text-slate-800">Current Compensation</h4>
+                    {compensation.has_compensation && (
+                      <span className="text-[11px] text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full font-medium">Updated {date(compensation.snapshot?.calc_timestamp)}</span>
+                    )}
+                  </div>
+                  {compensation.has_compensation ? (
+                    <>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                        <div className="rounded-lg bg-white border border-slate-100 p-2.5">
+                          <div className="text-[11px] text-slate-400">Basic</div>
+                          <div className="text-sm font-semibold text-slate-800 mt-0.5">{money(compensation.basic_monthly)}</div>
+                        </div>
+                        <div className="rounded-lg bg-white border border-slate-100 p-2.5">
+                          <div className="text-[11px] text-slate-400">Allowances</div>
+                          <div className="text-sm font-semibold text-slate-800 mt-0.5">{money(compensation.snapshot?.allowances_total)}</div>
+                        </div>
+                        <div className="rounded-lg bg-white border border-slate-100 p-2.5">
+                          <div className="text-[11px] text-slate-400">Gross</div>
+                          <div className="text-sm font-semibold text-slate-800 mt-0.5">{money(compensation.snapshot?.gross_monthly)}</div>
+                        </div>
+                        <div className="rounded-lg bg-white border border-slate-100 p-2.5">
+                          <div className="text-[11px] text-slate-400">Net pay</div>
+                          <div className="text-sm font-semibold text-[#009944] mt-0.5">{money(compensation.snapshot?.net_monthly)}</div>
+                        </div>
+                      </div>
+                      {(compensation.packages || []).filter((p) => p.active).length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {(compensation.packages || []).filter((p) => p.active).map((p) => (
+                            <span key={p.id || p.component_id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] text-slate-600 bg-white">
+                              {p.name} · {money(p.amount)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-400">No package-based components — flat basic only.</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs text-slate-500">No compensation configured. Admins can set it from Payroll &amp; BankOne → Payroll Master.</p>
+                  )}
+                </div>
+              )}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
                 <div className="rounded-lg bg-slate-50 p-3">
                   <div className="text-xs text-slate-400">Payroll Eligibility</div>

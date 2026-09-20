@@ -349,7 +349,10 @@ begin
     );
     return jsonb_build_object(
       'success', false,
-      'error', 'DEVICE_BINDING:This device has already been used to clock in a different employee today. Contact your supervisor or HR if this is an error.',
+      'error', coalesce(
+        nullif(v_bind ->> 'error', ''),
+        'DEVICE_BINDING:This device has already been used to clock in a different employee today. Contact your supervisor or HR if this is an error.'
+      ),
       'device_binding_blocked', true
     );
   end if;

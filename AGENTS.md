@@ -176,3 +176,43 @@ credentials arrive; the platform file overrides them (listed last in `env_file:`
   View QR / Suspend / Resume / Revoke / Delete per row, all with `window.confirm`).
   The View QR modal re-displays a link generated this session, otherwise offers a
   Generate QR button (which reactivates suspended/revoked terminals with a new token).
+
+## Phase 63 — Payroll Master Compensation Editor (fixes ₦0.00 payroll)
+- Root cause: `list_payroll_master` / `compute_payroll` read salary + allowances
+  straight off `employees`, which are blank — real compensation lives in the Phase 41
+  engine (`payroll_salary_components` → `employee_salary_packages` →
+  `employee_salary_snapshots`). Payroll Master showed ₦0.00.
+- SQL migration: `schema_phase63_payroll_master_compensation.sql` — run in Supabase
+  SQL Editor after Phase 62. Idempotent/additive.
+  - New pure helper `public._salary_breakdown(basic, allowances, taxable_allowances,
+    deductions)` — ONE arithmetic engine (pension + consolidated relief + PAYE bands +
+    mid/end split) driven by `payroll_config` (id=1). Shared by `calculate_employee_salary_breakdown`,
+    `preview_employee_compensation`, and the rewritten `compute_payroll`.
+  - `calculate_employee_salary_breakdown(uuid, text default null)` rewritten to use the
+    engine and persist the CURRENT snapshot (same return shape: `{ok, employee_id,
+    period_label, breakdown}`). Callers (SalaryStructure) unchanged.
+  - `upsert_employee_compensation(employee_id, basic, allowances jsonb, deductions jsonb,
+    reason)` — SECURITY DEFINER, **super_admin/admin/hr_manager only**, mandatory
+    reason (≥5 chars). Updates `employees.salary`, find-or-creates components and
+    packages (component_id-or-name), deactivates zero amounts, resyncs
+    `employees.allowances`, recomputes CURRENT snapshot, writes
+    `EMPLOYEE_COMPENSATION_UPDATED` to `audit_logs` (before/after + reason).
+  - `preview_employee_compensation(...)` — read-only preview (hr roles), same engine,
+    NO writes; `get_employee_compensation(uuid)` — bundle {identity, basic_monthly,
+    packages[], latest CURRENT snapshot, has_compensation} for editor + Employee 360.
+  - `list_payroll_master()` rewritten: derived `salary` (basic), `allowances`, `gross`,
+    `deductions_total`, `tax_paye`, `pension`, `other_deductions`, `net`, `mid_month`,
+    `end_month`, `has_compensation` from the CURRENT snapshot (package fallback).
+    BankOne export mapping (amount = salary + allowances) unchanged.
+  - `compute_payroll()` no longer hardcodes `v_allowances := 0` — it sums the active
+    allowance/deduction packages and calls `_salary_breakdown`, so Payroll runs +
+    BankOne push preview now reflect edited compensation.
+- `payrollProfileService.js` gains `getEmployeeCompensation` / `upsertEmployeeCompensation`
+  / `previewCompensation`. New `src/components/payroll/CompensationEditorModal.jsx` (basic +
+  allowance/deduction rows + live derived preview + mandatory reason).
+- `PayrollBankOne.jsx` Payroll Master tab: Basic / Allowances / Gross / Deductions / Net
+  columns + per-row **Edit/Set** compensation button (visible to payroll.manage roles).
+- `EmployeeProfile.jsx` Payroll tab: **Current Compensation** card (basic, allowances,
+  gross, net, package chips) via `get_employee_compensation`.
+- Test: `npm run test:payroll-compensation` — `tests/payrollCompensation.test.mjs`
+  (migration-content assertions, no live DB).
