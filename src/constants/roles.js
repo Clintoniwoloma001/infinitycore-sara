@@ -202,6 +202,7 @@ export const ROLE_PERMISSIONS = {
     'hr.training.read',
     'hr.training.manage',
     'workforce.manhour.read',
+    'attendance.terminal',
   ],
   [ROLES.ADMIN]: [
     'customers.read',

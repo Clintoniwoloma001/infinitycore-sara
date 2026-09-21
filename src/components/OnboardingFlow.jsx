@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../hooks/useAuth'
 import { employeeService } from '../services/employeeService'
-import { Loader2, Check, User, Briefcase, Phone, MapPin, Heart, ArrowRight, ArrowLeft, Sparkles, Calendar, Building2, Banknote, FileText, CreditCard, UserCircle } from 'lucide-react'
+import { Loader2, Check, User, Briefcase, Phone, MapPin, Heart, ArrowRight, ArrowLeft, Sparkles, Calendar, Building2, FileText, CreditCard, UserCircle } from 'lucide-react'
 
 const inputCls = 'w-full h-11 rounded-lg border border-slate-300 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944] transition-all'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -13,7 +13,7 @@ const STEPS = [
   { id: 'contact', label: 'Contact', icon: Phone },
   { id: 'address', label: 'Address', icon: MapPin },
   { id: 'employment', label: 'Employment', icon: Briefcase },
-  { id: 'bank', label: 'Bank Details', icon: Banknote },
+  { id: 'ids', label: 'IDs & Deductions', icon: FileText },
   { id: 'kin', label: 'Next of Kin', icon: Heart },
   { id: 'complete', label: 'Complete', icon: Check },
 ]
@@ -41,12 +41,7 @@ export default function OnboardingFlow({ onComplete, onDismiss, embedded = false
     department: '',
     position: '',
     employment_type: 'full_time',
-    salary: '',
     hire_date: new Date().toISOString().slice(0, 10),
-    bank_name: '',
-    account_number: '',
-    bank_sort_code: '',
-    bvn: '',
     nin: '',
     pension_id: '',
     tax_id: '',
@@ -107,7 +102,6 @@ export default function OnboardingFlow({ onComplete, onDismiss, embedded = false
         department: form.department,
         position: form.position,
         employment_type: form.employment_type,
-        salary: form.salary ? Number(form.salary) : null,
         hire_date: form.hire_date,
         employment_status: 'active',
         date_of_birth: form.date_of_birth || null,
@@ -119,10 +113,6 @@ export default function OnboardingFlow({ onComplete, onDismiss, embedded = false
         town: form.town || null,
         residential_address: form.residential_address || null,
         religion: form.religion || null,
-        bank_name: form.bank_name || null,
-        account_number: form.account_number || null,
-        bank_sort_code: form.bank_sort_code || null,
-        bvn: form.bvn || null,
         nin: form.nin || null,
         pension_id: form.pension_id || null,
         tax_id: form.tax_id || null,
@@ -319,8 +309,8 @@ export default function OnboardingFlow({ onComplete, onDismiss, embedded = false
                 <span className="font-medium text-slate-900">{form.position || '—'}</span>
               </div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-slate-500">Bank</span>
-                <span className="font-medium text-slate-900">{form.bank_name || '—'}</span>
+                <span className="text-slate-500">NIN</span>
+                <span className="font-medium text-slate-900">{form.nin || '—'}</span>
               </div>
             </div>
           </div>
@@ -440,7 +430,18 @@ export default function OnboardingFlow({ onComplete, onDismiss, embedded = false
               </div>
               <div>
                 <label className={labelCls}>Religion (optional)</label>
-                <input className={inputCls} value={form.religion} onChange={(e) => update('religion', e.target.value)} placeholder="Optional" />
+                <select className={inputCls} value={form.religion} onChange={(e) => update('religion', e.target.value)}>
+                  <option value="">Select...</option>
+                  <option value="christianity">Christianity</option>
+                  <option value="islam">Islam</option>
+                  <option value="hinduism">Hinduism</option>
+                  <option value="traditional">Traditional / African Religion</option>
+                  <option value="buddhism">Buddhism</option>
+                  <option value="judaism">Judaism</option>
+                  <option value="sikhism">Sikhism</option>
+                  <option value="atheist">No religion / Atheist</option>
+                  <option value="other">Other</option>
+                </select>
               </div>
             </div>
           )}
@@ -449,9 +450,17 @@ export default function OnboardingFlow({ onComplete, onDismiss, embedded = false
             <div className="space-y-4">
               <h2 className="text-xl font-semibold text-slate-900 mb-1">Employment Details</h2>
               <p className="text-sm text-slate-500 mb-4">Your role at InfinityCore.</p>
-              <div>
-                <label className={labelCls}>Department</label>
-                <input className={inputCls} value={form.department} onChange={(e) => update('department', e.target.value)} placeholder="e.g. Operations" />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Department</label>
+                  <input className={inputCls + ' bg-slate-100'} value={form.department || '—'} readOnly aria-readonly="true" />
+                  <p className="text-xs text-slate-400 mt-1">Assigned by HR. Contact the People team to change it.</p>
+                </div>
+                <div>
+                  <label className={labelCls}>Branch</label>
+                  <input className={inputCls + ' bg-slate-100'} value={form.branch || '—'} readOnly aria-readonly="true" />
+                  <p className="text-xs text-slate-400 mt-1">Assigned by HR. Contact the People team to change it.</p>
+                </div>
               </div>
               <div>
                 <label className={labelCls}>Position / Title</label>
@@ -472,50 +481,26 @@ export default function OnboardingFlow({ onComplete, onDismiss, embedded = false
                   <input type="date" className={inputCls} value={form.hire_date} onChange={(e) => update('hire_date', e.target.value)} />
                 </div>
               </div>
-              <div>
-                <label className={labelCls}>Salary (₦)</label>
-                <input type="number" className={inputCls} value={form.salary} onChange={(e) => update('salary', e.target.value)} placeholder="Annual salary" />
-              </div>
             </div>
           )}
 
           {step === 5 && (
             <div className="space-y-4">
-              <h2 className="text-xl font-semibold text-slate-900 mb-1">Bank Account Details</h2>
-              <p className="text-sm text-slate-500 mb-4">For salary payments.</p>
-              <div>
-                <label className={labelCls}>Bank Name</label>
-                <input className={inputCls} value={form.bank_name} onChange={(e) => update('bank_name', e.target.value)} placeholder="e.g. Access Bank" />
-              </div>
+              <h2 className="text-xl font-semibold text-slate-900 mb-1">National IDs & Deductions</h2>
+              <p className="text-sm text-slate-500 mb-4">Identification numbers for your HR record.</p>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className={labelCls}>Account Number</label>
-                  <input className={inputCls} value={form.account_number} onChange={(e) => update('account_number', e.target.value)} placeholder="10-digit number" />
-                </div>
-                <div>
-                  <label className={labelCls}>Sort Code</label>
-                  <input className={inputCls} value={form.bank_sort_code} onChange={(e) => update('bank_sort_code', e.target.value)} placeholder="Bank sort code" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className={labelCls}>BVN</label>
-                  <input className={inputCls} value={form.bvn} onChange={(e) => update('bvn', e.target.value)} placeholder="11-digit BVN" />
-                </div>
                 <div>
                   <label className={labelCls}>NIN</label>
                   <input className={inputCls} value={form.nin} onChange={(e) => update('nin', e.target.value)} placeholder="National ID" />
                 </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={labelCls}>Pension ID (optional)</label>
                   <input className={inputCls} value={form.pension_id} onChange={(e) => update('pension_id', e.target.value)} />
                 </div>
-                <div>
-                  <label className={labelCls}>Tax ID (optional)</label>
-                  <input className={inputCls} value={form.tax_id} onChange={(e) => update('tax_id', e.target.value)} />
-                </div>
+              </div>
+              <div>
+                <label className={labelCls}>Tax ID (optional)</label>
+                <input className={inputCls} value={form.tax_id} onChange={(e) => update('tax_id', e.target.value)} />
               </div>
             </div>
           )}

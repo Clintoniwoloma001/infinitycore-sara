@@ -123,7 +123,7 @@ export async function executeLeaveDecision({ request, decision, comment = '', si
     await sendDecisionEmail({
       recipientId: request.created_by,
       subject: 'Leave request update',
-      message: `Hello,\n\n${statusText}.${comment ? `\n\nComments: ${comment}` : ''}\n\n— Infinity Bank Operations`,
+      message: `Hello,\n\n${statusText}.${comment ? `\n\nComments: ${comment}` : ''}\n\n— Infinity Microfinance Bank Operations`,
     })
   } catch { /* best-effort */ }
 

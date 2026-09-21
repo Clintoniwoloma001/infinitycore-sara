@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
-import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw, Eye, Trash2, Pause, Play, Fingerprint, ShieldAlert } from 'lucide-react'
+import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw, Eye, Trash2, Pause, Play, Fingerprint, ShieldAlert, History } from 'lucide-react'
 import { attendanceService, platformDateKey, formatWorkedHours } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { platformSettingsService } from '../services/platformSettingsService'
@@ -746,6 +746,11 @@ function QrTerminalTab({ setNotice }) {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [busyId, setBusyId] = useState('')
+  const [historyDevice, setHistoryDevice] = useState('')
+  const [historyRows, setHistoryRows] = useState([])
+  const [historyFilter, setHistoryFilter] = useState('all')
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState('')
 
   const load = async () => {
     setLoading(true)
@@ -814,7 +819,15 @@ function QrTerminalTab({ setNotice }) {
     if (s === 'active') return { label: 'Active', cls: 'bg-emerald-100 text-emerald-700' }
     if (s === 'suspended') return { label: 'Suspended', cls: 'bg-amber-100 text-amber-700' }
     if (s === 'revoked') return { label: 'Revoked', cls: 'bg-rose-100 text-rose-700' }
+    if (s === 'deleted') return { label: 'Deleted (history kept)', cls: 'bg-slate-200 text-slate-600' }
     return { label: s || 'Unknown', cls: 'bg-slate-100 text-slate-600' }
+  }
+
+  const historyBadge = (status) => {
+    if (status === 'active') return { label: 'Active', cls: 'bg-emerald-100 text-emerald-700' }
+    if (status === 'expired') return { label: 'Expired', cls: 'bg-slate-200 text-slate-600' }
+    if (status === 'deleted') return { label: 'Deleted', cls: 'bg-slate-200 text-slate-600' }
+    return { label: 'Revoked', cls: 'bg-amber-100 text-amber-700' }
   }
 
   const runFor = async (id, fn, okText, errorText) => {
@@ -841,13 +854,13 @@ function QrTerminalTab({ setNotice }) {
   }
 
   const revokeDevice = (device) => {
-    if (!window.confirm(`Revoke "${device.device_name}"? This permanently destroys its QR token. Existing printed QRs stop working and cannot be re-enabled — a brand-new QR must be generated to bring the terminal back.`)) return
+    if (!window.confirm(`Revoke "${device.device_name}"? This invalidates its QR token. Existing printed QRs stop working and cannot be re-enabled — a brand-new QR must be generated to bring the terminal back. The revoked token stays in the QR history log (it is never destroyed).`)) return
     setBusyId(device.id)
     attendanceService.revokeTerminal(device.id)
       .then(async () => {
         setTerminalLink((cur) => (device.id === selectedId ? '' : cur))
         if (showQr === device.id) { setShowQr(''); setQrLink('') }
-        setNotice({ kind: 'ok', text: 'Terminal revoked. The QR token is destroyed.' })
+        setNotice({ kind: 'ok', text: 'Terminal revoked. The QR token is invalidated and archived in history.' })
         await load()
       })
       .catch((e) => setNotice({ kind: 'error', text: e?.message || 'Could not revoke terminal' }))
@@ -855,12 +868,12 @@ function QrTerminalTab({ setNotice }) {
   }
 
   const deleteDevice = (device) => {
-    if (!window.confirm(`Delete "${device.device_name}"? Only revoked terminals can be deleted. This permanently removes the terminal record and its scan-attempt history.`)) return
+    if (!window.confirm(`Delete "${device.device_name}"? Only revoked terminals can be deleted. This disables the terminal permanently — its row AND its full token history are kept (soft delete) so the audit trail is never destroyed.`)) return
     setBusyId(device.id)
     attendanceService.deleteTerminal(device.id)
       .then(async () => {
         if (showQr === device.id) { setShowQr(''); setQrLink('') }
-        setNotice({ kind: 'ok', text: 'Terminal deleted.' })
+        setNotice({ kind: 'ok', text: 'Terminal deleted (soft). History preserved.' })
         await load()
       })
       .catch((e) => setNotice({ kind: 'error', text: e?.message || 'Could not delete terminal' }))
@@ -905,6 +918,37 @@ function QrTerminalTab({ setNotice }) {
   const dangerBtn = 'border-rose-200 text-rose-700 hover:bg-rose-50'
   const plainBtn = 'border-slate-300 text-slate-600'
 
+  const openQrHistory = async (device) => {
+    setHistoryDevice(device.id)
+    setHistoryFilter('all')
+    setHistoryLoading(true)
+    setHistoryError('')
+    try {
+      const rows = await attendanceService.listTerminalQrHistory(device.id)
+      setHistoryRows(rows)
+    } catch (e) {
+      setHistoryError(e?.message || 'Could not load this terminal QR history')
+      setHistoryRows([])
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  const changeHistoryFilter = async (status) => {
+    setHistoryFilter(status)
+    setHistoryLoading(true)
+    setHistoryError('')
+    try {
+      const rows = await attendanceService.listTerminalQrHistory(historyDevice, status === 'all' ? null : status)
+      setHistoryRows(rows)
+    } catch (e) {
+      setHistoryError(e?.message || 'Could not load this terminal QR history')
+      setHistoryRows([])
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
   const renderActions = (device) => (
     <div className="flex flex-wrap gap-1.5">
       <button onClick={() => openQrView(device)} className={`${actionBtn} ${plainBtn}`}><Eye className="w-3.5 h-3.5" /> View QR</button>
@@ -914,12 +958,13 @@ function QrTerminalTab({ setNotice }) {
       {device.status === 'suspended' && (
         <button onClick={() => resumeDevice(device)} className={`${actionBtn} border-emerald-200 text-emerald-700 hover:bg-emerald-50`}><Play className="w-3.5 h-3.5" /> Resume</button>
       )}
-      {device.status !== 'revoked' && (
+      {device.status !== 'revoked' && device.status !== 'deleted' && (
         <button onClick={() => revokeDevice(device)} className={`${actionBtn} ${dangerBtn}`}><Ban className="w-3.5 h-3.5" /> Revoke</button>
       )}
       {device.status === 'revoked' && (
         <button onClick={() => deleteDevice(device)} className={`${actionBtn} ${dangerBtn}`}><Trash2 className="w-3.5 h-3.5" /> Delete</button>
       )}
+      <button onClick={() => openQrHistory(device)} className={`${actionBtn} ${plainBtn}`}><History className="w-3.5 h-3.5" /> QR History</button>
     </div>
   )
 
@@ -984,6 +1029,71 @@ function QrTerminalTab({ setNotice }) {
       </div>
     )
   })() : null
+
+  const historyDeviceObj = devices.find((d) => d.id === historyDevice)
+  const closeHistoryModal = () => { setHistoryDevice(''); setHistoryRows([]); setHistoryError('') }
+  const historyModal = historyDeviceObj ? (
+    <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4" onClick={closeHistoryModal}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="font-semibold text-slate-900">{historyDeviceObj.device_name}</h3>
+            <p className="text-xs text-slate-500 mt-1">QR token history — every token ever issued to this terminal. Tokens are never destroyed: regenerated/revoked tokens stay here as <span className="font-medium">Revoked</span>, and the terminal row itself is a soft delete (<span className="font-medium">Deleted</span>). Only the first 8 characters of each token are shown; full tokens never leave the locked-down server store.</p>
+          </div>
+          <button onClick={closeHistoryModal} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {[['all', 'All'], ['active', 'Active'], ['revoked', 'Revoked'], ['deleted', 'Deleted']].map(([value, label]) => (
+            <button key={value} onClick={() => changeHistoryFilter(value)}
+              className={`px-3 py-1 rounded-full text-xs font-medium border ${historyFilter === value ? 'bg-[#009944] text-white border-[#009944]' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {historyLoading ? (
+          <div className="py-8 text-center">
+            <Loader2 className="w-5 h-5 mx-auto animate-spin text-[#009944]" />
+            <p className="text-sm text-slate-500 mt-2">Loading QR history…</p>
+          </div>
+        ) : historyError ? (
+          <p className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-3">{historyError}</p>
+        ) : historyRows.length === 0 ? (
+          <p className="text-sm text-slate-500 bg-slate-50 border border-slate-100 rounded-lg p-4">No QR tokens match this filter yet. Generate a QR for this terminal to create the first history entry.</p>
+        ) : (
+          <div className="max-h-[50vh] overflow-y-auto -mx-6 px-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                  <th className="py-2 pr-3 font-medium">Token</th>
+                  <th className="py-2 pr-3 font-medium">Status</th>
+                  <th className="py-2 pr-3 font-medium">Generated</th>
+                  <th className="py-2 pr-3 font-medium">By</th>
+                  <th className="py-2 pr-3 font-medium">Revoked</th>
+                  <th className="py-2 pr-3 font-medium">Revoked by</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historyRows.map((row) => (
+                  <tr key={row.id} className="border-b border-slate-50 last:border-0">
+                    <td className="py-3 pr-3 font-mono text-[12.5px] text-slate-700">{row.token_preview || '—'}</td>
+                    <td className="py-3 pr-3">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${historyBadge(row.status).cls}`}>{historyBadge(row.status).label}</span>
+                    </td>
+                    <td className="py-3 pr-3 text-xs text-slate-500">{row.created_at ? new Date(row.created_at).toLocaleString() : '—'}</td>
+                    <td className="py-3 pr-3 text-xs text-slate-500">{row.created_by_name || '—'}</td>
+                    <td className="py-3 pr-3 text-xs text-slate-500">{row.revoked_at ? new Date(row.revoked_at).toLocaleString() : '—'}</td>
+                    <td className="py-3 text-xs text-slate-500">{row.revoked_by_name || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null
 
   if (loading) return <LoadingState label="Loading QR attendance terminals..." />
 
@@ -1075,6 +1185,7 @@ function QrTerminalTab({ setNotice }) {
       </div>
 
       {qrModal}
+      {historyModal}
     </div>
   )
 }

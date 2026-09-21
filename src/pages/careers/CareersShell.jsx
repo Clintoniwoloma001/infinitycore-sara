@@ -13,7 +13,7 @@ export default function CareersShell({ children, compact = false }) {
           <Link to="/careers" className="flex items-center gap-2.5">
             <Logo size={28} />
             <div>
-              <div className="text-sm font-bold text-slate-900 leading-none">Infinity Bank Careers</div>
+              <div className="text-sm font-bold text-slate-900 leading-none">Infinity Microfinance Bank Careers</div>
               <div className="text-[11px] text-slate-400 mt-0.5">Join a bank building the future</div>
             </div>
           </Link>
@@ -23,7 +23,7 @@ export default function CareersShell({ children, compact = false }) {
       <main className="flex-1 w-full max-w-5xl mx-auto px-4 py-8">{children}</main>
       <footer className="border-t border-slate-200 bg-white">
         <div className="max-w-5xl mx-auto px-4 py-4 text-xs text-slate-400 flex items-center justify-between">
-          <span>© {new Date().getFullYear()} Infinity Bank. All rights reserved.</span>
+          <span>© {new Date().getFullYear()} Infinity Microfinance Bank. All rights reserved.</span>
           <span>Equal opportunity employer.</span>
         </div>
       </footer>

@@ -171,10 +171,15 @@ export default function ActivateAccount() {
           throw new Error(activation?.code || 'activation_failed')
         }
       } else {
-        // Recovery: finalize any still-pending employee invitation so a
-        // reset can also complete a first-time activation. Best-effort only
-        // — an already-active account (or a non-employee account) is fine.
+        // Recovery: the password above IS now saved — success is final.
+        // Everything downstream is best-effort so a stale/unsupported profile
+        // refresh can never flip a successful reset to the "link could not be
+        // used" failure screen.
         await supabase.rpc('activate_employee_invitation').catch(() => null)
+        await refreshProfile().catch(() => null)
+        setComplete(true)
+        setTimeout(() => navigate('/', { replace: true }), 900)
+        return
       }
 
       await refreshProfile()

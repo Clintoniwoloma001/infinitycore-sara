@@ -12,6 +12,27 @@ import { supabase } from '../supabaseClient'
 
 const EDGE = 'sara-candidate-analysis'
 
+// Default anti-cheat configuration. Must mirror the JSON default on
+// assessment_templates.anti_cheat (schema_phase41 + the Phase 66/67
+// migration). Always sent explicitly on create so an INSERT never depends on
+// the DB column default / NOT NULL.
+export const DEFAULT_ANTI_CHEAT = {
+  max_flags: 3,
+  flag_severity: 'high',
+  close_on_flag: true,
+  require_hr_review: false,
+  retake_limit: 0,
+  retake_time_hours: 48,
+  keep_previous_attempt: true,
+  track_copy_paste: true,
+  track_context_menu: true,
+  track_fullscreen: true,
+  require_fullscreen: true,
+  track_focus_changes: true,
+  shuffle_options: false,
+  inactivity_timeout_minutes: 10,
+}
+
 async function invoke(payload) {
   const { data, error } = await supabase.functions.invoke(EDGE, { body: payload })
   if (error) throw error
@@ -54,7 +75,7 @@ export const assessmentService = {
       max_questions: data.max_questions ? Number(data.max_questions) : null,
       shuffle_questions: !!data.shuffle_questions,
       randomization: !!data.randomization,
-      anti_cheat: data.anti_cheat || undefined,
+      anti_cheat: data.anti_cheat || DEFAULT_ANTI_CHEAT,
     }
     const { data: row, error } = await supabase.from('assessment_templates').insert([payload]).select().single()
     if (error) throw error
@@ -62,9 +83,11 @@ export const assessmentService = {
   },
 
   async updateTemplate(templateId, updates) {
+    const clean = { ...updates }
+    if (clean.anti_cheat === null || clean.anti_cheat === undefined) delete clean.anti_cheat
     const { data, error } = await supabase
       .from('assessment_templates')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update({ ...clean, updated_at: new Date().toISOString() })
       .eq('id', templateId)
       .select()
       .single()
@@ -232,6 +255,76 @@ export const assessmentService = {
   async analyzeAttempt(attemptId) {
     const result = await invoke({ action: 'analyze_assessment', attempt_id: attemptId })
     return result
+  },
+
+  // ---- Phase 66/67: question generation + scorecard analytics -------------
+
+  // Draft questions with Sara (role / JD / sample-based). Returns
+  // { ok, questions, mode, ... } — questions are drafts for HR review; nothing
+  // is written server-side.
+  async generateQuestions(params) {
+    return invoke({
+      action: 'generate_questions',
+      mode: params.mode || 'role',
+      job_id: params.jobId || null,
+      roleTitle: params.roleTitle || null,
+      count: params.count || 10,
+      category: params.category || 'technical',
+      competencies: params.competencies || [],
+      template_id: params.templateId || null,
+      jdFileName: params.jdFileName || null,
+      jdFileBase64: params.jdFileBase64 || null,
+      samplesFileName: params.samplesFileName || null,
+      samplesFileBase64: params.samplesFileBase64 || null,
+      samplesMode: params.samplesMode || 'generate_similar',
+    })
+  },
+
+  // Sara analysis of a candidate's completed attempts + advisory role-fit.
+  // Returns { ok, candidate_id, attempt_id, analysis, role_fit, suggestions }.
+  async analyzeCandidateScorecard({ candidateId, attemptId = null }) {
+    return invoke({
+      action: 'analyze_candidate_scorecard',
+      candidate_id: candidateId,
+      attempt_id: attemptId || null,
+    })
+  },
+
+  // Assessor Reports / completion breakdown (hr_list_assessment_completions).
+  async listCompletions() {
+    const { data, error } = await supabase.rpc('hr_list_assessment_completions')
+    if (error) throw error
+    return data || []
+  },
+
+  async listSuggestions(candidateId = null) {
+    const { data, error } = await supabase.rpc('hr_list_assessment_suggestions', {
+      p_candidate_id: candidateId,
+    })
+    if (error) throw error
+    return data || []
+  },
+
+  async actOnSuggestion(suggestionId, action, note = null) {
+    const { data, error } = await supabase.rpc('hr_act_on_assessment_suggestion', {
+      p_suggestion_id: suggestionId,
+      p_action: action,
+      p_note: note,
+    })
+    if (error) throw error
+    return data
+  },
+
+  async reassignCandidateRole({ candidateId, jobId = null, appliedRole = null, note = null, suggestionId = null }) {
+    const { data, error } = await supabase.rpc('hr_reassign_candidate_role', {
+      p_candidate_id: candidateId,
+      p_job_id: jobId,
+      p_applied_role: appliedRole,
+      p_note: note,
+      p_suggestion_id: suggestionId,
+    })
+    if (error) throw error
+    return data
   },
 
   async listMonitoring(attemptId) {

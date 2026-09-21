@@ -56,7 +56,7 @@ export default function Careers() {
       <section className="mb-8">
         <h1 className="text-3xl font-bold text-slate-900">Open Positions</h1>
         <p className="text-slate-500 mt-1 max-w-2xl">
-          Explore career opportunities at Infinity Bank. Submit your application online and track its progress from your candidate portal.
+          Explore career opportunities at Infinity Microfinance Bank. Submit your application online and track its progress from your candidate portal.
         </p>
       </section>
 

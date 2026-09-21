@@ -9,7 +9,7 @@ import Customer360Modal from '../components/Customer360Modal'
  * Customer Dashboard - Customer-facing view
  * Distinct from internal staff operations dashboard
  * Shows personal account info, loans, applications
- * This is the customer experience of Infinity Bank
+ * This is the customer experience of Infinity Microfinance Bank
  */
 export default function CustomerDashboard() {
   const { user, name, isCustomer } = useAuth()
@@ -121,7 +121,7 @@ export default function CustomerDashboard() {
         <h2 className="text-4xl font-bold text-slate-900">
           Welcome back, {name.split(' ')[0]} 👋
         </h2>
-        <p className="text-slate-500 mt-2">Your Infinity Bank Digital Account</p>
+        <p className="text-slate-500 mt-2">Your Infinity Microfinance Bank Digital Account</p>
       </div>
 
       {/* Account Card — no balance column exists in the data model, so

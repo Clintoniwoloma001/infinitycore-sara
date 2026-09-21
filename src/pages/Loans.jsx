@@ -60,7 +60,7 @@ export default function Loans() {
     try {
       await appSvc.update(app.id, { status: decision, reviewed_by_name: userName, approval_comments: comment, reviewed_date: new Date().toISOString() })
       await logAction({ action: `loan_${decision}`, entityType: 'LoanApplication', entityId: app.id, details: `${app.customer_name} — ${decision}`, userName, severity: decision === 'rejected' ? 'warning' : 'info' })
-      try { await sendDecisionEmail({ recipientId: app.created_by, subject: `Loan ${decision}: ${app.customer_name}`, message: `Hello,\n\n${app.customer_name}'s loan application for ${formatCurrency(app.amount)} was ${decision} by ${userName}.${decision === 'rejected' && comment ? `\n\nComments: ${comment}` : ''}\n\n— Infinity Bank Operations` }) } catch { /* best-effort */ }
+      try { await sendDecisionEmail({ recipientId: app.created_by, subject: `Loan ${decision}: ${app.customer_name}`, message: `Hello,\n\n${app.customer_name}'s loan application for ${formatCurrency(app.amount)} was ${decision} by ${userName}.${decision === 'rejected' && comment ? `\n\nComments: ${comment}` : ''}\n\n— Infinity Microfinance Bank Operations` }) } catch { /* best-effort */ }
       setRejecting(null); setComment(''); load()
     } catch (e) { alert(e.message) }
   }
@@ -74,7 +74,7 @@ export default function Loans() {
       await loanSvc.create({ application_id: app.id, customer_id: app.customer_id, customer_name: app.customer_name, principal_amount: app.amount, outstanding_balance: app.amount, interest_rate: app.interest_rate, term_months: app.term_months, monthly_payment: monthly, status: 'active', disbursed_date: today, maturity_date: maturity.toISOString().slice(0, 10) })
       await appSvc.update(app.id, { status: 'disbursed', disbursed_date: today })
       await logAction({ action: 'loan_disbursed', entityType: 'Loan', details: `${app.customer_name} — ${formatCurrency(app.amount)}`, userName, severity: 'critical' })
-      try { await sendDecisionEmail({ recipientId: app.created_by, subject: `Loan Disbursed: ${app.customer_name}`, message: `Hello,\n\nThe loan for ${app.customer_name} (${formatCurrency(app.amount)}) has been disbursed. Monthly payment: ${formatCurrency(monthly)}.\n\n— Infinity Bank Operations` }) } catch { /* best-effort */ }
+      try { await sendDecisionEmail({ recipientId: app.created_by, subject: `Loan Disbursed: ${app.customer_name}`, message: `Hello,\n\nThe loan for ${app.customer_name} (${formatCurrency(app.amount)}) has been disbursed. Monthly payment: ${formatCurrency(monthly)}.\n\n— Infinity Microfinance Bank Operations` }) } catch { /* best-effort */ }
       load()
     } catch (e) { alert(e.message) }
   }

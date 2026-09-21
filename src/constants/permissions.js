@@ -44,6 +44,7 @@ export const PERMISSIONS = {
   HR_EMPLOYEE_UPDATE: 'hr.employee.update',
   HR_ATTENDANCE_SELF: 'hr.attendance.self',
   HR_ATTENDANCE_MANAGE: 'hr.attendance.manage',
+  ATTENDANCE_TERMINAL: 'attendance.terminal',
   PAYROLL_MANAGE: 'payroll.manage',
   PAYROLL_PUSH: 'payroll.push',
   PAYROLL_APPROVE: 'payroll.approve',

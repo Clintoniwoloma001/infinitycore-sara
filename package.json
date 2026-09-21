@@ -32,7 +32,10 @@
     "test:reinvite": "node tests/reinviteReviewModal.test.mjs",
     "test:payroll-compensation": "node tests/payrollCompensation.test.mjs",
     "test:qr-terminal": "node tests/qrTerminalView.test.mjs",
-    "test:web-clock": "node tests/attendanceWebGpsBinding.test.mjs"
+    "test:assessment-fix": "node tests/assessmentPhase0Fix.test.mjs",
+    "test:terminal-history": "node tests/attendanceTerminalHistory.test.mjs",
+    "test:web-clock": "node tests/attendanceWebGpsBinding.test.mjs",
+    "test:rules-builder": "node tests/performanceRulesBuilder.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

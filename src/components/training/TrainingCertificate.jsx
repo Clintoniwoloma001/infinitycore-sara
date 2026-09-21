@@ -26,7 +26,7 @@ const TrainingCertificate = forwardRef(function TrainingCertificate({ certificat
         <Logo size={64} showText showTagline />
         <div className="mt-8 text-[13px] tracking-[0.28em] uppercase text-[#007a4a] font-semibold">Certificate of Completion</div>
         <div className="mt-4 text-[16px] text-slate-500">This certificate is proudly presented to</div>
-        <div className="mt-3 text-[42px] font-bold tracking-tight text-slate-900">{employeeName || certificate.employee_name || 'Infinity Bank colleague'}</div>
+        <div className="mt-3 text-[42px] font-bold tracking-tight text-slate-900">{employeeName || certificate.employee_name || 'Infinity Microfinance Bank colleague'}</div>
         <div className="mt-5 h-px w-72 bg-[#f58220]" />
         <div className="mt-6 text-[17px] text-slate-500">for successfully completing</div>
         <div className="mt-3 text-[29px] font-semibold text-[#007a4a] max-w-[780px]">{certificate.training_title || certificate.title}</div>
@@ -35,7 +35,7 @@ const TrainingCertificate = forwardRef(function TrainingCertificate({ certificat
         <div className="mt-9 grid grid-cols-5 gap-8 text-left w-full max-w-[960px]">
           <Meta label="Date" value={formatDate(certificate.training_date)} />
           <Meta label="Duration" value={`${hoursLabel(duration)} hours`} />
-          <Meta label="Facilitator" value={certificate.facilitator || 'Infinity Bank'} />
+          <Meta label="Facilitator" value={certificate.facilitator || 'Infinity Microfinance Bank'} />
           <Meta label="Employee ID" value={certificate.employee_identifier} />
           <Meta label="Certificate No." value={certificate.certificate_number} />
         </div>
@@ -53,7 +53,7 @@ const TrainingCertificate = forwardRef(function TrainingCertificate({ certificat
           <div className="text-right min-w-[190px]">
             <div className="h-10 border-b border-slate-400 mb-2" />
             <div className="text-[12px] font-semibold text-slate-700">Authorized Learning &amp; Development</div>
-            <div className="text-[11px] text-slate-400">Infinity Bank</div>
+            <div className="text-[11px] text-slate-400">Infinity Microfinance Bank</div>
           </div>
         </div>
       </div>

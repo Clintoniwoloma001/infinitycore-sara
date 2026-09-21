@@ -1,4 +1,4 @@
-// Rule-based loan risk scoring engine for Infinity Bank.
+// Rule-based loan risk scoring engine for Infinity Microfinance Bank.
 // Mirrors the Base44 version exactly: income-to-loan affordability, employment, repayment history.
 
 export function calculateMonthlyPayment(principal, annualRatePct, termMonths) {

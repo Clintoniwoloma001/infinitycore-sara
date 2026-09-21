@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { Bot, CheckCircle2, Loader2, Plus, Save, Trash2, X } from 'lucide-react'
-import { assessmentService } from '../services/assessmentService'
+import { Bot, CheckCircle2, FileText, Loader2, Plus, RefreshCw, Save, Settings2, Trash2, Upload, Wand2, X } from 'lucide-react'
+import { assessmentService, DEFAULT_ANTI_CHEAT } from '../services/assessmentService'
 import { recruitmentService } from '../services/recruitmentService'
 import { date, ModuleTable } from './hrShared'
 import { ErrorState } from '../components/PageStates'
@@ -9,8 +9,13 @@ import { StatusBadge } from '../lib/utils'
 const Q_TYPES = ['multiple_choice', 'true_false', 'numerical', 'multiple_select', 'ranking']
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-xs font-medium text-slate-500 mb-1'
+const toggleCls = 'inline-flex items-center gap-2 text-sm'
 
 const emptyQuestion = { question_text: '', question_type: 'multiple_choice', options: ['', '', '', ''], correct_answer: '', marks: 1, difficulty: 'medium', competency: '' }
+
+function mergeAntiCheat(input) {
+  return { ...DEFAULT_ANTI_CHEAT, ...(input || {}) }
+}
 
 function parseAnswer(q) {
   if (q.question_type === 'multiple_select' || q.question_type === 'ranking') {
@@ -36,6 +41,56 @@ function buildRow(q) {
   }
 }
 
+function AntiCheatBlock({ cfg, onChange }) {
+  const set = (key) => (e) => onChange({ ...cfg, [key]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })
+  const bool = (key, label, hint) => (
+    <label className="flex items-start gap-2 text-sm text-slate-700">
+      <input type="checkbox" className="mt-0.5 accent-[#009944]" checked={!!cfg[key]} onChange={set(key)} />
+      <span><span className="font-medium">{label}</span>{hint ? <span className="block text-xs text-slate-400">{hint}</span> : null}</span>
+    </label>
+  )
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelCls}>Max flags before action</label>
+          <input type="number" min="1" className={inputCls} value={cfg.max_flags} onChange={set('max_flags')} />
+        </div>
+        <div>
+          <label className={labelCls}>Flag severity</label>
+          <select className={inputCls} value={cfg.flag_severity} onChange={set('flag_severity')}>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
+        <div>
+          <label className={labelCls}>Retake limit</label>
+          <input type="number" min="0" className={inputCls} value={cfg.retake_limit} onChange={set('retake_limit')} />
+        </div>
+        <div>
+          <label className={labelCls}>Retake window (hours)</label>
+          <input type="number" min="1" className={inputCls} value={cfg.retake_time_hours} onChange={set('retake_time_hours')} />
+        </div>
+        <div className="col-span-2">
+          <label className={labelCls}>Inactivity timeout (minutes)</label>
+          <input type="number" min="1" className={inputCls} value={cfg.inactivity_timeout_minutes} onChange={set('inactivity_timeout_minutes')} />
+        </div>
+      </div>
+      <div className="border-t border-slate-100 pt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+        {bool('close_on_flag', 'Close attempt at flag threshold', 'Auto-closes the attempt when max flags is reached.')}
+        {bool('require_hr_review', 'Require HR review when flagged', 'Flagged attempts go to HR for a manual decision.')}
+        {bool('keep_previous_attempt', 'Keep previous attempt', 'Store the old attempt alongside a retake.')}
+        {bool('track_copy_paste', 'Detect copy/paste', 'Logs paste attempts as monitoring events.')}
+        {bool('track_context_menu', 'Detect right-click / context menu', 'Logs context-menu attempts.')}
+        {bool('track_focus_changes', 'Detect tab/window switches', 'Logs tab visibility and window-blur events.')}
+        {bool('require_fullscreen', 'Require fullscreen', 'Runs the attempt in fullscreen; exits are flagged.')}
+        {bool('shuffle_options', 'Shuffle answer options', 'Shuffles options per attempts (deterministic per attempt).')}
+      </div>
+    </div>
+  )
+}
+
 export default function AssessmentBuilder() {
   const [templates, setTemplates] = useState([])
   const [loading, setLoading] = useState(true)
@@ -44,12 +99,16 @@ export default function AssessmentBuilder() {
   const [selectedId, setSelectedId] = useState(null)
   const [selected, setSelected] = useState(null)
   const [showCreate, setShowCreate] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [showSara, setShowSara] = useState(false)
-  const [createForm, setCreateForm] = useState({ title: '', job_id: '', category: 'technical', duration_minutes: 30, pass_mark: 60, instructions: '' })
+  const [createForm, setCreateForm] = useState({ title: '', job_id: '', category: 'technical', duration_minutes: 30, pass_mark: 60, instructions: '', shuffle_questions: false, anti_cheat: { ...DEFAULT_ANTI_CHEAT } })
+  const [settingsForm, setSettingsForm] = useState(null)
   const [qDraft, setQDraft] = useState(emptyQuestion)
   const [bulkJson, setBulkJson] = useState('')
   const [jobs, setJobs] = useState([])
-  const [sara, setSara] = useState({ job_id: '', category: 'technical', count: 10, duration_minutes: 30, pass_mark: 60 })
+  const [sara, setSara] = useState({ mode: 'role', job_id: '', category: 'technical', count: 10, roleTitle: '', jdFile: null, jdFileName: '', jdFileBase64: '', samplesFile: null, samplesFileName: '', samplesFileBase64: '', samplesMode: 'generate_similar' })
+  const [genDrafts, setGenDrafts] = useState([])
+  const [genMsg, setGenMsg] = useState('')
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
 
@@ -80,9 +139,12 @@ export default function AssessmentBuilder() {
     setBusy('create')
     setMsg('')
     try {
-      const t = await assessmentService.createTemplate(createForm)
+      const t = await assessmentService.createTemplate({
+        ...createForm,
+        anti_cheat: mergeAntiCheat(createForm.anti_cheat),
+      })
       setShowCreate(false)
-      setCreateForm({ title: '', job_id: '', category: 'technical', duration_minutes: 30, pass_mark: 60, instructions: '' })
+      setCreateForm({ title: '', job_id: '', category: 'technical', duration_minutes: 30, pass_mark: 60, instructions: '', shuffle_questions: false, anti_cheat: { ...DEFAULT_ANTI_CHEAT } })
       await loadTemplates()
       setSelectedId(t.id)
       setMsg(`Template "${t.title}" created. Add questions to publish it.`)
@@ -144,28 +206,103 @@ export default function AssessmentBuilder() {
     }
   }
 
-  const generateSara = async () => {
-    if (!sara.job_id) { setMsg('Select a job first.'); return }
-    setBusy('sara')
+  const openSettings = () => {
+    const t = selected?.template
+    if (!t) return
+    setSettingsForm({
+      title: t.title, job_id: t.job_id || '', category: t.category || 'technical',
+      duration_minutes: t.duration_minutes, pass_mark: t.pass_mark, instructions: t.instructions || '',
+      shuffle_questions: !!t.shuffle_questions, anti_cheat: mergeAntiCheat(t.anti_cheat),
+    })
+    setShowSettings(true)
+  }
+
+  const saveSettings = async () => {
+    if (!settingsForm || !selected) return
+    setBusy('settings')
     setMsg('')
     try {
-      const res = await assessmentService.generateWithSara({
-        jobId: sara.job_id,
-        category: sara.category,
-        durationMinutes: Number(sara.duration_minutes),
-        passMark: Number(sara.pass_mark),
-        count: Number(sara.count),
+      await assessmentService.updateTemplate(selected.template.id, {
+        title: settingsForm.title,
+        job_id: settingsForm.job_id || null,
+        category: settingsForm.category,
+        duration_minutes: Number(settingsForm.duration_minutes),
+        pass_mark: Number(settingsForm.pass_mark),
+        instructions: settingsForm.instructions || null,
+        shuffle_questions: !!settingsForm.shuffle_questions,
+        anti_cheat: mergeAntiCheat(settingsForm.anti_cheat),
       })
-      if (res?.template_id) {
-        setSelectedId(res.template_id)
-        await loadTemplates()
-        await loadSelected(res.template_id)
-        setMsg(`SARA created template "${res.template?.title || ''}" — review questions before publishing.`)
-      } else {
-        setMsg(res?.error ? `SARA unavailable (${res.error}) — add questions manually or run a manual screening instead.` : 'SARA could not generate the assessment.')
-      }
+      setShowSettings(false)
+      await Promise.all([loadTemplates(), loadSelected(selected.template.id)])
+      setMsg('Template settings saved.')
     } catch (e) {
-      setMsg('SARA assessment generation failed.')
+      setMsg(e?.message || 'Could not save settings.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  // --- AI question generation (draft mode) ---
+  const onGenFile = (key, file) => {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      setSara((s) => ({
+        ...s,
+        [key]: file.name,
+        [key === 'jdFile' ? 'jdFileName' : 'samplesFileName']: file.name,
+        [key === 'jdFile' ? 'jdFileBase64' : 'samplesFileBase64']: String(reader.result || '').split(',')[1] || '',
+      }))
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const runGenerate = async () => {
+    setGenMsg('')
+    setGenDrafts([])
+    setBusy('gen')
+    try {
+      const params = {
+        mode: sara.mode,
+        jobId: sara.job_id || null,
+        roleTitle: sara.roleTitle || null,
+        category: sara.category,
+        count: Number(sara.count) || 10,
+        templateId: selected?.template?.id || null,
+        jdFileName: sara.jdFileName || null,
+        jdFileBase64: sara.jdFileBase64 || null,
+        samplesFileName: sara.samplesFileName || null,
+        samplesFileBase64: sara.samplesFileBase64 || null,
+        samplesMode: sara.samplesMode,
+      }
+      const res = await assessmentService.generateQuestions(params)
+      if (!res?.ok || !Array.isArray(res.questions) || res.questions.length === 0) {
+        throw new Error(res?.error ? `Sara: ${res.error}` : 'Sara could not generate questions.')
+      }
+      setGenDrafts(res.questions.map((q, i) => ({ ...q, _draft: true, _keep: true, _id: `d-${i}-${Date.now()}` })))
+    } catch (e) {
+      setGenMsg(e?.message || 'Question generation failed.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const patchDraft = (id, patch) => setGenDrafts((ds) => ds.map((d) => (d._id === id ? { ...d, ...patch } : d)))
+
+  const addDrafts = async () => {
+    if (!selected) return
+    setBusy('gen-add')
+    setGenMsg('')
+    try {
+      const rows = genDrafts.filter((d) => d._keep).map(buildRow).filter((r) => r.question_text)
+      if (rows.length === 0) { setGenMsg('No drafts selected to add.'); return }
+      await assessmentService.saveQuestions(selected.template.id, rows)
+      await loadSelected(selected.template.id)
+      setGenDrafts([])
+      setShowSara(false)
+      setMsg(`Added ${rows.length} question(s) to "${selected.template.title}".`)
+    } catch (e) {
+      setGenMsg(e?.message || 'Could not add the questions.')
     } finally {
       setBusy('')
     }
@@ -219,7 +356,7 @@ export default function AssessmentBuilder() {
                 <button onClick={() => { setSelectedId(r.id); setMsg('') }} className={`text-left ${selectedId === r.id ? 'text-[#009944] font-semibold' : 'text-slate-900 font-medium hover:text-[#009944]'}`}>{r.title}</button>
               ) },
               { key: 'category', label: 'Category', render: (r) => r.category || '-' },
-              { key: 'status', label: 'Status', render: (r) => <StatusBadge label={r.status} color={r.status === 'published' ? 'emerald' : r.status === 'published' ? 'emerald' : 'amber'} /> },
+              { key: 'status', label: 'Status', render: (r) => <StatusBadge label={r.status} color={r.status === 'published' ? 'emerald' : 'amber'} /> },
               { key: 'created_at', label: 'Updated', render: (r) => date(r.updated_at || r.created_at) },
             ]}
           />
@@ -238,11 +375,12 @@ export default function AssessmentBuilder() {
                 )}
               </div>
               {selected && (
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <button onClick={() => publish()} disabled={busy === 'publish'} className={`rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 ${selected.template.status === 'published' ? 'border border-slate-300 text-slate-600 hover:bg-slate-50' : 'bg-[#009944] text-white hover:bg-[#007a36]'}`}>
                     {busy === 'publish' ? <Loader2 className="w-4 h-4 animate-spin inline" /> : (selected.template.status === 'published' ? 'Archive' : 'Publish')}
                   </button>
-                  <button onClick={() => setShowSara(true)} disabled={!selected} className="inline-flex items-center gap-1.5 rounded-lg bg-white border border-slate-900 text-slate-800 px-3 py-2 text-sm font-medium hover:bg-slate-100 disabled:opacity-40"><Bot className="w-4 h-4" /> SARA generate</button>
+                  <button onClick={() => { setShowSara(true); setGenDrafts([]); setGenMsg('') }} className="inline-flex items-center gap-1.5 rounded-lg bg-white border border-slate-900 text-slate-800 px-3 py-2 text-sm font-medium hover:bg-slate-100"><Bot className="w-4 h-4" /> Sara generate</button>
+                  <button onClick={openSettings} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 text-slate-600 px-3 py-2 text-sm font-medium hover:bg-slate-50"><Settings2 className="w-4 h-4" /> Settings</button>
                 </div>
               )}
             </div>
@@ -378,7 +516,12 @@ export default function AssessmentBuilder() {
                 <div><label className={labelCls}>Duration (min)</label><input type="number" className={inputCls} value={createForm.duration_minutes} onChange={(e) => setCreateForm({ ...createForm, duration_minutes: e.target.value })} /></div>
                 <div><label className={labelCls}>Pass mark (%)</label><input type="number" className={inputCls} value={createForm.pass_mark} onChange={(e) => setCreateForm({ ...createForm, pass_mark: e.target.value })} /></div>
               </div>
+              <label className={toggleCls}><input type="checkbox" className="accent-[#009944]" checked={createForm.shuffle_questions} onChange={(e) => setCreateForm({ ...createForm, shuffle_questions: e.target.checked })} /> Shuffle question order for candidates</label>
               <div><label className={labelCls}>Instructions shown to candidates</label><textarea rows="3" className={inputCls + ' !h-auto py-2'} value={createForm.instructions} onChange={(e) => setCreateForm({ ...createForm, instructions: e.target.value })} placeholder="You have 30 minutes. No external help…" /></div>
+              <div className="border-t border-slate-100 pt-4">
+                <h4 className="text-sm font-semibold text-slate-900 mb-3 inline-flex items-center gap-1.5"><Settings2 className="w-4 h-4" /> Anti-cheat &amp; security</h4>
+                <AntiCheatBlock cfg={createForm.anti_cheat} onChange={(anti_cheat) => setCreateForm({ ...createForm, anti_cheat })} />
+              </div>
             </div>
             <div className="flex justify-end gap-2 pt-5">
               <button onClick={() => setShowCreate(false)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
@@ -390,37 +533,174 @@ export default function AssessmentBuilder() {
         </div>
       )}
 
-      {/* SARA generate modal */}
-      {showSara && (
+      {/* Edit template settings modal */}
+      {showSettings && settingsForm && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl w-full max-w-lg p-6">
+          <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
             <div className="flex items-center justify-between mb-5">
               <div>
-                <h3 className="text-lg font-semibold text-slate-900">Generate assessment with SARA</h3>
-                <p className="text-sm text-slate-500 mt-0.5">Creates a draft template from the job's skills and requirements. Review it before publishing.</p>
+                <h3 className="text-lg font-semibold text-slate-900">Template settings</h3>
+                <p className="text-sm text-slate-500 mt-0.5">{settingsForm.title}</p>
               </div>
-              <button onClick={() => setShowSara(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <div className="space-y-4">
-              <div>
-                <label className={labelCls}>Source job *</label>
-                <select className={inputCls} value={sara.job_id} onChange={(e) => setSara({ ...sara, job_id: e.target.value })}>
-                  <option value="">Select a job…</option>
-                  {jobs.map((j) => <option key={j.id} value={j.id}>{j.job_title}</option>)}
-                </select>
+              <div><label className={labelCls}>Title *</label><input className={inputCls} value={settingsForm.title} onChange={(e) => setSettingsForm({ ...settingsForm, title: e.target.value })} /></div>
+              <div className="grid grid-cols-3 gap-3">
+                <div><label className={labelCls}>Category</label><select className={inputCls} value={settingsForm.category} onChange={(e) => setSettingsForm({ ...settingsForm, category: e.target.value })}>{['technical', 'aptitude', 'behavioral', 'analytical'].map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
+                <div><label className={labelCls}>Duration (min)</label><input type="number" className={inputCls} value={settingsForm.duration_minutes} onChange={(e) => setSettingsForm({ ...settingsForm, duration_minutes: e.target.value })} /></div>
+                <div><label className={labelCls}>Pass mark (%)</label><input type="number" className={inputCls} value={settingsForm.pass_mark} onChange={(e) => setSettingsForm({ ...settingsForm, pass_mark: e.target.value })} /></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className={labelCls}>Category</label><select className={inputCls} value={sara.category} onChange={(e) => setSara({ ...sara, category: e.target.value })}>{['technical', 'aptitude', 'behavioral', 'analytical'].map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
-                <div><label className={labelCls}>Questions</label><input type="number" min="1" max="60" className={inputCls} value={sara.count} onChange={(e) => setSara({ ...sara, count: e.target.value })} /></div>
-                <div><label className={labelCls}>Duration (min)</label><input type="number" className={inputCls} value={sara.duration_minutes} onChange={(e) => setSara({ ...sara, duration_minutes: e.target.value })} /></div>
-                <div><label className={labelCls}>Pass mark (%)</label><input type="number" className={inputCls} value={sara.pass_mark} onChange={(e) => setSara({ ...sara, pass_mark: e.target.value })} /></div>
+              <label className={toggleCls}><input type="checkbox" className="accent-[#009944]" checked={settingsForm.shuffle_questions} onChange={(e) => setSettingsForm({ ...settingsForm, shuffle_questions: e.target.checked })} /> Shuffle question order for candidates</label>
+              <div><label className={labelCls}>Instructions shown to candidates</label><textarea rows="3" className={inputCls + ' !h-auto py-2'} value={settingsForm.instructions} onChange={(e) => setSettingsForm({ ...settingsForm, instructions: e.target.value })} /></div>
+              <div className="border-t border-slate-100 pt-4">
+                <h4 className="text-sm font-semibold text-slate-900 mb-3 inline-flex items-center gap-1.5"><Settings2 className="w-4 h-4" /> Anti-cheat &amp; security</h4>
+                <AntiCheatBlock cfg={settingsForm.anti_cheat} onChange={(anti_cheat) => setSettingsForm({ ...settingsForm, anti_cheat })} />
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-5">
-              <button onClick={() => setShowSara(false)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
-              <button onClick={generateSara} disabled={busy === 'sara' || !sara.job_id} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium hover:bg-slate-700 disabled:opacity-60">
-                {busy === 'sara' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />} Generate with SARA
+              <button onClick={() => setShowSettings(false)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+              <button onClick={saveSettings} disabled={busy === 'settings'} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+                {busy === 'settings' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save settings
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SARA generate modal — draft mode */}
+      {showSara && selected && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Generate questions with Sara</h3>
+                <p className="text-sm text-slate-500 mt-0.5">Draft questions for “{selected.template.title}” — review and edit before adding.</p>
+              </div>
+              <button onClick={() => setShowSara(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+
+            {/* Mode picker */}
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {[
+                { value: 'role', label: 'By role', icon: <FileText className="w-4 h-4" /> },
+                { value: 'jd', label: 'By job description', icon: <Upload className="w-4 h-4" /> },
+                { value: 'samples', label: 'By sample questions', icon: <Wand2 className="w-4 h-4" /> },
+              ].map((m) => (
+                <button
+                  key={m.value}
+                  onClick={() => setSara({ ...sara, mode: m.value })}
+                  className={`flex flex-col items-center gap-1.5 rounded-lg border px-3 py-3 text-xs font-medium transition ${sara.mode === m.value ? 'border-[#009944] bg-emerald-50/60 text-emerald-800' : 'border-slate-200 text-slate-600 hover:border-slate-300'}`}
+                >
+                  {m.icon}
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="space-y-4 mb-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className={labelCls}>Questions to generate</label><input type="number" min="1" max="40" className={inputCls} value={sara.count} onChange={(e) => setSara({ ...sara, count: e.target.value })} /></div>
+                <div><label className={labelCls}>Category</label><select className={inputCls} value={sara.category} onChange={(e) => setSara({ ...sara, category: e.target.value })}>{['technical', 'aptitude', 'behavioral', 'analytical'].map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
+              </div>
+
+              {sara.mode === 'role' && (
+                <div>
+                  <label className={labelCls}>Role *</label>
+                  <select className={inputCls} value={sara.job_id} onChange={(e) => setSara({ ...sara, job_id: e.target.value })}>
+                    <option value="">Select a role…</option>
+                    {jobs.map((j) => <option key={j.id} value={j.id}>{j.job_title}</option>)}
+                  </select>
+                  <div className="mt-2"><label className={labelCls}>Role title override (optional)</label><input className={inputCls} value={sara.roleTitle} onChange={(e) => setSara({ ...sara, roleTitle: e.target.value })} placeholder="e.g. Compliance Officer" /></div>
+                </div>
+              )}
+
+              {sara.mode === 'jd' && (
+                <div>
+                  <label className={labelCls}>Job description file (.txt / .pdf / .docx, ≤ 2 MB) *</label>
+                  <label className="flex items-center gap-3 rounded-lg border border-dashed border-slate-300 px-4 py-4 cursor-pointer hover:border-[#009944]">
+                    <Upload className="w-5 h-5 text-slate-400" />
+                    <span className="text-sm text-slate-600">{sara.jdFileName || 'Choose a JD file…'}</span>
+                    <input type="file" accept=".txt,.pdf,.docx" className="hidden" onChange={(e) => onGenFile('jdFile', e.target.files?.[0])} />
+                  </label>
+                  <div className="mt-2"><label className={labelCls}>Role (optional — enriches the prompt)</label><select className={inputCls} value={sara.job_id} onChange={(e) => setSara({ ...sara, job_id: e.target.value })}><option value="">None</option>{jobs.map((j) => <option key={j.id} value={j.id}>{j.job_title}</option>)}</select></div>
+                </div>
+              )}
+
+              {sara.mode === 'samples' && (
+                <div>
+                  <label className={labelCls}>Sample questions file (.xlsx / .csv / .txt / .pdf / .docx, ≤ 2 MB) *</label>
+                  <label className="flex items-center gap-3 rounded-lg border border-dashed border-slate-300 px-4 py-4 cursor-pointer hover:border-[#009944]">
+                    <Upload className="w-5 h-5 text-slate-400" />
+                    <span className="text-sm text-slate-600">{sara.samplesFileName || 'Choose a sample file…'}</span>
+                    <input type="file" accept=".xlsx,.csv,.txt,.pdf,.docx" className="hidden" onChange={(e) => onGenFile('samplesFile', e.target.files?.[0])} />
+                  </label>
+                  <div className="mt-3">
+                    <label className={labelCls}>Draft mode</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className={`rounded-lg border px-3 py-2.5 text-sm cursor-pointer flex items-center gap-2 ${sara.samplesMode === 'generate_similar' ? 'border-[#009944] bg-emerald-50/60' : 'border-slate-200'}`}>
+                        <input type="radio" name="samples-mode" className="accent-[#009944]" checked={sara.samplesMode === 'generate_similar'} onChange={() => setSara({ ...sara, samplesMode: 'generate_similar' })} />
+                        <span><span className="font-medium">Generate similar</span><span className="block text-xs text-slate-400">Sara drafts new questions inspired by your samples (recommended).</span></span>
+                      </label>
+                      <label className={`rounded-lg border px-3 py-2.5 text-sm cursor-pointer flex items-center gap-2 ${sara.samplesMode === 'use_direct' ? 'border-[#009944] bg-emerald-50/60' : 'border-slate-200'}`}>
+                        <input type="radio" name="samples-mode" className="accent-[#009944]" checked={sara.samplesMode === 'use_direct'} onChange={() => setSara({ ...sara, samplesMode: 'use_direct' })} />
+                        <span><span className="font-medium">Use directly</span><span className="block text-xs text-slate-400">Import the file's questions as-is (spreadsheet/text parsing).</span></span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {genMsg && <div className="mb-3 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 px-3 py-2 text-sm">{genMsg}</div>}
+
+            {genDrafts.length > 0 && (
+              <div className="mb-4 space-y-3 max-h-72 overflow-y-auto">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-slate-900">Review drafts ({genDrafts.length})</h4>
+                  <button onClick={() => setGenDrafts((ds) => ds.map((d) => ({ ...d, _keep: !d._keep })))} className="text-xs font-medium text-[#009944]">Toggle all</button>
+                </div>
+                {genDrafts.map((d) => (
+                  <div key={d._id} className={`rounded-lg border p-3 ${d._keep ? 'border-slate-200' : 'border-slate-100 opacity-60'}`}>
+                    <div className="flex items-start gap-2">
+                      <input type="checkbox" className="mt-1 accent-[#009944]" checked={d._keep} onChange={(e) => patchDraft(d._id, { _keep: e.target.checked })} />
+                      <div className="flex-1 space-y-1.5">
+                        <textarea rows="2" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" value={d.question_text} onChange={(e) => patchDraft(d._id, { question_text: e.target.value })} />
+                        <div className="flex flex-wrap gap-2 text-xs text-slate-500">
+                          <select className="rounded border border-slate-300 px-2 py-1 text-xs" value={d.question_type} onChange={(e) => patchDraft(d._id, { question_type: e.target.value })}>
+                            {Q_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+                          </select>
+                          <input className="w-20 rounded border border-slate-300 px-2 py-1 text-xs" value={d.marks} onChange={(e) => patchDraft(d._id, { marks: Number(e.target.value) || 1 })} title="marks" />
+                          <select className="rounded border border-slate-300 px-2 py-1 text-xs" value={d.difficulty} onChange={(e) => patchDraft(d._id, { difficulty: e.target.value })}>
+                            {['easy', 'medium', 'hard'].map((v) => <option key={v} value={v}>{v}</option>)}
+                          </select>
+                        </div>
+                        {d.question_type !== 'true_false' && d.options && d.options.length > 0 && (
+                          <input className="w-full rounded border border-slate-300 px-3 py-1.5 text-xs" value={d.options.join(' | ')} onChange={(e) => patchDraft(d._id, { options: e.target.value.split('|').map((s) => s.trim()).filter(Boolean) })} placeholder="Options separated by |" />
+                        )}
+                        <input className="w-full rounded border border-slate-300 px-3 py-1.5 text-xs" value={typeof d.correct_answer === 'string' ? d.correct_answer : (Array.isArray(d.correct_answer) ? d.correct_answer.join(', ') : '')} onChange={(e) => {
+                          const v = e.target.value
+                          patchDraft(d._id, { correct_answer: d.question_type === 'multiple_select' || d.question_type === 'ranking' ? v.split(',').map((s) => s.trim()).filter(Boolean) : v })
+                        }} placeholder="Correct answer" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button onClick={() => setShowSara(false)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+              {genDrafts.length > 0 ? (
+                <button onClick={addDrafts} disabled={busy === 'gen-add'} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+                  {busy === 'gen-add' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Add selected to template
+                </button>
+              ) : (
+                <button onClick={runGenerate} disabled={busy === 'gen' || (sara.mode === 'role' && !sara.job_id)} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium hover:bg-slate-700 disabled:opacity-60">
+                  {busy === 'gen' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className={`w-4 h-4 ${genDrafts.length ? 'hidden' : ''}`} />}
+                  {busy === 'gen' ? 'Generating…' : genDrafts.length ? 'Regenerate' : 'Generate draft questions'}
+                </button>
+              )}
             </div>
           </div>
         </div>

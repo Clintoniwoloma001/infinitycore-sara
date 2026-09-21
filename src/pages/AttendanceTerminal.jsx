@@ -44,12 +44,11 @@ export default function AttendanceTerminal() {
     const load = async () => {
       try {
         const requirements = await attendanceService.getAttendanceRequirements()
-        if (publicMode) {
-          // Browser composite fingerprint sent with every QR terminal call.
-          // The server enforces one-device-per-employee-per-day from it.
-          const fp = await getDeviceFingerprint().catch(() => '')
-          setDeviceFingerprint(fp)
-        }
+        // Browser composite fingerprint sent with every terminal call — QR and
+        // platform kiosk alike. The server enforces one-device-per-employee-per-day
+        // from it (mirrors the public QR gates in the kiosk ingest path).
+        const fp = await getDeviceFingerprint().catch(() => '')
+        setDeviceFingerprint(fp)
         if (!publicMode) {
           const devs = await attendanceEngineService.listDevices()
           const terminals = devs.filter((d) => d.device_type === 'attendance_terminal' && d.status === 'active')
@@ -149,6 +148,7 @@ export default function AttendanceTerminal() {
           eventType,
           verificationMethod: 'DEVICE_AUTHENTICATION',
           employeeId: confirmed.id,
+          deviceFingerprint,
         })
 
       if (data?.success) {
@@ -192,6 +192,7 @@ export default function AttendanceTerminal() {
         eventType,
         verificationMethod: 'WEBAUTHN',
         employeeId: employee.id,
+        deviceFingerprint,
       })
 
       if (data?.success) {

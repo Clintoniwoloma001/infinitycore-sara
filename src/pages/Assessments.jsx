@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bot, ClipboardCheck, Loader2, CheckCircle2, ListChecks, Sparkles, Upload, UserPlus, X } from 'lucide-react'
+import { Bot, ClipboardCheck, Loader2, CheckCircle2, ListChecks, Plus, Sparkles, Upload, UserPlus, X } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { logAction } from '../services/supabaseService'
 import { hrService } from '../services/hrService'

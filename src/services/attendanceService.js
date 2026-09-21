@@ -516,6 +516,21 @@ export const attendanceService = {
     return data
   },
 
+  /**
+   * Full QR token history for a terminal, newest first. Tokens are never
+   * destroyed — regenerated/revoked/deleted rows stay in status 'revoked'
+   * (and 'deleted' for soft-deleted terminals). Masks every token, only a
+   * preview is returned. Optional p_status filter (active/revoked/expired/delete).
+   */
+  async listTerminalQrHistory(deviceId, status = null) {
+    const { data, error } = await supabase.rpc('list_attendance_terminal_qr_history', {
+      p_device_id: deviceId || null,
+      p_status: status || null,
+    })
+    if (error) throw error
+    return data || []
+  },
+
   async revokeTerminal(deviceId) {
     const { data, error } = await supabase.rpc('revoke_attendance_terminal', { p_device_id: deviceId })
     if (error) throw error

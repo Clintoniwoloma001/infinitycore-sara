@@ -254,6 +254,58 @@ credentials arrive; the platform file overrides them (listed last in `env_file:`
 - Test: `npm run test:qr-terminal` — `tests/qrTerminalView.test.mjs` (migration-content
   assertions, no live DB).
 
+## Phase 66 — One Employee Per Terminal Per Day + Durable QR Token History
+- SQL migration: `supabase/migrations/20260921000001_attendance_terminal_day_binding_qr_history.sql`
+  — run in Supabase SQL Editor AFTER 20260921000000. Idempotent/additive.
+  - **CRITICAL fix (one device clocked in ~3 employees):** QR/enrolment gates bound ONE
+    BROWSER fingerprint to one employee, but three employees scanning the same printed QR
+    from three phones each carry distinct fingerprints — so the same terminal could record
+    attendance for multiple people. Now the ATTENDANCE DEVICE is bound to a single employee
+    per app day independent of the browser:
+    - Partial unique index `uid_attendance_device_bindings_terminal_day` on
+      `attendance_device_bindings(terminal_id, binding_date)` where `terminal_id is not null`
+      — hard DB guarantee.
+    - New `attendance_terminal_day_binding_check(terminal_id, employee_id, event_type)` returns
+      `allowed/reason(bound|unbound|terminal_taken)/bound_to/error`.
+    - Both public gates (`validate_attendance_terminal_employee` 3-arg and
+      `clock_attendance_terminal` 7-arg) run the terminal-day check BEFORE any record write,
+      return `device_binding_blocked=true` + the exact HR-facing message
+      ("…already been clocked-in by a different employee today…"), and audit
+      `ATTENDANCE_DEVICE_BINDING_BLOCKED` (attempted + bound employee names). No attendance
+      record is ever created for the second employee.
+    - `attendance_device_bind` is now a no-op (never raises) on a terminal-taken conflict.
+  - **Durable QR token history — tokens are NEVER destroyed:**
+    - New table `attendance_terminal_token_history` (id, device_id FK on delete cascade,
+      token_hash, token_preview = `left(raw,8) || '…'`, status check
+      `active|revoked|expired|deleted`, expires_at, created_at/by, revoked_at/by). RLS on,
+      revoked from anon/authenticated. Raw tokens never stored — only SHA-256 + masked preview.
+    - `create_attendance_terminal_token` archives the current `active` row to `revoked`
+      (revoked_at/by) then inserts the new `active` row. Regenerating supersedes, never deletes.
+    - `revoke_attendance_terminal` flips the active row to `revoked` (rows kept), device
+      status `revoked`, token nulled, view link purged.
+    - `delete_attendance_terminal` is now a SOFT delete (only from `revoked`): device status
+      `deleted` (added to the `attendance_devices.status` CHECK via drop/add), row + full
+      history preserved. `'deleted'` is a status VALUE, never an actual DELETE.
+    - New `list_attendance_terminal_qr_history(device_id, status)` — role-gated
+      (super_admin/admin/hr_manager/hr_officer/branch_manager), optional status filter
+      (invalid values rejected), newest-first, joins profiles for generated/revoked-by names.
+      History is recorded from this migration onward only (no retroactive reconstruction).
+  - Assumption flagged: tokens have NO TTL today (expires_at reserved, stays null); a token is
+    `active` until superseded or revoked. License to add `expired` later is reserved, not used.
+- `attendanceService.js` gains `listTerminalQrHistory(deviceId, status)`.
+- `AttendanceManagement.jsx` QR Attendance tab: per-row **QR History** button → modal with
+  status filter chips (All/Active/Revoked/Deleted), masked token, generated at/by, revoked
+  at/by, newest first. `statusMeta` handles `deleted` ("Deleted (history kept)");
+  Revoke/Delete confirm copy no longer claims tokens/rows are destroyed.
+- Frontend rename: `index.html` title/meta and all user-facing `src/**` strings now read
+  **Infinity Microfinance Bank** (email domain `infinitybank.com` and backend/edge-function
+  strings intentionally untouched — out of scope).
+- Tests: `npm run test:terminal-history` — `tests/attendanceTerminalHistory.test.mjs`
+  (migration + frontend + rename content assertions) plus local-docker behavioral pass for
+  the full lifecycle (generate→regen→revoke→soft-delete→list, active-only filter) and the
+  critical one-employee-per-terminal block (second employee → `device_binding_blocked`,
+  zero records, audited; owner re-scan passes the gate, rejected only by the daily guard).
+
 ## Phase 64 — Training & Development extension (Meet OAuth fix, invites, KSS channel, AI questions)
 Cross-cutting completion of the Training & Development roadmap. No SQL migration for
 Phase 1/4 (frontend + edge-function only) — but `schema_phase63_kss_channel_training_invites.sql`
@@ -338,3 +390,57 @@ must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
   `npm run test:question-generation` (node assertions incl. validator unit tests).
 - **Clinton (manual action):** add `OPENAI_API_KEY` project secret if absent (shared
   with SARA), deploy the edge function, apply `schema_phase63_kss_channel_training_invites.sql`.
+
+## Phase 67 — No-code Performance Rules Builder
+- Redesigns the raw-JSON Performance Settings page into a business-rules builder while
+  preserving the existing versioned `performance_config` JSONB structure, the same
+  performance engine, and the exact bank default values. No SQL migration — frontend +
+  pure domain layer only.
+- Domain layer (plain ESM, `.js` extensions, node-testable):
+  - `src/domains/performance/rules/registry.js` — single source of truth for VARIABLES
+    (with `available` flag), OPERATORS, CLOSED_RANGE_OPERATORS, ACTIONS, UNITS,
+    MPR_COMPONENTS, DESIGNATION_FREQUENCIES. Variables that exist in the data model but
+    are NOT yet consumable by the engine (attendance %, late/absence counts, leave
+    balance/utilization, outstanding principal, loan count, days past due) stay in the
+    catalog with `available:false` so nobody can build a rule the engine could never
+    evaluate. UI reads from here; components hard-code no business strings.
+  - `format.js` — deterministic (non-AI) sentence previews: `describeCondition`,
+    `describeRule` ("When MPR Score is between 60% and 74%, the employee receives a
+    productivity bonus equal to 30% of gross salary.").
+  - `validate.js` — pure range/weight/overlap/order validation; `findRangeOverlaps`
+    (inclusive, null max = +inf), `findRuleOverlaps`/`ruleInterval`
+    (bonus-tier exclusivity), `bonusEntryFromRule`/`bonusRuleFromEntry` (1:1 band ⇄ rule),
+    `sumField`. Gaps between bands/grades are preserved (coverage is informational).
+  - `translators.js` — per-config_key `{fromConfig, toConfig, validate, describe,
+    summarize, editable}`. `toConfig` reproduces the EXACT stored JSON (round-trip
+    guaranteed; verified for every seeded default). `bankone.performance_engine` is
+    `editable:false` (info card, no fake data). Fallback translator handles unknown keys.
+- UI (presentation-only; translates config ⇄ drafts, never computes MPR/bonuses):
+  - `src/components/performance/controls.jsx` — Field/TextInput/SelectInput/NumInput/
+    ConditionValueInput/VariableSelect/OperatorSelect/EntityMultiSelect (searchable +
+    custom-add)/FrequencySelect, plus `unitSuffixText` (removed a fragile
+    `UnitSuffix(...).props.children` hack).
+  - `ReorderList.jsx` — native HTML5 drag-drop + up/down buttons, deterministic
+    `onMove(from,to)`.
+  - `RulesBuilder.jsx` — generic WHEN (ALL/ANY) + condition rows + THEN action/value +
+    frozen sentence preview; unsupported saved rules render as preserved cards.
+  - `editors.jsx` — generic `RowTableEditor` + per-section editors (MPR components, PAR
+    bands, loan ageing, grades, mobility, sanctions, regulatory) and a custom
+    `BonusEditor` (eligible-designation multi-select, wait months, payment-frequency
+    matrix, reorderable productivity-bonus rule cards restricted to closed-range MPR
+    operators / `productivity_bonus` action so stored bands keep their shape).
+  - `SectionEditor.jsx` — per-item shell: version badge, human-readable preview (live in
+    edit mode), editor, inline validation errors, mandatory audited reason, guarded
+    Save (validation + actual change + reason), per-item Reset to bank default.
+- `PerformanceSettings.jsx` rewritten as three tabs: **Business Rules** (default,
+  sidebar sections → SectionEditor), **Advanced (JSON)** (escape hatch, visible to
+  admin/super_admin only), **Change History** (each audit diff rendered as human
+  summary via `summarize(old)` vs `summarize(new)` + actor name resolved from
+  `profiles`). Reset-to-bank-defaults button retained (future calculations only).
+- Designation multi-select unions master `designations` with any configured titles
+  (e.g. UNIT HEAD) so nothing is destroyed.
+- Tests: `npm run test:rules-builder` — `tests/performanceRulesBuilder.test.mjs`
+  (parses the real phase-26 migration seed, then asserts round-trip + zero validation
+  errors on every default, exact frozen sentences, weight-sum/overlap/sanction-order/
+  bonus-overlap rejections, unavailable-variable discipline, and UI wiring). No live DB.
+  Verified with `npm run build` and the test suite.

@@ -121,7 +121,7 @@ export default function EmployeeRecordPrint({
           <Logo size={46} variant="full" />
           <div className="min-w-0">
             <h1 className="record-title">Employee Personnel Record</h1>
-            <p className="record-subtitle">Infinity Bank · InfinityCore HR</p>
+            <p className="record-subtitle">Infinity Microfinance Bank · InfinityCore HR</p>
           </div>
         </div>
         <div className="record-head-meta">

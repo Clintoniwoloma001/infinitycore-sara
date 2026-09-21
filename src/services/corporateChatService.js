@@ -2,7 +2,7 @@ import { supabase } from '../supabaseClient'
 import { APP_URL } from '../config/siteUrl'
 
 // ------------------------------------------------------------------
-// Corporate Communication Service — Infinity Bank
+// Corporate Communication Service — Infinity Microfinance Bank
 //
 // Backs the Communication platform (direct chats, groups, channels,
 // announcements, threads, mentions, reactions, pinning, bookmarks,

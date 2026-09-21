@@ -74,7 +74,7 @@ export default function OfferAcceptance() {
       <CareersShell compact>
         <div className="max-w-lg mx-auto bg-white border border-slate-200 rounded-2xl p-8 text-center">
           {accepted ? <CheckCircle2 className="w-14 h-14 text-[#009944] mx-auto mb-4" /> : <XCircle className="w-14 h-14 text-rose-500 mx-auto mb-4" />}
-          <h1 className="text-xl font-bold text-slate-900">{accepted ? 'Offer accepted — welcome to Infinity Bank' : 'Offer declined'}</h1>
+          <h1 className="text-xl font-bold text-slate-900">{accepted ? 'Offer accepted — welcome to Infinity Microfinance Bank' : 'Offer declined'}</h1>
           <p className="text-sm text-slate-500 mt-2">
             {accepted
               ? 'Thank you. Your onboarding link has been generated — check your email for the next steps, or continue via your candidate portal.'

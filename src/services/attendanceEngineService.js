@@ -228,7 +228,7 @@ export const attendanceEngineService = {
   // Simulate a device clock-in event (for testing/terminal mode).
   // p_employeeId is optional; the RPC resolves by canonical employee number
   // when omitted, or uses the pre-verified employee when provided (WebAuthn).
-  async simulateDeviceEvent({ deviceId, externalUserId, eventType, verificationMethod = 'FINGERPRINT', employeeId = null, metadata = {} }) {
+  async simulateDeviceEvent({ deviceId, externalUserId, eventType, verificationMethod = 'FINGERPRINT', employeeId = null, metadata = {}, deviceFingerprint = null }) {
     const { data: requirements, error: requirementsError } = await supabase.rpc('get_attendance_requirements')
     if (requirementsError) throw requirementsError
 
@@ -236,7 +236,17 @@ export const attendanceEngineService = {
     // controls whether being outside a geofence is allowed, not whether GPS
     // evidence may be omitted.
     const needsLocation = true
-    let locationMetadata = { ...metadata }
+    let locationMetadata = {
+      ...metadata,
+      // Device-scoped browser fingerprint for the platform kiosk. When present
+      // the server holds the ingestion to the same one-employee-per-terminal
+      // per-day policy as the public QR gates (ingest_attendance_event reads
+      // p_metadata.device_fingerprint). Fall back to a self-computed composite
+      // so every kiosk call is guarded even if the caller omitted it.
+      device_fingerprint:
+        deviceFingerprint ||
+        (await getDeviceFingerprint().catch(() => null)),
+    }
     if (needsLocation) {
       const position = await getPosition()
       locationMetadata = {
