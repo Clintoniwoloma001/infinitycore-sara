@@ -74,7 +74,7 @@ export default function AttendanceTerminal() {
         ? await attendanceService.validatePublicTerminalEmployee(terminalToken, pin, deviceFingerprint)
         : await attendanceEngineService.lookupAttendanceEmployee(pin)
       if (publicMode ? !lookup?.valid : !lookup?.found) {
-        setError(lookup?.error || 'Employee ID not found. Please check the ID and try again.')
+        setError(lookup?.error || 'Employee not found. Check the Employee ID or work email and try again.')
         setBusy(false)
         return
       }
@@ -371,7 +371,7 @@ export default function AttendanceTerminal() {
         {/* ID entry */}
         {!result?.success && !confirmed && (
           <div className="bg-white/5 backdrop-blur rounded-2xl border border-white/10 p-6">
-             <p className="text-white/60 text-sm text-center mb-4">{publicMode ? 'Enter your Employee Number or Email' : 'Enter your Employee ID or PIN'}</p>
+             <p className="text-white/60 text-sm text-center mb-4">{publicMode ? 'Enter your Employee ID or Work Email' : 'Enter your Employee ID or PIN'}</p>
             <input
               type="text"
               value={pin}

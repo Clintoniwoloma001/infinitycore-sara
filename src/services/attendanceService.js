@@ -434,7 +434,7 @@ export const attendanceService = {
       // The employee embed supplies the assigned branch. Do not embed branches
       // directly from attendance_records: it has both assigned and detected
       // branch foreign keys, which is ambiguous to PostgREST.
-      .select('*, employees(full_name, department, position, branch, branch_id, user_id, employee_number, staff_id, employee_code, branches(id, branch_name))')
+      .select('*, employees(full_name, department, position, branch, branch_id, user_id, employee_number, staff_id, employee_code, branches(id, branch_name, latitude, longitude, geofence_radius, geofence_active))')
       .order('attendance_date', { ascending: false })
       .limit(500)
     if (startDate) q = q.gte('attendance_date', startDate)
@@ -601,9 +601,10 @@ export const attendanceService = {
   },
 
   // ---- Attendance device binding oversight (HR/admin) ----
-  // One device may clock only one employee per day. HR can inspect the
-  // active bindings, review blocked attempts, and clear a specific
-  // (device, date) binding so the device can be used again.
+  // One device fingerprint may clock only one employee per calendar day
+  // (Africa/Lagos attendance day). HR can inspect the active bindings, review
+  // blocked attempts, and clear a specific (device, calendar date) binding so
+  // the device can be used again.
   async listDeviceBindings(date) {
     const { data, error } = await supabase.rpc('list_attendance_device_bindings', {
       p_date: date || null,

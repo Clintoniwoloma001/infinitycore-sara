@@ -444,3 +444,153 @@ must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
   errors on every default, exact frozen sentences, weight-sum/overlap/sanction-order/
   bonus-overlap rejections, unavailable-variable discipline, and UI wiring). No live DB.
   Verified with `npm run build` and the test suite.
+
+## Phase 68 — Profile Email Uniqueness Guard (prevents silent `.single()` breaks)
+- Root cause prevented: a manually-run script duplicated rows in `profiles`, breaking
+  every `.single()` profile fetch with PGRST116. `profiles.id` is already a PK (FK→
+  auth.users); `email` was the unenforced natural key (`id` IS the auth_user_id).
+- SQL migration: `supabase/migrations/20260921000004_profiles_email_unique.sql` — run
+  in Supabase SQL Editor. Idempotent/additive.
+  - Pre-flight DO block: if duplicate non-null emails (`lower(btrim(email))`) remain,
+    it prints each one and ABORTS with `profiles_email_unique_aborted: resolve the N
+    duplicate email(s) above first…` — so a premature apply is loud and self-diagnosing,
+    and the raw index statement also fails with 23505 if run alone.
+  - `create unique index uq_profiles_email_lower on profiles (lower(btrim(email)))` —
+    case/whitespace-insensitive (matches invite ILIKE + reconciliation compares), NULLs
+    exempt. A future bad INSERT now dies with `duplicate key value violates unique
+    constraint "uq_profiles_email_lower"` at insert time, not as a frontend crash later.
+  - Adds nothing else; never touches existing profile rows.
+- `useAuth.jsx` `fetchProfile` normalizes PGRST116 → "Your profile record could not be
+  found. Please contact an administrator."; `App.jsx` already renders the `!profile`
+  "Profile unavailable" screen (no page crash).
+- Known remaining same-class gaps (REPORTED, not fixed — data/decisions needed):
+  `employees.email`, `employees.user_id`, `profiles.employee_id`, `branches.branch_name`,
+  and `customers.email`/`account_number`/`national_id` have no uniqueness. Already safe:
+  `user_access_profiles(user_id)`, `leave_balances(employee_id,year,leave_type)`,
+  `designations`, `attendance_records(employee_id,attendance_date)`,
+  `employee_digital_files(employee_id)`, `departments.code`.
+- Test: `npm run test:profiles-unique` — `tests/profilesEmailUnique.test.mjs`
+  (migration + useAuth/App assertions + pure-JS mirror of the duplicate-detection SQL).
+  Also verified behaviorally against a scratch Postgres on the local Supabase docker
+  instance (dup abort, clean apply, 23505 on exact + case/space variants, NULLs allowed,
+  idempotent re-run).
+
+## Phase 69 — Profile FK Integrity (auth + employee) & email-link audit
+- Incident prevented: a manually-run script wiped `profiles` rows (Super Admin access +
+  recruitment/approval flows broke until a manual restore via `auth.users` + `employees`
+  cross-reference). Base schema already declares both FKs, but nothing stops a bad script
+  or a partially-restored DB from dropping/never-creating them — this migration re-asserts.
+- SQL migration: `supabase/migrations/20260921000005_profiles_auth_foreign_keys.sql` — run
+  in Supabase SQL Editor after `20260921000004`. Idempotent/additive.
+  - Pre-flight DO blocks abort LOUDLY with the exact offending ids if any `profiles.id`
+    has no `auth.users` row, or any `profiles.employee_id` (when the column exists) has no
+    `employees` row — never applies over broken data.
+  - Re-asserts `profiles_id_fkey  (id) -> auth.users(id) ON DELETE CASCADE` and
+    `profiles_employee_id_fkey (employee_id) -> public.employees(id) ON DELETE SET NULL`
+    (also `add column if not exists employee_id uuid`). Verified on a scratch Postgres:
+    orphan profile insert → FK violation; nonexistent-employee link → FK violation; auth
+    user delete cascades the profile (no orphan); employee delete nulls the link.
+- Point-3 audit (REPORTED, not changed — await Clinton): the live `handle_new_user()`
+  (schema_phase60) and both `approve_user` overloads link by LOGIN email only —
+  `lower(e.email) = lower(new.email)` / `lower(v_target.email)` — and
+  `provision_employee_account` hard-rejects login↔work email mismatch. `work_email`
+  columns exist (phase27) but are never consulted by these paths, so any user whose
+  login email ≠ `employees.email` stays unlinked ("employee never auto-links"). Fixes to
+  confirm before implementing: also match `employees.work_email`/`profiles.work_email`
+  under the same "exactly one unambiguous match, never a conflicting relink" guard,
+  relax provision's hard equality, and add an HR reconciliation RPC.
+- Backups/PITR (hosted-project status NOT readable from the repo — check Dashboard):
+  Free=no automatic backups; Pro/Team/Enterprise=daily backups (7/14/30-day retention);
+  PITR is a PAID add-on (~$100-400/mo by retention, requires ≥ Small compute) that
+  REPLACES daily backups (WAL, ~2-min RPO worst case, restore takes the project offline);
+  backups exclude Storage files. At minimum, schedule periodic
+  `supabase db dump --data-only` off-site dumps for this project until PITR is budgeted.
+- Tests: `npm run test:profiles-fk` — `tests/profilesAuthFk.test.mjs` (migration + schema
+  content assertions). Behavioral pass on a scratch Postgres (local supabase docker):
+  orphan pre-flight abort, clean apply, FK rejections, cascade + set-null, idempotency.
+
+## Phase 7a — Platform Role Expansion (operations_manager → head_of_operations + 5 head roles)
+- SQL migration: `supabase/migrations/20260921000007_roles_head_of_operations_and_new_roles.sql`
+  — run in Supabase SQL Editor AFTER 20260921000006. Idempotent/additive, transaction-wrapped.
+  - Renames the legacy internal role `operations_manager` → `head_of_operations` ("Head of
+    Operations") in `roles` (id preserved → `role_permissions` stay attached) and migrates
+    live `profiles.role` rows; rebuilds `profiles_role_check` to its 18-role set.
+  - Adds five department-head roles (from designations master): `head_of_e_business`
+    (HEAD, E-BANKING / HEAD OF DIGITAL BANKING), `financial_controller` (FINANCIAL
+    CONTROLLER), `head_of_risk_compliance` (HEAD, RISK MANAGEMENT / HEAD OF COMPLIANCE),
+    `head_of_legal` (HEAD OF LEGAL), `head_of_audit` (HEAD OF AUDIT / HEAD OF INTERNAL
+    CONTROL) + `designation_role_mappings` upserts. Backfills the never-seeded
+    `area_manager`/`head_of_business` `roles` rows.
+  - Head roles share the org-wide "management" class: `can_author_announcement`,
+    `training_is_manager`, management auto-channels (`sync_auto_channel_members` /
+    `reconcile_auto_channel_membership_for_employee`), `get_man_hour_intelligence`,
+    `reset_annual_leave_balances` 15-day class, `approve_user` (both overloads), and
+    `assign_permission_to_role` inheritance (`hr.attendance.self`, `hr.training.read`,
+    `workforce.manhour.read`). `enforce_role_change_policy` + `trg_enforce_role_change`:
+    only super_admin/admin may assign the senior/head roles; branch/area managers stay
+    limited to front-line roles.
+  - Finance owns BankOne: `can_manage_bankone`/`can_manage_reconciliation` now include
+    `financial_controller` (and `head_of_operations`); all `bankone_*`/`recon_*`/
+    `transport_allow` WRITE policies rewritten accordingly (reads stay role-free customer
+    token). `branches_read_authorized`, `leave_balances`, `tasks*`, `task_reports*`
+    policies rewritten to head-role-aware lists.
+- `src/constants/roles.js` rewritten for the 18-role catalog (ROLES/HIERARCHY/METADATA/
+  PERMISSIONS/MODULES/assignableRoles). `attendance.terminal` added to ADMIN /
+  HR_MANAGER / HEAD_OF_BUSINESS / HEAD_OF_OPERATIONS permission grants (Attendant
+  Terminal nav). `leaveRulesService.js` intentionally keeps legacy `operations_manager`
+  + all head roles (backward compat). `src/` has zero remaining `OPERATIONS_MANAGER`
+  references.
+- Edge functions mirror the DB gates (no second authz system): `bankone-core.mjs`
+  `BANKONE_QUERY_ROLES` = super_admin/admin/hr_manager/hr_officer/head_of_operations/
+  financial_controller; `sara-intent` `LOAN_READ_ROLES` drops `operations_manager` for
+  `head_of_operations`; `TERMINATION_ROLES` stays super_admin/hr_manager.
+- Repo-root `schema_phase*.sql` retains legacy `operations_manager` (immutable history) —
+  00007 supersedes it in a clean DB. Test: `npm run test:roles-head-operations` —
+  `tests/rolesHeadOperations.test.mjs` (migration + edge + roles.js content assertions).
+
+## Phase — HR job postings: archive / edit / delete / stop applications
+- SQL migration: `supabase/migrations/20260921000009_hr_jobs_archive_edit_delete.sql` — run in
+  Supabase SQL Editor after 20260921000006/7/8. Idempotent/additive.
+  - Extends `hr_jobs.status` CHECK from `draft|published|closed` to also admit `archived`
+    (drop/add constraint by the same name), adds `archived_at`, and adds the previously
+    missing **RLS delete policy** `hr_jobs_delete` (super_admin/admin/hr_manager only).
+    Deleting a job nulls candidates' `job_id` (their records survive) and cascades the
+    screening config + job questions. No apply-path change needed: the public gate
+    (`public_apply_for_job`) and public listing already require `status='published'`, so
+    **closed and archived both stop the collection of applications**.
+- `HRJobs.jsx` job cards now support the full lifecycle: **Edit** (reopens the create modal
+  prefilled via `jobToForm`, saves through the same `handleSubmit` — inserts on new, updates
+  in-place on edit), **Archive** (draft/published/closed → `archived`), **Restore**
+  (archived → draft), **Delete** (`window.confirm`, RLS-gated), and the published "Close"
+  button is relabelled **Stop applications**. `STATUS_COLOR`/status filter gain `archived`.
+- Test: `npm run test:hr-jobs` — `tests/hrJobsLifecycle.test.mjs` (migration + frontend
+  content assertions, no live DB). Verified with `npm run build`.
+
+## Phase — BankOne Account Name Enquiry & Payroll Bank Linking
+- New edge function `supabase/functions/bankone-name-enquiry/index.ts` — mirrors
+  `bankone-transaction-status`: `verify_jwt = true` + in-function `supabase.auth.getUser()`
+  + `BANKONE_QUERY_ROLES` role gate, injects `BANKONE_API_TOKEN` server-side, POSTs the
+  documented Qore Channels endpoint
+  `{base}/thirdpartyapiservice/apiservice/AccountEnquiry/GetAccountData`
+  (`BANKONE_NAME_ENQUIRY_ENDPOINT`, roadmap #4) with `{ AccountNumber, BankCode, Token }`.
+  Audits `BANKONE_NAME_ENQUIRY_OK/ERROR`; the token is never returned, logged, or echoed.
+  Register in `supabase/config.toml` (`[functions.bankone-name-enquiry]`, `verify_jwt = true`)
+  and deploy with `supabase functions deploy bankone-name-enquiry`.
+- `supabase/functions/_shared/bankone-core.mjs` gains `BANKONE_NAME_ENQUIRY_ENDPOINT`,
+  `validateNameEnquiryRequest` (10-digit NUBAN + bank code), `buildNameEnquiryRequest`,
+  `extractAccountName`/`extractAccountDetails` (tolerant recursive field search across Qore
+  envelope variants), and `normalizeNameEnquiryResponse` (success requires a resolved
+  account name; token-free). Account fields added to `PROVIDER_RESULT_KEYS`.
+- `src/services/bankone/bankoneNameEnquiryService.js` — `nameEnquiry({ accountNumber,
+  bankCode, bankName })` via `invokeBankoneFunction` (no token in the browser).
+- `src/constants/nigerianBanks.js` — CBN/NIBSS bank code ⇄ name catalogue.
+- `src/components/payroll/BankOneLinkModal.jsx` — select employee → bank + 10-digit account
+  → **Look up account name** (must succeed) → **Confirm & Link** saves via
+  `employeeService.updateHrFields` (`bank_name`, `account_number`, `account_name`,
+  `bank_sort_code`; phase14 allow-list already covers these — no SQL migration needed).
+- `PayrollBankOne.jsx` Payroll Master tab: **Link Bank Account** button
+  (`PAYROLL_BANK_LINK_ROLES` = super_admin/admin/hr_manager/hr_officer), modal refreshes the
+  master list on success.
+- Test: `npm run test:name-enquiry` — `tests/bankoneNameEnquiry.test.mjs`. Manual action:
+  set `BANKONE_API_TOKEN`/`BANKONE_API_BASE_URL` project secrets and confirm the exact Qore
+  `GetAccountData` request/response sample before the first live smoke test.

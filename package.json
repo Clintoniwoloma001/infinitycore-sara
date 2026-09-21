@@ -33,9 +33,15 @@
     "test:payroll-compensation": "node tests/payrollCompensation.test.mjs",
     "test:qr-terminal": "node tests/qrTerminalView.test.mjs",
     "test:assessment-fix": "node tests/assessmentPhase0Fix.test.mjs",
+    "test:assessment-ai": "node tests/assessmentAiReliability.test.mjs",
     "test:terminal-history": "node tests/attendanceTerminalHistory.test.mjs",
     "test:web-clock": "node tests/attendanceWebGpsBinding.test.mjs",
-    "test:rules-builder": "node tests/performanceRulesBuilder.test.mjs"
+    "test:rules-builder": "node tests/performanceRulesBuilder.test.mjs",
+    "test:profiles-unique": "node tests/profilesEmailUnique.test.mjs",
+    "test:profiles-fk": "node tests/profilesAuthFk.test.mjs",
+    "test:hr-jobs": "node tests/hrJobsLifecycle.test.mjs",
+    "test:roles-head-operations": "node tests/rolesHeadOperations.test.mjs",
+    "test:name-enquiry": "node tests/bankoneNameEnquiry.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
-  AlertTriangle, CheckCircle2, Clock, Download, FileSpreadsheet, History, Loader2,
+  AlertTriangle, CheckCircle2, Clock, Download, FileSpreadsheet, History, Landmark, Loader2,
   PenLine, RefreshCw, Send, ShieldCheck, Trash2, Upload, Wallet, XCircle,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
@@ -10,6 +10,7 @@ import CompensationEditorModal from '../components/payroll/CompensationEditorMod
 import PayrollSignatureModal from '../components/payroll/PayrollSignatureModal'
 import PayrollAuditModal from '../components/payroll/PayrollAuditModal'
 import PayrollImportModal from '../components/payroll/PayrollImportModal'
+import BankOneLinkModal from '../components/payroll/BankOneLinkModal'
 import { payrollService } from '../services/payrollService'
 import { payrollPushService, PUSH_STATUS } from '../services/payrollPushService'
 import { payrollImportService } from '../services/payrollImportService'
@@ -27,6 +28,8 @@ const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm fo
 const PAYROLL_EDIT_ROLES = ['super_admin', 'hr_manager', 'hr_officer']
 // Roles allowed to import / override the Excel structure.
 const PAYROLL_IMPORT_ROLES = ['super_admin', 'admin', 'hr_manager']
+// Roles allowed to run a BankOne name enquiry and link an employee's bank account.
+const PAYROLL_BANK_LINK_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer']
 
 // Default derived payroll schema — rendered dynamically from config.
 const DERIVED_PAYROLL_COLUMNS = [
@@ -71,6 +74,7 @@ export default function PayrollBankOne() {
   const canPush = hasPermission('payroll.push') || isAdmin
   const canApprove = hasPermission('payroll.approve') || isAdmin
   const canEditCompensation = hasPermission('payroll.manage') || isAdmin
+  const canLinkBank = PAYROLL_BANK_LINK_ROLES.includes(role) || isAdmin
 
   const [tab, setTab] = useState('master')
   const [loading, setLoading] = useState(true)
@@ -94,6 +98,7 @@ export default function PayrollBankOne() {
   const [rejectReason, setRejectReason] = useState('')
   const [showReject, setShowReject] = useState(false)
   const [editEmployeeId, setEditEmployeeId] = useState('')
+  const [linkOpen, setLinkOpen] = useState(false)
 
   const selected = useMemo(() => requests.find((r) => r.id === selectedId) || null, [requests, selectedId])
 
@@ -250,6 +255,11 @@ export default function PayrollBankOne() {
                 <p className="text-xs text-slate-500 mt-0.5">Active workforce with bank details and salary, ready for BankOne upload.</p>
               </div>
               <div className="flex items-center gap-2">
+                {canLinkBank && (
+                  <button className={btnGhost} onClick={() => setLinkOpen(true)}>
+                    <Landmark className="w-4 h-4" /> Link Bank Account
+                  </button>
+                )}
                 <button className={btnGhost} disabled={!master.length} onClick={() => payrollPushService.downloadMasterCsv(master, selectedPeriod)}>
                   <Download className="w-4 h-4" /> CSV
                 </button>
@@ -508,6 +518,14 @@ export default function PayrollBankOne() {
           employeeId={editEmployeeId}
           onClose={() => setEditEmployeeId('')}
           onSaved={() => { setNotice('Compensation updated.'); load() }}
+        />
+      )}
+
+      {linkOpen && (
+        <BankOneLinkModal
+          employees={master}
+          onClose={() => setLinkOpen(false)}
+          onLinked={() => { setNotice('Bank account linked and saved.'); load() }}
         />
       )}
     </div>

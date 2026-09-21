@@ -60,6 +60,69 @@ function json(body, status = 200) {
   })
 }
 
+// Structured server-side error. Every recognized failure stage carries its own
+// code so clients can show meaningful, safe messages instead of one blanket
+// "ai_unavailable". Codes never contain secrets, keys or stack traces.
+class SaraError extends Error {
+  constructor(code, detail = '') {
+    super(detail || code)
+    this.name = 'SaraError'
+    this.code = code
+  }
+}
+
+const AI_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
+
+function classifyOpenAIStatus(status) {
+  if (status === 401 || status === 403) return 'ai_invalid_key'
+  if (status === 402) return 'ai_billing'
+  if (status === 429) return 'ai_rate_limited'
+  return 'ai_provider_error'
+}
+
+// POST to the OpenAI API with bounded retries for transient failures
+// (429/5xx). Retries happen BEFORE any Write occurs, so a retry can never
+// duplicate questions/rows. Throws SaraError with a stage-specific code.
+// signal is optional and used for abort/timeout handling.
+async function postOpenAI(url, payload, signal, retries = 2) {
+  const openaiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!openaiKey) throw new SaraError('ai_not_configured')
+  let attempt = 0
+  for (;;) {
+    let resp
+    try {
+      resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openaiKey}` },
+        body: JSON.stringify(payload),
+        signal,
+      })
+    } catch (e) {
+      if (e?.name === 'AbortError') throw e
+      throw new SaraError('ai_network')
+    }
+    if (resp.ok) return resp
+    // OpenAI also returns 429 for quota exhaustion. Don't burn retries on a
+    // permanent condition — surface it as a distinct, human-safe code.
+    if (resp.status === 429) {
+      const errBody = await resp.text().catch(() => '')
+      if (/insufficient_quota|credit_balance_exhausted/i.test(errBody)) throw new SaraError('ai_billing')
+      if (attempt < retries) {
+        attempt += 1
+        await new Promise((resolve) => setTimeout(resolve, 1200 * attempt))
+        continue
+      }
+      throw new SaraError('ai_rate_limited')
+    }
+    if (AI_RETRYABLE_STATUS.has(resp.status) && attempt < retries) {
+      attempt += 1
+      await new Promise((resolve) => setTimeout(resolve, 1200 * attempt))
+      continue
+    }
+    throw new SaraError(classifyOpenAIStatus(resp.status))
+  }
+}
+
 function clamp100(n) {
   const v = Number(n)
   if (!Number.isFinite(v)) return 0
@@ -206,23 +269,20 @@ async function firstRow(supabase, table, id) {
 }
 
 async function runOpenAI(messages) {
-  const openaiKey = Deno.env.get('OPENAI_API_KEY')
-  if (!openaiKey) throw new Error('ai_not_configured')
-  const resp = await fetch(OPENAI_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openaiKey}` },
-    body: JSON.stringify({
-      model: MODEL,
-      temperature: 0,
-      response_format: { type: 'json_object' },
-      messages,
-    }),
+  const resp = await postOpenAI(OPENAI_ENDPOINT, {
+    model: MODEL,
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages,
   })
-  if (!resp.ok) throw new Error(`ai_error_${resp.status}`)
-  const payload = await resp.json()
+  const payload = await resp.json().catch(() => { throw new SaraError('ai_bad_response') })
   const content = payload?.choices?.[0]?.message?.content
-  if (!content) throw new Error('ai_empty')
-  return JSON.parse(content)
+  if (!content) throw new SaraError('ai_empty')
+  try {
+    return JSON.parse(content)
+  } catch {
+    throw new SaraError('ai_bad_response')
+  }
 }
 
 function bytesToBase64(bytes) {
@@ -451,31 +511,28 @@ async function getCandidateCV(supabase, candidate) {
 }
 
 async function runOpenAIWithCV(systemPrompt, userPrompt, cv) {
-  const openaiKey = Deno.env.get('OPENAI_API_KEY')
-  if (!openaiKey) throw new Error('ai_not_configured')
-  const resp = await fetch(OPENAI_RESPONSES_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openaiKey}` },
-    body: JSON.stringify({
-      model: MODEL,
-      temperature: 0,
-      store: false,
-      text: { format: { type: 'json_object' } },
-      input: [
-        { role: 'developer', content: systemPrompt },
-        { role: 'user', content: [
-          { type: 'input_file', filename: cv.fileName, file_data: cv.data },
-          { type: 'input_text', text: userPrompt },
-        ] },
-      ],
-    }),
+  const resp = await postOpenAI(OPENAI_RESPONSES_ENDPOINT, {
+    model: MODEL,
+    temperature: 0,
+    store: false,
+    text: { format: { type: 'json_object' } },
+    input: [
+      { role: 'developer', content: systemPrompt },
+      { role: 'user', content: [
+        { type: 'input_file', filename: cv.fileName, file_data: cv.data },
+        { type: 'input_text', text: userPrompt },
+      ] },
+    ],
   })
-  if (!resp.ok) throw new Error(`ai_error_${resp.status}`)
-  const payload = await resp.json()
+  const payload = await resp.json().catch(() => { throw new SaraError('ai_bad_response') })
   const content = payload?.output_text || payload?.output?.flatMap((item) => item.content || [])
     .find((part) => part.type === 'output_text')?.text
-  if (!content) throw new Error('ai_empty')
-  return JSON.parse(content)
+  if (!content) throw new SaraError('ai_empty')
+  try {
+    return JSON.parse(content)
+  } catch {
+    throw new SaraError('ai_bad_response')
+  }
 }
 
 async function screenCandidate(supabase, body, requireCV = false) {
@@ -675,7 +732,7 @@ async function generateAssessment(supabase, body) {
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userPrompt },
   ])
-  const questions = sanitizeQuestions(parsed.questions, job.job_title)
+  const questions = sanitizeQuestions(parsed && Array.isArray(parsed.questions) ? parsed.questions : [], job.job_title)
   if (questions.length === 0) return { ok: false, error: 'ai_bad_shape' }
 
   let displayOrder = 0
@@ -987,7 +1044,9 @@ async function generateQuestions(supabase, userClient, body) {
     ], controller.signal)
   } catch (e) {
     const aborted = e?.name === 'AbortError'
-    return { ok: false, error: aborted ? 'ai_timeout' : 'ai_unavailable', detail: String(e?.message || e) }
+    if (aborted) return { ok: false, error: 'ai_timeout', detail: 'Generation timed out before the AI responded.' }
+    if (e instanceof SaraError) return { ok: false, error: e.code }
+    return { ok: false, error: 'ai_unavailable' }
   } finally {
     clearTimeout(timeout)
   }
@@ -1294,19 +1353,21 @@ function sanitizeCandidateAnalysis(raw, templateAvg, roleAvg) {
 }
 
 async function runOpenAIWithTimeout(messages, signal) {
-  const openaiKey = Deno.env.get('OPENAI_API_KEY')
-  if (!openaiKey) throw new Error('ai_not_configured')
-  const resp = await fetch(OPENAI_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openaiKey}` },
-    body: JSON.stringify({ model: MODEL, temperature: 0.2, max_tokens: 4000, response_format: { type: 'json_object' }, messages }),
-    signal,
-  })
-  if (!resp.ok) throw new Error(`ai_error_${resp.status}`)
-  const payload = await resp.json()
+  const resp = await postOpenAI(OPENAI_ENDPOINT, {
+    model: MODEL,
+    temperature: 0.2,
+    max_tokens: 4000,
+    response_format: { type: 'json_object' },
+    messages,
+  }, signal)
+  const payload = await resp.json().catch(() => { throw new SaraError('ai_bad_response') })
   const content = payload?.choices?.[0]?.message?.content
-  if (!content) throw new Error('ai_empty')
-  return JSON.parse(content)
+  if (!content) throw new SaraError('ai_empty')
+  try {
+    return JSON.parse(content)
+  } catch {
+    throw new SaraError('ai_bad_response')
+  }
 }
 
 Deno.serve(async (req) => {
@@ -1376,7 +1437,11 @@ Deno.serve(async (req) => {
         return json({ ok: false, error: 'unknown_action' })
     }
   } catch (e) {
-    // Failure-safe: the client can fall back to rule-based screening.
-    return json({ ok: false, error: 'ai_unavailable', detail: String(e?.message || e) }, 200)
+    // Failure-safe: never expose raw errors. Structured SaraError codes
+    // classify the actual stage (missing key, provider error, bad output…);
+    // anything unexpected is abstracted to ai_unavailable. Clients render
+    // safe, per-stage messages.
+    const code = e instanceof SaraError ? e.code : 'ai_unavailable'
+    return json({ ok: false, error: code }, 200)
   }
 })

@@ -32,6 +32,11 @@ export const CHANNELS_API_PATH = '/thirdpartyapiservice/apiservice'
 // Query; Channels API category). Do not add undocumented peers here.
 export const BANKONE_STATUS_ENDPOINT = `${CHANNELS_API_PATH}/CoreTransactions/TransactionStatusQuery`
 
+// Documented endpoint (Qore Channels API — Account Enquiry: account detail /
+// name enquiry, roadmap #4 in docs/bankone-integration-roadmap.md). Used to
+// resolve the account holder name before an employee bank link is saved.
+export const BANKONE_NAME_ENQUIRY_ENDPOINT = `${CHANNELS_API_PATH}/AccountEnquiry/GetAccountData`
+
 export const DEFAULT_TIMEOUT_MS = 30000
 export const MAX_TIMEOUT_MS = 60000
 
@@ -95,9 +100,9 @@ export function checkSecretHealth({ baseUrl = '', token = '', timeoutMs = '' } =
 
 // Roles permitted to run live BankOne queries. Mirrors the repository's
 // can_manage_bankone() gate (super_admin/admin/hr_manager/hr_officer/
-// operations_manager) so the Edge Function does not invent a second
-// authorization system.
-export const BANKONE_QUERY_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer', 'operations_manager']
+// head_of_operations/financial_controller) so the Edge Function does not
+// invent a second authorization system.
+export const BANKONE_QUERY_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer', 'head_of_operations', 'financial_controller']
 
 export function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -178,6 +183,166 @@ export function buildTransactionStatusRequest({ baseUrl, token, input }) {
       endpointPath: BANKONE_STATUS_ENDPOINT,
       tokenFormat: tokenFormatDiagnostics(token),
     },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Name enquiry (AccountEnquiry/GetAccountData) — resolve an account holder
+// name before linking an employee's salary account. The Qore docs identify the
+// endpoint and its key request field (account number); BankCode/Token are
+// required server-side. No undocumented field is invented: the normalizer is
+// deliberately tolerant of the provider's envelope variants.
+// ---------------------------------------------------------------------------
+
+export function validateNameEnquiryRequest(body) {
+  const errors = []
+  const raw = isPlainObject(body) ? body : {}
+
+  const accountNumber = cleanString(raw.AccountNumber ?? raw.accountNumber, 20)
+  const bankCode = cleanString(raw.BankCode ?? raw.bankCode, 16)
+  const bankName = cleanString(raw.BankName ?? raw.bankName, 120)
+
+  if (!accountNumber) errors.push('Account number is required')
+  else if (!/^\d{10}$/.test(accountNumber)) errors.push('Account number must be a 10-digit NUBAN')
+  if (!bankCode) errors.push('Bank code is required')
+
+  if (errors.length > 0) return { ok: false, errors }
+  return { ok: true, value: { AccountNumber: accountNumber, BankCode: bankCode, BankName: bankName || null } }
+}
+
+export function buildNameEnquiryRequest({ baseUrl, token, input }) {
+  const cleanBase = cleanString(baseUrl, 200).replace(/\/+$/, '')
+  const normalizedToken = normalizeBankoneToken(token)
+  if (!cleanBase || !normalizedToken || !isAllowedBankOneHost(cleanBase) || baseUrlContainsApiPath(cleanBase)) {
+    throw new Error('missing_bankone_credentials')
+  }
+  const body = {
+    AccountNumber: input.AccountNumber,
+    BankCode: input.BankCode,
+    Token: normalizedToken,
+  }
+  return {
+    url: `${cleanBase}${BANKONE_NAME_ENQUIRY_ENDPOINT}`,
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body,
+    diagnostics: {
+      outgoingUrl: `${cleanBase}${BANKONE_NAME_ENQUIRY_ENDPOINT}`,
+      baseUrl: cleanBase,
+      endpointPath: BANKONE_NAME_ENQUIRY_ENDPOINT,
+      tokenFormat: tokenFormatDiagnostics(token),
+    },
+  }
+}
+
+// Recursively locate the first scalar value for any of the given aliases. This
+// tolerates the provider's nesting variants without assuming a fixed schema.
+function findProviderValue(value, aliases, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 4) return undefined
+  const wanted = new Set(aliases.map((a) => String(a).toLowerCase().replace(/[^a-z0-9]/g, '')))
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findProviderValue(item, aliases, depth + 1)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (wanted.has(String(key).toLowerCase().replace(/[^a-z0-9]/g, '')) && item !== undefined && item !== null && item !== '') {
+      if (typeof item !== 'object') return item
+    }
+  }
+  for (const [, nested] of Object.entries(value)) {
+    const found = findProviderValue(nested, aliases, depth + 1)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+export function extractAccountName(value) {
+  return providerScalar(findProviderValue(value, [
+    'AccountName', 'AccountNameEnquiry', 'NameEnquiry', 'AccountTitle',
+    'AccountHolderName', 'AccountHolder', 'CustomerName',
+  ]))
+}
+
+export function extractAccountDetails(value) {
+  return {
+    accountName: extractAccountName(value),
+    accountNumber: providerScalar(findProviderValue(value, ['AccountNumber', 'Nuban', 'AccountNo'])),
+    bankName: providerScalar(findProviderValue(value, ['BankName', 'Bank'])),
+    bankCode: providerScalar(findProviderValue(value, ['BankCode', 'SortCode', 'BankSortCode'])),
+    accountType: providerScalar(findProviderValue(value, ['AccountType', 'ProductName', 'Product'])),
+    currency: providerScalar(findProviderValue(value, ['Currency', 'CurrencyCode'])),
+    accountStatus: providerScalar(findProviderValue(value, ['AccountStatus'])),
+  }
+}
+
+export function normalizeNameEnquiryResponse({
+  raw,
+  operation = 'name_enquiry',
+  requestId,
+  httpStatus = 200,
+  durationMs,
+  secret = '',
+  request = null,
+  timestamp = null,
+  environment = null,
+  providerRequestSent = true,
+  providerResponseReceived = true,
+  contentType = null,
+  bodyFormat = null,
+  diagnostics = null,
+}) {
+  const safeRaw = sanitizeProviderValue(raw, secret)
+  const providerResult = projectProviderResult(safeRaw)
+  const details = extractAccountDetails(safeRaw)
+  const result = classifyProviderResult(safeRaw)
+  const responseCode = providerScalar(findProviderValue(safeRaw, ['ResponseCode', 'ResultCode', 'Code']))
+  const responseMessage = extractProviderMessage(safeRaw)
+  const providerResultValid = Boolean(details.accountName) || hasProviderResultFields(safeRaw)
+  const success = providerResultValid && Boolean(details.accountName)
+  return {
+    success,
+    provider: PROVIDER,
+    operation,
+    status: httpStatus,
+    providerStatus: httpStatus,
+    providerHttpStatus: httpStatus,
+    providerReached: true,
+    transportSuccess: httpStatus >= 200 && httpStatus < 300,
+    providerResultValid,
+    queryProcessed: providerResultValid,
+    applicationSuccess: providerResultValid ? success : null,
+    requestId,
+    correlationId: requestId,
+    responseCode,
+    responseMessage,
+    accountName: details.accountName,
+    accountNumber: details.accountNumber,
+    bankName: details.bankName,
+    bankCode: details.bankCode,
+    accountType: details.accountType,
+    currency: details.currency,
+    accountStatus: details.accountStatus,
+    providerResult,
+    providerResultClassification: result.classification,
+    errorCode: success ? null : (result.errorCode || 'BANKONE_NAME_ENQUIRY_UNCONFIRMED'),
+    error: success ? null : (responseMessage || result.message || 'BankOne was reached, but no account name was returned.'),
+    data: providerResult,
+    raw: providerResult,
+    request,
+    environment,
+    requestTimestamp: timestamp,
+    durationMs,
+    providerRequestSent,
+    providerResponseReceived,
+    providerContentType: contentType || null,
+    providerBodyFormat: bodyFormat || null,
+    providerApplicationStatus: providerResultValid ? (success ? 'success' : 'error') : null,
+    diagnostics,
   }
 }
 
@@ -653,15 +818,32 @@ export function extractProviderMessage(value) {
 }
 
 const PROVIDER_RESULT_KEYS = new Set([
+  'accountname',
+  'accountno',
+  'accountnumber',
+  'accountholder',
+  'accountholdername',
+  'accountstatus',
+  'accounttitle',
+  'accounttype',
   'amount',
+  'bank',
+  'bankcode',
+  'bankname',
   'code',
+  'currency',
+  'currencycode',
+  'customername',
   'data',
   'description',
   'date',
   'errormessage',
   'issuccessful',
   'message',
+  'nuban',
   'payload',
+  'product',
+  'productname',
   'reference',
   'responsecode',
   'responsemessage',
@@ -673,6 +855,7 @@ const PROVIDER_RESULT_KEYS = new Set([
   'retrievalreference',
   'retrievalreferencenumber',
   'rrn',
+  'sortcode',
   'status',
   'success',
   'timestamp',

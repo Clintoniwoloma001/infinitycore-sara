@@ -9,7 +9,7 @@ import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import SaraBriefing from '../components/attendance/SaraBriefing'
 import TrendChart from '../components/attendance/TrendChart'
 import LocationAuditModal from '../components/attendance/LocationAuditModal'
-import { locationLabel, recordCoords } from '../utils/attendanceLocation'
+import { locationDistanceLabel, locationLabel, locationStatusMeta } from '../utils/attendanceLocation'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -393,21 +393,18 @@ function geofenceName(record) {
 }
 
 function locationDifference(record) {
-  const metadata = eventMetadata(record)
-  const differs = record?.clock_in_event?.metadata?.location_difference || record?.clock_out_event?.metadata?.location_difference
-  if (differs === true || differs === 'true') return <span className="text-amber-700">Different from assigned branch</span>
-  if (differs === false || differs === 'false') return <span className="text-emerald-700">Assigned branch</span>
-  return <span className="text-slate-400">{metadata.actual_location_name || recordCoords(record) ? 'Recorded' : '—'}</span>
+  const distance = locationDistanceLabel(record)
+  if (distance) return <span className="text-slate-600">{distance}</span>
+  return <span className="text-slate-400">No location data</span>
 }
 
 function LocationStatusPill({ record }) {
-  const status = record?.clock_out_event?.location_status || record?.clock_in_event?.location_status || record?.location_status
-  const tone = status === 'inside'
-    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-    : status === 'outside'
-      ? 'bg-rose-50 text-rose-700 border-rose-200'
-      : 'bg-slate-100 text-slate-600 border-slate-200'
-  return <span className={`inline-flex px-2 py-0.5 rounded-full border text-xs capitalize ${tone}`}>{status || 'unknown'}</span>
+  const meta = locationStatusMeta(record)
+  return (
+    <span className={`inline-flex px-2 py-0.5 rounded-full border text-xs ${meta.tone}`}>
+      {meta.label}
+    </span>
+  )
 }
 
 function StatusPill({ status }) {
@@ -1250,7 +1247,7 @@ function DeviceBindingsTab({ setNotice }) {
     <div className="max-w-3xl space-y-5">
       <div className="flex flex-wrap items-end gap-3 justify-between">
         <div>
-          <p className="text-sm text-slate-500">Each QR attendance terminal is bound to one employee per day. Another employee on the same device is blocked, including spoofed requests.</p>
+          <p className="text-sm text-slate-500">Each device fingerprint is bound to one employee per calendar day (Africa/Lagos attendance day). Another employee on the same device is blocked, including spoofed requests.</p>
         </div>
         <div className="flex items-end gap-2">
           <div>
@@ -1275,7 +1272,7 @@ function DeviceBindingsTab({ setNotice }) {
               <h3 className="font-semibold text-slate-900">Device → employee bindings</h3>
             </div>
             {!bindings || bindings.length === 0 ? (
-              <EmptyState title="No bindings" description="No QR terminal clock-ins on this date yet." />
+              <EmptyState title="No bindings" description="No device clock-ins on this date yet." />
             ) : (
               <div className="overflow-x-auto -mx-6 px-6">
                 <table className="w-full text-sm">
@@ -1283,9 +1280,11 @@ function DeviceBindingsTab({ setNotice }) {
                     <tr className="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
                       <th className="py-2 pr-3 font-medium">Device ref</th>
                       <th className="py-2 pr-3 font-medium">Employee</th>
-                      <th className="py-2 pr-3 font-medium">Terminal</th>
+                      <th className="py-2 pr-3 font-medium">Attendance date</th>
                       <th className="py-2 pr-3 font-medium">First used</th>
                       <th className="py-2 pr-3 font-medium">Last seen</th>
+                      <th className="py-2 pr-3 font-medium">Status</th>
+                      <th className="py-2 pr-3 font-medium">Last terminal used</th>
                       <th className="py-2 font-medium">Action</th>
                     </tr>
                   </thead>
@@ -1297,9 +1296,15 @@ function DeviceBindingsTab({ setNotice }) {
                           <p className="font-medium text-slate-800">{b.employee_full_name || '—'}</p>
                           <p className="text-xs text-slate-400">{b.employee_number || ''}</p>
                         </td>
-                        <td className="py-3 pr-3 text-xs text-slate-500">{b.terminal_name || '—'}</td>
+                        <td className="py-3 pr-3 text-xs text-slate-500">{b.binding_date || b.attendance_date || '—'}</td>
                         <td className="py-3 pr-3 text-xs text-slate-500">{b.first_used_at ? new Date(b.first_used_at).toLocaleString() : '—'}</td>
                         <td className="py-3 pr-3 text-xs text-slate-500">{b.last_seen_at ? new Date(b.last_seen_at).toLocaleString() : '—'}</td>
+                        <td className="py-3 pr-3">
+                          <span className="inline-flex px-2 py-0.5 rounded-full border text-xs bg-emerald-50 text-emerald-700 border-emerald-200">
+                            {b.status || 'Active'}
+                          </span>
+                        </td>
+                        <td className="py-3 pr-3 text-xs text-slate-500">{b.last_terminal_name || b.terminal_name || '—'}</td>
                         <td className="py-3">
                           <button onClick={() => clear(b)} disabled={busyHash === b.device_fingerprint_hash}
                             className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-rose-200 text-rose-600 text-xs font-medium hover:bg-rose-50 disabled:opacity-50">

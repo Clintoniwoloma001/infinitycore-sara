@@ -8,7 +8,7 @@ import { LoadingState, EmptyState } from '../components/PageStates'
 import ClockCard from '../components/attendance/ClockCard'
 import TrendChart from '../components/attendance/TrendChart'
 import SaraBriefing from '../components/attendance/SaraBriefing'
-import { locationLabel } from '../utils/attendanceLocation'
+import { locationLabel, locationStatusMeta } from '../utils/attendanceLocation'
 
 const FILTERS = [
   { key: 'today', label: 'Today' },
@@ -550,7 +550,7 @@ export default function Attendance() {
                   <td className="px-5 py-3"><StatusPill status={r.status} /></td>
                    <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
                    <td className="px-5 py-3 text-slate-600">{locationLabel(r) || '—'}</td>
-                   <td className="px-5 py-3 text-slate-600 capitalize">{r.clock_out_event?.location_status || r.clock_in_event?.location_status || r.location_status || 'unknown'}</td>
+                   <td className="px-5 py-3"><span className={`inline-flex px-2 py-0.5 rounded-full border text-xs ${locationStatusMeta(r).tone}`}>{locationStatusMeta(r).label}</span></td>
                 </tr>
               ))}
             </tbody>

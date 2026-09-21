@@ -460,3 +460,11 @@ entrypoint = "./functions/bankone-health/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/bankone-test-connection/index.ts"
+
+[functions.bankone-name-enquiry]
+enabled = true
+# The platform rejects unauthenticated requests before the function runs.
+# In-function JWT + role checks still apply on top of this.
+verify_jwt = true
+import_map = "./functions/bankone-name-enquiry/deno.json"
+entrypoint = "./functions/bankone-name-enquiry/index.ts"

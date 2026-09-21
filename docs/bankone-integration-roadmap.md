@@ -41,7 +41,7 @@ below follows the public Channels API reference).
 | 1 | `POST /thirdpartyapiservice/apiservice/CoreTransactions/TransactionStatusQuery` | Query transaction status by reference | Qore token in JSON body `Token` | `RetrievalReference` (required), `TransactionDate` (YYYY-MM-DD) (required), `TransactionType`, `Amount` | ✅ Edge function `bankone-transaction-status` (this PR) |
 | 2 | `POST /thirdpartyapiservice/apiservice/CoreTransactions/InternalTransactions` | Open / initiate an internal transaction | Qore token | account, amount, debit/credit legs | ⬜ Identified; not implemented (needs business flow + sample body) |
 | 3 | `POST /thirdpartyapiservice/apiservice/AccountEnquiry/GetAccountBalance` | Account balance enquiry | Qore token | account number | ⬜ Identified (phase8 schema); not implemented |
-| 4 | `POST /thirdpartyapiservice/apiservice/AccountEnquiry/GetAccountData` | Account detail / name enquiry | Qore token | account number | ⬜ Identified (phase8 schema); not implemented |
+| 4 | `POST /thirdpartyapiservice/apiservice/AccountEnquiry/GetAccountData` | Account detail / name enquiry | Qore token | account number + bank code | ✅ Edge function `bankone-name-enquiry` (payroll bank linking) |
 | 5 | `POST /thirdpartyapiservice/apiservice/CoreTransactions/Transactions` | Transactions export by date range | Qore token | account, start/end date | ⬜ Identified; not implemented |
 
 ### Implemented — transaction status (Endpoints 1)
@@ -58,6 +58,22 @@ Edge function: `supabase/functions/bankone-transaction-status/index.ts`
   Provider HTTP status codes are preserved (200/400/401/403/404/408/429/5xx);
   network failures map to 502 and timeouts map to 504. Provider error details
   are surfaced only after recursive secret redaction.
+
+### Implemented — account name enquiry (Endpoint 4)
+
+Edge function: `supabase/functions/bankone-name-enquiry/index.ts`
+
+- Request (from InfinityCore): `{ AccountNumber, BankCode, BankName? }` (10-digit NUBAN
+  + bank code). The function merges `Token` server-side and POSTs to the documented URL.
+- The response is normalizer-tolerant: `extractAccountName`/`extractAccountDetails`
+  recursively search the Qore envelope variants for the account name and account fields,
+  so a provider shape change does not require an endpoint change.
+- Returns a token-free envelope (`accountName`, `accountNumber`, `bankName`, `bankCode`,
+  `accountType`, `currency`, `accountStatus`, provider HTTP status, masked request).
+- Consumer: `src/components/payroll/BankOneLinkModal.jsx` (Payroll → Payroll Master →
+  **Link Bank Account**) resolves the salary account holder name, then saves the verified
+  details onto the employee via `update_employee_hr_fields`. The lookup must succeed before
+  linking — nothing is auto-saved from the provider response.
 
 ### Implemented — integration health (no provider call)
 
@@ -83,7 +99,7 @@ provider attempt, the provider state is `not_tested`.
 > `supabase/functions/.env.local` (local dev) and the Supabase project's
 > secret store — never in the repository or the client bundle.
 
-Local serving: `supabase functions serve bankone-transaction-status bankone-health`.
+Local serving: `supabase functions serve bankone-transaction-status bankone-health bankone-name-enquiry`.
 
 ## Database
 

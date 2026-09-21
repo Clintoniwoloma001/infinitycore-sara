@@ -2,12 +2,12 @@ import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { formatDate } from '../lib/utils'
-import { Briefcase, Plus, Search, Loader2, Copy, ExternalLink, Send, Archive, RotateCcw, Users, MapPin, CheckCircle2, XCircle } from 'lucide-react'
+import { Briefcase, Plus, Search, Loader2, Copy, ExternalLink, Send, Archive, RotateCcw, Users, MapPin, CheckCircle2, XCircle, Pencil, Trash2 } from 'lucide-react'
 import { StatusBadge } from '../lib/utils'
 import { screeningService } from '../services/screeningService'
 import { QRCodeCanvas } from 'qrcode.react'
 
-const STATUS_COLOR = { draft: 'amber', published: 'emerald', closed: 'slate' }
+const STATUS_COLOR = { draft: 'amber', published: 'emerald', closed: 'slate', archived: 'violet' }
 
 const EMPTY_FORM = {
   job_title: '',
@@ -55,6 +55,7 @@ export default function HRJobs() {
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
+  const [editingJob, setEditingJob] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
   const [formData, setFormData] = useState(EMPTY_FORM)
@@ -141,6 +142,83 @@ export default function HRJobs() {
     }
   }
 
+  const archiveJob = async (job) => {
+    try {
+      setFormError('')
+      await run(job.id, { status: 'archived', archived_at: new Date().toISOString(), closed_at: null })
+      setFormSuccess(`"${job.job_title}" archived.`)
+      setTimeout(() => setFormSuccess(''), 4000)
+    } catch (e) {
+      setFormError(e?.message || 'Failed to archive job.')
+    }
+  }
+
+  const restoreJob = async (job) => {
+    try {
+      setFormError('')
+      await run(job.id, { status: 'draft', archived_at: null, closed_at: null })
+      setFormSuccess(`"${job.job_title}" restored from archive.`)
+      setTimeout(() => setFormSuccess(''), 4000)
+    } catch (e) {
+      setFormError(e?.message || 'Failed to restore job.')
+    }
+  }
+
+  const deleteJob = async (job) => {
+    if (!window.confirm(`Delete "${job.job_title}"? This permanently removes the posting. Existing candidate applications keep their records but lose the job link. This cannot be undone.`)) return
+    setBusyId(job.id)
+    const { error } = await supabase.from('hr_jobs').delete().eq('id', job.id)
+    setBusyId('')
+    if (error) { setFormError(error?.message || 'Failed to delete job posting.'); return }
+    setFormSuccess(`"${job.job_title}" deleted.`)
+    setTimeout(() => setFormSuccess(''), 4000)
+    await load()
+  }
+
+  const jobToForm = (job) => {
+    const rc = job.recruitment_criteria || {}
+    const w = rc.weights || {}
+    return {
+      job_title: job.job_title || '',
+      department: job.department || '',
+      designation: job.designation || '',
+      branch: job.branch || '',
+      location: job.location || '',
+      employment_type: job.employment_type || 'full_time',
+      openings: job.openings ?? 1,
+      experience_years: job.experience_years ?? 0,
+      salary_min: job.salary_min ?? '',
+      salary_max: job.salary_max ?? '',
+      salary_currency: job.salary_currency || 'NGN',
+      description: job.description || '',
+      responsibilities: job.responsibilities || '',
+      requirements: job.requirements || '',
+      qualifications: job.qualifications || '',
+      benefits: job.benefits || '',
+      application_deadline: job.application_deadline || '',
+      assessment_required: job.assessment_required ?? false,
+      interview_required: job.interview_required !== false,
+      ai_screening_enabled: job.ai_screening_enabled !== false,
+      screening_min_score: job.screening_min_score ?? 60,
+      required_skills: (job.required_skills || []).join(', '),
+      preferred_skills: (job.preferred_skills || []).join(', '),
+      required_qualifications: (rc.required_qualifications || []).join(', '),
+      required_certifications: (rc.required_certifications || []).join(', '),
+      criteria_notes: rc.criteria_notes || '',
+      weight_cv: w.cv_relevance ?? 30,
+      weight_skills: w.technical_skills ?? 25,
+      weight_assessment: w.assessment_score ?? 25,
+      weight_interview: w.interview_score ?? 20,
+    }
+  }
+
+  const startEdit = (job) => {
+    setEditingJob(job)
+    setFormData(jobToForm(job))
+    setFormError('')
+    setShowForm(true)
+  }
+
   const jobUrl = (job) => (job.public_token
     ? `${window.location.origin}${window.location.pathname}#/careers/jobs/${job.public_token}`
     : null)
@@ -171,69 +249,82 @@ export default function HRJobs() {
     const weightTotal = Number(formData.weight_cv || 0) + Number(formData.weight_skills || 0) + Number(formData.weight_assessment || 0) + Number(formData.weight_interview || 0)
     if (weightTotal !== 100) { setFormError(`SARA match criteria weights must total 100 (currently ${weightTotal}).`); return }
 
+    const requiredSkills = (formData.required_skills || '').split(',').map((s) => s.trim()).filter(Boolean)
+    const preferredSkills = (formData.preferred_skills || '').split(',').map((s) => s.trim()).filter(Boolean)
+    const requiredQualifications = (formData.required_qualifications || '').split(',').map((s) => s.trim()).filter(Boolean)
+    const requiredCertifications = (formData.required_certifications || '').split(',').map((s) => s.trim()).filter(Boolean)
+    const recruitmentCriteria = {
+      weights: {
+        cv_relevance: Number(formData.weight_cv || 0),
+        technical_skills: Number(formData.weight_skills || 0),
+        assessment_score: Number(formData.weight_assessment || 0),
+        interview_score: Number(formData.weight_interview || 0),
+      },
+      required_qualifications: requiredQualifications,
+      required_certifications: requiredCertifications,
+      experience_threshold: expYears || 0,
+      criteria_notes: formData.criteria_notes || null,
+    }
+
+    const payload = {
+      job_title: formData.job_title.trim(),
+      department: formData.department.trim(),
+      designation: formData.designation?.trim() || null,
+      branch: formData.branch?.trim() || null,
+      location: formData.location?.trim() || null,
+      employment_type: formData.employment_type,
+      openings: Math.max(1, parseInt(formData.openings || 1)),
+      experience_years: expYears,
+      salary_min: salaryMin,
+      salary_max: salaryMax,
+      salary_currency: formData.salary_currency || 'NGN',
+      description: formData.description.trim(),
+      responsibilities: formData.responsibilities?.trim() || null,
+      requirements: formData.requirements?.trim() || null,
+      qualifications: formData.qualifications?.trim() || null,
+      benefits: formData.benefits?.trim() || null,
+      application_deadline: formData.application_deadline || null,
+      assessment_required: !!formData.assessment_required,
+      interview_required: formData.interview_required !== false,
+      ai_screening_enabled: formData.ai_screening_enabled !== false,
+      screening_min_score: Number(formData.screening_min_score || 60),
+      required_skills: requiredSkills,
+      preferred_skills: preferredSkills,
+      recruitment_criteria: recruitmentCriteria,
+    }
+
     setSubmitting(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setFormError('Authentication required. Please sign in again.'); return }
 
-      const { data, error } = await supabase
-        .from('hr_jobs')
-        .insert([{
-          job_title: formData.job_title.trim(),
-          department: formData.department.trim(),
-          designation: formData.designation?.trim() || null,
-          branch: formData.branch?.trim() || null,
-          location: formData.location?.trim() || null,
-          employment_type: formData.employment_type,
-          openings: Math.max(1, parseInt(formData.openings || 1)),
-          experience_years: expYears,
-          salary_min: salaryMin,
-          salary_max: salaryMax,
-          salary_currency: formData.salary_currency || 'NGN',
-          description: formData.description.trim(),
-          responsibilities: formData.responsibilities?.trim() || null,
-          requirements: formData.requirements?.trim() || null,
-          qualifications: formData.qualifications?.trim() || null,
-          benefits: formData.benefits?.trim() || null,
-          application_deadline: formData.application_deadline || null,
-          assessment_required: !!formData.assessment_required,
-          interview_required: formData.interview_required !== false,
-          ai_screening_enabled: formData.ai_screening_enabled !== false,
-          screening_min_score: Number(formData.screening_min_score || 60),
-           required_skills: (formData.required_skills || '').split(',').map((s) => s.trim()).filter(Boolean),
-           preferred_skills: (formData.preferred_skills || '').split(',').map((s) => s.trim()).filter(Boolean),
-           recruitment_criteria: {
-             weights: {
-               cv_relevance: Number(formData.weight_cv || 0),
-               technical_skills: Number(formData.weight_skills || 0),
-               assessment_score: Number(formData.weight_assessment || 0),
-               interview_score: Number(formData.weight_interview || 0),
-             },
-             required_qualifications: (formData.required_qualifications || '').split(',').map((s) => s.trim()).filter(Boolean),
-             required_certifications: (formData.required_certifications || '').split(',').map((s) => s.trim()).filter(Boolean),
-             experience_threshold: expYears || 0,
-             criteria_notes: formData.criteria_notes || null,
-           },
-           created_by: user.id,
-          status: 'draft',
-        }])
-        .select()
+      let data
+      if (editingJob) {
+        const { data: updated, error } = await supabase
+          .from('hr_jobs')
+          .update({ ...payload, updated_at: new Date().toISOString() })
+          .eq('id', editingJob.id)
+          .select()
+        if (error) throw error
+        data = updated
+      } else {
+        const { data: inserted, error } = await supabase
+          .from('hr_jobs')
+          .insert([{ ...payload, created_by: user.id, status: 'draft' }])
+          .select()
+        if (error) throw error
+        data = inserted
+      }
 
-      if (error) throw error
       let criteriaWarning = ''
       try {
         await screeningService.saveConfig(data?.[0]?.id, {
-          weights: {
-            cv_relevance: Number(formData.weight_cv || 0),
-            technical_skills: Number(formData.weight_skills || 0),
-            assessment_score: Number(formData.weight_assessment || 0),
-            interview_score: Number(formData.weight_interview || 0),
-          },
+          weights: recruitmentCriteria.weights,
           min_overall: Number(formData.screening_min_score || 60),
-          required_qualifications: (formData.required_qualifications || '').split(',').map((s) => s.trim()).filter(Boolean),
-          required_certifications: (formData.required_certifications || '').split(',').map((s) => s.trim()).filter(Boolean),
-          required_skills: (formData.required_skills || '').split(',').map((s) => s.trim()).filter(Boolean),
-          preferred_skills: (formData.preferred_skills || '').split(',').map((s) => s.trim()).filter(Boolean),
+          required_qualifications: requiredQualifications,
+          required_certifications: requiredCertifications,
+          required_skills: requiredSkills,
+          preferred_skills: preferredSkills,
           experience_threshold: expYears || 0,
           criteria_notes: formData.criteria_notes || null,
         })
@@ -241,13 +332,14 @@ export default function HRJobs() {
         criteriaWarning = ` Criteria could not be saved: ${criteriaError?.message || 'check your HR permissions'}`
       }
       setFormData(EMPTY_FORM)
+      setEditingJob(null)
       setShowForm(false)
-      setFormSuccess(`Job posting saved as draft. Publish it to open applications.${criteriaWarning}`)
+      setFormSuccess(`${editingJob ? 'Job posting updated.' : 'Job posting saved as draft. Publish it to open applications.'}${criteriaWarning}`)
       setTimeout(() => setFormSuccess(''), 4000)
       await load()
     } catch (err) {
-      const msg = err?.message || 'Failed to create job posting. Please try again.'
-      setFormError(msg.includes('policy') ? 'Not authorized to create job postings. Contact your administrator.' : msg)
+      const msg = err?.message || (editingJob ? 'Failed to update job posting. Please try again.' : 'Failed to create job posting. Please try again.')
+      setFormError(msg.includes('policy') ? 'Not authorized to manage job postings. Contact your administrator.' : msg)
     } finally {
       setSubmitting(false)
     }
@@ -282,7 +374,7 @@ export default function HRJobs() {
           <Link to="/applications" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
             <Users className="w-4 h-4" /> Applications
           </Link>
-          <button onClick={() => { setShowForm(true); setFormError(''); setFormData(EMPTY_FORM) }} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+          <button onClick={() => { setEditingJob(null); setShowForm(true); setFormError(''); setFormData(EMPTY_FORM) }} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
             <Plus className="w-4 h-4" /> New Job
           </button>
         </div>
@@ -298,6 +390,7 @@ export default function HRJobs() {
           <option value="draft">Draft</option>
           <option value="published">Published</option>
           <option value="closed">Closed</option>
+          <option value="archived">Archived</option>
         </select>
       </div>
 
@@ -359,7 +452,7 @@ export default function HRJobs() {
                   {job.status === 'published' && (
                     <>
                       <button onClick={() => closeJob(job)} disabled={busyId === job.id} className="flex-1 min-w-28 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 border border-slate-300 hover:bg-slate-50 rounded-lg disabled:opacity-60">
-                        <Archive className="w-3.5 h-3.5" /> Close
+                        <XCircle className="w-3.5 h-3.5" /> Stop applications
                       </button>
                       <button onClick={() => unpublish(job)} disabled={busyId === job.id} className="flex-1 min-w-28 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 border border-slate-300 hover:bg-slate-50 rounded-lg disabled:opacity-60">
                         <Briefcase className="w-3.5 h-3.5" /> Unpublish
@@ -371,6 +464,22 @@ export default function HRJobs() {
                       {busyId === job.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />} Reopen
                     </button>
                   )}
+                  {job.status === 'archived' && (
+                    <button onClick={() => restoreJob(job)} disabled={busyId === job.id} className="flex-1 min-w-28 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-[#009944] hover:bg-[#007a36] rounded-lg disabled:opacity-60">
+                      {busyId === job.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />} Restore
+                    </button>
+                  )}
+                  <button onClick={() => startEdit(job)} className="flex-1 min-w-28 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 border border-slate-300 hover:bg-slate-50 rounded-lg">
+                    <Pencil className="w-3.5 h-3.5" /> Edit
+                  </button>
+                  {job.status !== 'archived' && (
+                    <button onClick={() => archiveJob(job)} disabled={busyId === job.id} className="flex-1 min-w-28 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 border border-slate-300 hover:bg-slate-50 rounded-lg disabled:opacity-60">
+                      <Archive className="w-3.5 h-3.5" /> Archive
+                    </button>
+                  )}
+                  <button onClick={() => deleteJob(job)} disabled={busyId === job.id} className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-rose-600 border border-rose-200 hover:bg-rose-50 rounded-lg disabled:opacity-60">
+                    <Trash2 className="w-3.5 h-3.5" /> Delete
+                  </button>
                   {url && (
                     <>
                       <button onClick={() => window.open(url, '_blank', 'noopener,noreferrer')} className="flex-1 min-w-28 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 border border-slate-300 hover:bg-slate-50 rounded-lg">
@@ -394,10 +503,10 @@ export default function HRJobs() {
           <div className="bg-white rounded-xl w-full max-w-3xl my-8 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 sticky top-0 bg-white rounded-t-xl">
               <div>
-                <h3 className="text-lg font-semibold text-slate-900">New Job Posting</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Saved as a draft. Publish to open the advert to the public.</p>
+                <h3 className="text-lg font-semibold text-slate-900">{editingJob ? 'Edit Job Posting' : 'New Job Posting'}</h3>
+                <p className="text-xs text-slate-500 mt-0.5">{editingJob ? `Editing "${editingJob.job_title}" — changes are saved immediately.` : 'Saved as a draft. Publish to open the advert to the public.'}</p>
               </div>
-              <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600"><XCircle className="w-5 h-5" /></button>
+              <button onClick={() => { setShowForm(false); setEditingJob(null) }} className="text-slate-400 hover:text-slate-600"><XCircle className="w-5 h-5" /></button>
             </div>
 
             <form onSubmit={handleSubmit} className="px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -533,9 +642,9 @@ export default function HRJobs() {
               {formError && <div className="sm:col-span-2 text-sm text-rose-600">{formError}</div>}
 
               <div className="sm:col-span-2 flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
-                <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+                <button type="button" onClick={() => { setShowForm(false); setEditingJob(null) }} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
                 <button type="submit" disabled={submitting} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
-                  {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Save as Draft
+                  {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} {editingJob ? 'Save Changes' : 'Save as Draft'}
                 </button>
               </div>
             </form>

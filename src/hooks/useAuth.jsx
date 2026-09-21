@@ -44,7 +44,11 @@ export function AuthProvider({ children }) {
       console.error('Error fetching profile:', e)
       setProfile(null)
       setAccessModules([])
-      setProfileError(e?.message || 'Profile unavailable')
+      setProfileError(
+        e?.code === 'PGRST116'
+          ? 'Your profile record could not be found. Please contact an administrator.'
+          : (e?.message || 'Profile unavailable')
+      )
       return null
     }
   }
@@ -216,7 +220,7 @@ export function AuthProvider({ children }) {
     name: profile?.full_name || user?.email || 'User',
     email: user?.email,
     isAdmin: actualRole === ROLES.ADMIN || actualRole === ROLES.SUPER_ADMIN,
-    isManager: [ROLES.BRANCH_MANAGER, ROLES.OPERATIONS_MANAGER].includes(actualRole),
+    isManager: [ROLES.BRANCH_MANAGER, ROLES.AREA_MANAGER, ROLES.HEAD_OF_BUSINESS, ROLES.HEAD_OF_OPERATIONS, ROLES.HEAD_OF_E_BUSINESS, ROLES.FINANCIAL_CONTROLLER, ROLES.HEAD_OF_RISK_COMPLIANCE, ROLES.HEAD_OF_LEGAL, ROLES.HEAD_OF_AUDIT].includes(actualRole),
     isHR: [ROLES.HR_MANAGER, ROLES.HR_OFFICER].includes(actualRole),
     isCustomer: actualRole === ROLES.CUSTOMER,
     isStaff: actualRole === ROLES.STAFF,

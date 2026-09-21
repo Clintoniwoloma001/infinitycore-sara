@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { X, MapPin, CheckCircle2, AlertTriangle, Clock, Crosshair, Gauge } from 'lucide-react'
 import { attendanceService } from '../../services/attendanceService'
 import { LoadingState, ErrorState } from '../PageStates'
+import { clockingLocationName, locationDistanceLabel, locationStatusMeta } from '../../utils/attendanceLocation'
 
 export default function LocationAuditModal({ record, onClose }) {
   const [audit, setAudit] = useState([])
@@ -28,6 +29,7 @@ export default function LocationAuditModal({ record, onClose }) {
 
   const geoInside = record.geofence_status === 'inside'
   const geoOutside = record.geofence_status === 'outside'
+  const statusMeta = locationStatusMeta(record)
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
@@ -49,11 +51,13 @@ export default function LocationAuditModal({ record, onClose }) {
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-1.5"><MapPin className="w-4 h-4 text-slate-400" /> Attendance Location Summary</p>
                 <div className="space-y-2 text-sm">
-                  <AuditRow icon={MapPin} label="Assigned Branch" value={record.employees?.branches?.branch_name || record.branches?.branch_name || record.employees?.branch || '—'} />
-                  <AuditRow icon={MapPin} label="Clock-in Location" value={record.clock_in_event?.metadata?.actual_location_name || '—'} />
-                  <AuditRow icon={MapPin} label="Clock-out Location" value={record.clock_out_event?.metadata?.actual_location_name || '—'} />
-                  <AuditRow icon={MapPin} label="Location Difference" value={locationDifferenceLabel(record)} />
-                  <AuditRow icon={CheckCircle2} label="Location Status" value={record.clock_out_event?.location_status || record.clock_in_event?.location_status || record.location_status || 'unknown'} />
+                  <AuditRow icon={MapPin} label="Assigned Branch" value={record.employees?.branches?.branch_name || record.branches?.branch_name || record.employees?.branch || 'No assigned branch'} />
+                  <AuditRow icon={MapPin} label="Clock-in Location" value={clockingLocationName(record, 'clock_in') || 'No location data'} />
+                  <AuditRow icon={MapPin} label="Clock-out Location" value={record.clock_out ? (clockingLocationName(record, 'clock_out') || 'No location data') : '—'} />
+                  <AuditRow icon={MapPin} label="Location Difference" value={locationDistanceLabel(record) || 'No location data'} />
+                  <AuditRow icon={CheckCircle2}
+                    iconColor={statusMeta.code === 'within' ? 'text-emerald-600' : statusMeta.code === 'outside' ? 'text-rose-600' : 'text-slate-400'}
+                    label="Location Status" value={statusMeta.label} />
                 </div>
               </div>
               {/* Clock-in verification */}
@@ -65,7 +69,7 @@ export default function LocationAuditModal({ record, onClose }) {
                   <AuditRow icon={geoInside ? CheckCircle2 : geoOutside ? AlertTriangle : MapPin}
                     iconColor={geoInside ? 'text-emerald-600' : geoOutside ? 'text-rose-600' : 'text-slate-400'}
                     label="Geofence Result"
-                    value={record.geofence_status ? record.geofence_status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'No geofence'} />
+                    value={statusMeta.label} />
                   {record.clock_in_distance != null && (
                     <AuditRow icon={MapPin} label="Distance from Branch" value={`${Math.round(record.clock_in_distance)}m`} />
                   )}
@@ -150,11 +154,4 @@ function AuditRow({ icon: Icon, iconColor = 'text-slate-400', label, value }) {
       <span className="font-medium text-slate-800">{value}</span>
     </div>
   )
-}
-
-function locationDifferenceLabel(record) {
-  const value = record.clock_out_event?.metadata?.location_difference ?? record.clock_in_event?.metadata?.location_difference
-  if (value === true || value === 'true') return 'Different from assigned branch'
-  if (value === false || value === 'false') return 'Assigned branch'
-  return 'Not available'
 }

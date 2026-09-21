@@ -31,7 +31,7 @@ const WRITE_INTENTS = ['APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE']
 const ALL_INTENTS = [...new Set([...READ_INTENTS, ...WRITE_INTENTS, 'HELP', 'UNKNOWN'])]
 
 const WRITE_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'hr_manager', 'hr_officer']
-const LOAN_READ_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'operations_manager', 'loan_officer', 'relationship_manager']
+const LOAN_READ_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'head_of_operations', 'loan_officer', 'relationship_manager']
 
 // Employee termination is STRICTLY restricted to these two InfinityCore
 // roles — server-enforced here for NLU scope AND by the terminate_employee

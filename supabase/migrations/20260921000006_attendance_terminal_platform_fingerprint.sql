@@ -32,7 +32,29 @@
 --   * Blocks are audited as ATTENDANCE_DEVICE_BINDING_BLOCKED with the same
 --     HR-facing copy, `device_binding_blocked=true` in the response, and
 --     `scope: 'browser_fingerprint' | 'terminal_device_day'`.
+--
+-- SUPERSEDED: `20260921000008_attendance_device_day_binding_and_email_clockin.sql`
+-- redefines `ingest_attendance_event` completely (device + calendar-day binding,
+-- terminal removed from the conflict axis, email identifier support). The ONLY
+-- object this file creates is that function, so running it AFTER 0008 would
+-- silently revert the kiosk ingest path to the old terminal-day policy and the
+-- old error copy. The guard below aborts if 0008 has already been applied.
 -- ============================================================================
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'attendance_device_bindings'
+      and column_name = 'last_terminal_id'
+  ) then
+    raise exception using
+      message = '20260921000006 is SUPERSEDED by 20260921000008 and must not be re-run',
+      detail = 'attendance_device_bindings.last_terminal_id exists, so 20260921000008 has been applied. Running this file now would revert ingest_attendance_event to the old terminal-day policy and break device+calendar-day binding.',
+      hint = 'Do NOT run 20260921000006. The kiosk ingest path is fully defined by 20260921000008.';
+  end if;
+end $$;
 
 create or replace function public.ingest_attendance_event(
   p_device_id uuid,
