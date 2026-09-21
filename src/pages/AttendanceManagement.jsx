@@ -9,6 +9,7 @@ import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import SaraBriefing from '../components/attendance/SaraBriefing'
 import TrendChart from '../components/attendance/TrendChart'
 import LocationAuditModal from '../components/attendance/LocationAuditModal'
+import { locationLabel, recordCoords } from '../utils/attendanceLocation'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -383,15 +384,12 @@ function eventMetadata(record) {
 }
 
 function locationName(record) {
-  const inName = record?.clock_in_event?.metadata?.actual_location_name
-  const outName = record?.clock_out_event?.metadata?.actual_location_name
-  if (inName && outName && inName !== outName) return `In: ${inName} / Out: ${outName}`
-  return inName || outName || null
+  return locationLabel(record)
 }
 
 function geofenceName(record) {
   const metadata = eventMetadata(record)
-  return metadata.actual_location_name || (record?.geofence_status ? record.geofence_status.replace(/_/g, ' ') : null)
+  return locationLabel(record) || metadata.actual_location_name || (record?.geofence_status ? record.geofence_status.replace(/_/g, ' ') : null)
 }
 
 function locationDifference(record) {
@@ -399,7 +397,7 @@ function locationDifference(record) {
   const differs = record?.clock_in_event?.metadata?.location_difference || record?.clock_out_event?.metadata?.location_difference
   if (differs === true || differs === 'true') return <span className="text-amber-700">Different from assigned branch</span>
   if (differs === false || differs === 'false') return <span className="text-emerald-700">Assigned branch</span>
-  return <span className="text-slate-400">{metadata.actual_location_name ? 'Recorded' : '—'}</span>
+  return <span className="text-slate-400">{metadata.actual_location_name || recordCoords(record) ? 'Recorded' : '—'}</span>
 }
 
 function LocationStatusPill({ record }) {

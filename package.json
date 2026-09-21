@@ -31,7 +31,8 @@
     "test:termination-auth": "node scripts/verify-termination-auth.mjs",
     "test:reinvite": "node tests/reinviteReviewModal.test.mjs",
     "test:payroll-compensation": "node tests/payrollCompensation.test.mjs",
-    "test:qr-terminal": "node tests/qrTerminalView.test.mjs"
+    "test:qr-terminal": "node tests/qrTerminalView.test.mjs",
+    "test:web-clock": "node tests/attendanceWebGpsBinding.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

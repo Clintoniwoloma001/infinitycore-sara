@@ -2,6 +2,7 @@ import { supabase } from '../supabaseClient'
 import { logAction } from './supabaseService'
 import { sendInAppNotification } from './notificationService'
 import { calculateWorkedHours, calculateWorkedMinutes } from './attendanceCalculations'
+import { getDeviceFingerprint } from '../utils/deviceFingerprint'
 
 // Kept as a service-level export for the existing attendance views.  The
 // calculation itself lives in attendanceCalculations so it can be tested
@@ -268,6 +269,7 @@ export function normalizeAttendanceError(message) {
   if (msg.startsWith('GEOFENCE_NOT_CONFIGURED:')) return msg.replace('GEOFENCE_NOT_CONFIGURED:', '')
   if (msg.startsWith('LOCATION_REQUIRED:')) return msg.replace('LOCATION_REQUIRED:', '')
   if (msg.startsWith('LOCATION_INVALID:')) return msg.replace('LOCATION_INVALID:', '')
+  if (msg.startsWith('DEVICE_BINDING:')) return msg.replace('DEVICE_BINDING:', '')
   return msg
 }
 
@@ -363,10 +365,12 @@ export const attendanceService = {
     if (!coords || !Number.isFinite(Number(coords.lat)) || !Number.isFinite(Number(coords.lng))) {
       throw new Error('A valid location is required to clock in.')
     }
+    const deviceFingerprint = await getDeviceFingerprint().catch(() => '')
     const { data, error } = await supabase.rpc('clock_in_secure', {
       p_lat: coords?.lat ?? null,
       p_lng: coords?.lng ?? null,
       p_accuracy: coords?.accuracy ?? null,
+      p_device_fingerprint: deviceFingerprint || null,
     })
     if (error) throw new Error(normalizeAttendanceError(error.message))
     logAction({ action: 'ATTENDANCE_CLOCK_IN', entityType: 'AttendanceRecord', entityId: data.attendance_id, details: 'Clock in via geofence RPC' })
@@ -398,11 +402,13 @@ export const attendanceService = {
     if (!coords || !Number.isFinite(Number(coords.lat)) || !Number.isFinite(Number(coords.lng))) {
       throw new Error('A valid location is required to clock out.')
     }
+    const deviceFingerprint = await getDeviceFingerprint().catch(() => '')
     const { data, error } = await supabase.rpc('clock_out_secure', {
       p_attendance_id: attendanceId,
       p_lat: coords?.lat ?? null,
       p_lng: coords?.lng ?? null,
       p_accuracy: coords?.accuracy ?? null,
+      p_device_fingerprint: deviceFingerprint || null,
     })
     if (error) throw new Error(normalizeAttendanceError(error.message))
     logAction({ action: 'ATTENDANCE_CLOCK_OUT', entityType: 'AttendanceRecord', entityId: attendanceId, details: 'Clock out via geofence RPC' })

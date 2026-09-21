@@ -1,6 +1,7 @@
 import { supabase } from '../supabaseClient'
 import { logAction } from './supabaseService'
 import { getPosition } from './attendanceService'
+import { getDeviceFingerprint } from '../utils/deviceFingerprint'
 
 // ------------------------------------------------------------------
 // Attendance Engine Service — geofencing, devices, biometric mapping,
@@ -478,10 +479,12 @@ export const attendanceEngineService = {
   async clockInWithGeofence({ employeeId, lat, lng, geofences, config }) {
     // Keep this legacy entry point on the same server-authoritative path.
     // The RPC resolves the authenticated employee and ignores client time.
+    const deviceFingerprint = await getDeviceFingerprint().catch(() => '')
     const { data, error } = await supabase.rpc('clock_in_secure', {
       p_lat: lat ?? null,
       p_lng: lng ?? null,
       p_accuracy: null,
+      p_device_fingerprint: deviceFingerprint || null,
     })
     if (error) throw error
     logAction({ action: 'ATTENDANCE_CLOCK_IN', entityType: 'AttendanceRecord', entityId: data.attendance_id, details: `Clock in by ${employeeId || 'authenticated employee'}` })

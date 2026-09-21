@@ -8,6 +8,7 @@ import { LoadingState, EmptyState } from '../components/PageStates'
 import ClockCard from '../components/attendance/ClockCard'
 import TrendChart from '../components/attendance/TrendChart'
 import SaraBriefing from '../components/attendance/SaraBriefing'
+import { locationLabel } from '../utils/attendanceLocation'
 
 const FILTERS = [
   { key: 'today', label: 'Today' },
@@ -442,7 +443,7 @@ export default function Attendance() {
                          {r.clock_out ? formatAttendanceTime(r.clock_out, schedule.timezone) : '—'}
                       </td>
                        <td className="px-5 py-3 text-slate-700 tabular-nums">{formatWorkedHours(r)}</td>
-                       <td className="px-5 py-3 text-slate-600">{r.clock_in_event?.metadata?.actual_location_name || r.clock_out_event?.metadata?.actual_location_name || '—'}</td>
+                       <td className="px-5 py-3 text-slate-600">{locationLabel(r) || '—'}</td>
                       <td className="px-5 py-3"><StatusPill status={r.status} /></td>
                       <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
                     </tr>
@@ -548,7 +549,7 @@ export default function Attendance() {
                    <td className="px-5 py-3 text-slate-700 tabular-nums">{formatWorkedHours(r)}</td>
                   <td className="px-5 py-3"><StatusPill status={r.status} /></td>
                    <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
-                   <td className="px-5 py-3 text-slate-600">{r.clock_in_event?.metadata?.actual_location_name || r.clock_out_event?.metadata?.actual_location_name || '—'}</td>
+                   <td className="px-5 py-3 text-slate-600">{locationLabel(r) || '—'}</td>
                    <td className="px-5 py-3 text-slate-600 capitalize">{r.clock_out_event?.location_status || r.clock_in_event?.location_status || r.location_status || 'unknown'}</td>
                 </tr>
               ))}
