@@ -74,9 +74,15 @@ assert.match(service, /p_device_id: deviceId,/)
 assert.match(service, /has_qr=false when the terminal has no live token/)
 assert.ok(service.includes("'id, device_name, device_type, status, active, branch_id, last_seen_at, created_at, updated_at, token_generated_at'"), 'listTerminalDevices exposes token_generated_at')
 
-// Modal resolves the link via the server RPC and only regenerates when genuinely absent.
+// Modal resolves the link via the server RPC (persistent store wins), falls
+// back to the main panel's LIVE in-session token when the store is empty for
+// the SAME device, and never mints a new token on view.
 assert.match(management, /const info = await attendanceService\.getTerminalQrLink\(device\.id\)/)
-assert.match(management, /setQrLink\(info\?\.has_qr && info\.token \? buildTerminalUrl\(info\.token\) : ''\)/)
+assert.match(management, /const storedLink = info\?\.has_qr && info\.token \? buildTerminalUrl\(info\.token\) : ''/)
+assert.match(management, /const liveSessionLink = device\.id === selectedId && terminalLink \? terminalLink : ''/)
+assert.match(management, /setQrLink\(storedLink \|\| liveSessionLink\)/)
+const openQrViewBody = management.split('const openQrView = async')[1]?.split('const modalGenerate = async')[0] || ''
+assert.ok(!openQrViewBody.includes('generateTerminalToken'), 'View QR must never mint a new token')
 assert.ok(!management.includes('linksByDevice'), 'no more session-only link cache')
 assert.ok(!management.includes('ensureQr'), 'no more silent regenerate-on-view path')
 assert.match(management, /This terminal has no current QR link/)

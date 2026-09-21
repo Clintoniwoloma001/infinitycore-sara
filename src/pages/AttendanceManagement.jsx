@@ -874,11 +874,14 @@ function QrTerminalTab({ setNotice }) {
     setQrLoading(true)
     setQrError('')
     setQrLink('')
+    const liveSessionLink = device.id === selectedId && terminalLink ? terminalLink : ''
     try {
       const info = await attendanceService.getTerminalQrLink(device.id)
-      setQrLink(info?.has_qr && info.token ? buildTerminalUrl(info.token) : '')
+      const storedLink = info?.has_qr && info.token ? buildTerminalUrl(info.token) : ''
+      setQrLink(storedLink || liveSessionLink)
     } catch (e) {
-      setQrError(e?.message || 'Could not load this terminal link')
+      if (liveSessionLink) setQrLink(liveSessionLink)
+      else setQrError(e?.message || 'Could not load this terminal link')
     } finally {
       setQrLoading(false)
     }
