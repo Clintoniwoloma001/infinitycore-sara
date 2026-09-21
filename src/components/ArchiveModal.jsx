@@ -7,7 +7,7 @@ const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 
 // Archive confirmation modal. Archive hides the employee from normal
 // active views while preserving ALL history. Restricted server-side to
-// super_admin / hr_manager — the same authorization as termination.
+// super_admin / Head of Human Resources — the same authorization as termination.
 export default function ArchiveModal({ employee, restore = false, onClose, onConfirm, busy, error }) {
   const [reason, setReason] = useState('')
   const ready = (restore || reason.trim().length > 0) && !busy
@@ -29,7 +29,7 @@ export default function ArchiveModal({ employee, restore = false, onClose, onCon
         <div className="px-5 py-4 space-y-4">
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 flex items-start gap-2">
             <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0 text-[#009944]" />
-            Restricted to <span className="font-semibold">super_admin</span> and <span className="font-semibold">hr_manager</span>. This preserves the employee's full record and history.
+            Restricted to <span className="font-semibold">super_admin</span> and <span className="font-semibold">Head of Human Resources</span>. This preserves the employee's full record and history.
           </div>
 
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">

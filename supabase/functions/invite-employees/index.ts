@@ -227,7 +227,7 @@ Deno.serve(async (req) => {
     .eq('id', user.id)
     .single()
   const actorRole = profile?.role || 'customer'
-  if (!['super_admin', 'admin', 'hr_manager'].includes(actorRole)) {
+  if (!['super_admin', 'admin', 'head_of_human_resources'].includes(actorRole)) {
     return json({ error: 'forbidden', message: 'Not authorized to invite employees' }, 403)
   }
 

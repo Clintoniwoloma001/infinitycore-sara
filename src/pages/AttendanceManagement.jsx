@@ -9,7 +9,13 @@ import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import SaraBriefing from '../components/attendance/SaraBriefing'
 import TrendChart from '../components/attendance/TrendChart'
 import LocationAuditModal from '../components/attendance/LocationAuditModal'
-import { locationDistanceLabel, locationLabel, locationStatusMeta } from '../utils/attendanceLocation'
+import {
+  locationLabel,
+  assignedBranchGeofenceText,
+  assignedBranchDistanceLabel,
+  assignedBranchStatusMeta,
+  clockingLocationText,
+} from '../utils/attendanceLocation'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -19,7 +25,7 @@ export default function AttendanceManagement() {
   const [tab, setTab] = useState('records')
   const [notice, setNotice] = useState({ kind: '', text: '' })
 
-  const canManageDeviceBindings = ['super_admin', 'admin', 'hr_manager', 'hr_officer', 'branch_manager'].includes(actorRole)
+  const canManageDeviceBindings = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer', 'branch_manager'].includes(actorRole)
 
   const tabs = [
     { id: 'records', label: 'Attendance Records' },
@@ -301,13 +307,13 @@ function RecordsTab({ setNotice }) {
                       <td className="px-5 py-3 text-slate-600 tabular-nums">{formatWorkedHours(r)}</td>
                       <td className="px-5 py-3"><StatusPill status={r.status} /></td>
                       <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>
-                      <td className="px-5 py-3 text-slate-600">{locationName(r) || '—'}</td>
+                      <td className="px-5 py-3 text-slate-600">{clockingLocationDisplay(r) || <span className="text-slate-400">No location data</span>}</td>
                       <td className="px-5 py-3 text-slate-600">{geofenceName(r) || '—'}</td>
                       <td className="px-5 py-3">{locationDifference(r)}</td>
                       <td className="px-5 py-3"><LocationStatusPill record={r} /></td>
                       <td className="px-5 py-3 text-right">
                         <div className="inline-flex gap-1.5">
-                          {(r.clock_in_lat || r.clock_out_lat || r.geofence_status !== 'no_geofence') && (
+                          {(r.clock_in_lat || r.clock_out_lat || assignedBranchGeofenceText(r)) && (
                             <button onClick={() => setAuditRecord(r)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-slate-300 text-slate-600 text-xs hover:bg-slate-100" title="Location audit">
                               <MapPin className="w-3.5 h-3.5" />
                             </button>
@@ -387,19 +393,25 @@ function locationName(record) {
   return locationLabel(record)
 }
 
+function clockingLocationDisplay(record) {
+  const inCoords = clockingLocationText(record, 'clock_in')
+  const outCoords = clockingLocationText(record, 'clock_out')
+  if (inCoords && outCoords && inCoords !== outCoords) return `In: ${inCoords} / Out: ${outCoords}`
+  return inCoords || outCoords || null
+}
+
 function geofenceName(record) {
-  const metadata = eventMetadata(record)
-  return locationLabel(record) || metadata.actual_location_name || (record?.geofence_status ? record.geofence_status.replace(/_/g, ' ') : null)
+  return assignedBranchGeofenceText(record)
 }
 
 function locationDifference(record) {
-  const distance = locationDistanceLabel(record)
+  const distance = assignedBranchDistanceLabel(record, 'clock_in')
   if (distance) return <span className="text-slate-600">{distance}</span>
   return <span className="text-slate-400">No location data</span>
 }
 
 function LocationStatusPill({ record }) {
-  const meta = locationStatusMeta(record)
+  const meta = assignedBranchStatusMeta(record, 'clock_in')
   return (
     <span className={`inline-flex px-2 py-0.5 rounded-full border text-xs ${meta.tone}`}>
       {meta.label}

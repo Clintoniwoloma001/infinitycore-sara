@@ -197,7 +197,18 @@ function SelfDashboard({ snapshot, name }) {
         <Section title="Leave" action={<Link to="/leave-requests" className="text-xs font-medium text-[#009944] hover:underline">Manage leave</Link>}>
           {balances.length ? (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {balances.slice(0, 4).map((balance) => <div key={balance.leave_type} className="rounded-lg bg-slate-50 p-3"><p className="truncate text-xs capitalize text-slate-500">{statusLabel(balance.leave_type)}</p><p className="mt-1 text-lg font-semibold text-slate-800">{Number(balance.entitled_days || 0) - Number(balance.used_days || 0)}</p><p className="text-xs text-slate-400">remaining</p></div>)}
+              {balances.slice(0, 4).map((balance) => {
+                const entitled = Number(balance.effective_entitlement ?? balance.entitled_days ?? 0)
+                const used = Number(balance.used_days || 0)
+                const pending = Number(balance.pending_days || 0)
+                return (
+                  <div key={balance.leave_type} className="rounded-lg bg-slate-50 p-3">
+                    <p className="truncate text-xs capitalize text-slate-500">{statusLabel(balance.leave_type)}</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-800">{entitled - used - pending}</p>
+                    <p className="text-xs text-slate-400">remaining</p>
+                  </div>
+                )
+              })}
             </div>
           ) : <EmptyState title="Leave balance not available" description="No balance record is available for the current year." />}
           {leave.requests?.[0] && <p className="mt-4 text-xs text-slate-500">Recent request: <span className="font-medium capitalize text-slate-700">{statusLabel(leave.requests[0].status)}</span> · {formatDate(leave.requests[0].start_date)}</p>}

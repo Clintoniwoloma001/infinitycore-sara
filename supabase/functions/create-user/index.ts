@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
 
   const { data: actor } = await userClient.from('profiles').select('role, full_name').eq('id', user.id).single()
   const actorRole = actor?.role || 'customer'
-  if (!['super_admin', 'admin', 'hr_manager'].includes(actorRole)) {
+  if (!['super_admin', 'admin', 'head_of_human_resources'].includes(actorRole)) {
     return json({ error: 'forbidden', message: 'Not authorized to create users' }, 403)
   }
 

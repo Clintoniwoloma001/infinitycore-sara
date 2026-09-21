@@ -28,7 +28,7 @@ export default function Employees() {
   const canAdd = isAdmin || isHR || hasPermission('hr.employee.update')
 
   // The terminate/archive/delete actions are shown ONLY to super_admin and
-  // hr_manager (UX). The backend RPC still independently re-verifies
+  // head_of_human_resources (UX). The backend RPC still independently re-verifies
   // the authenticated user's role — a hidden button is never the gate.
   const canRunLifecycle = canTerminate || canArchive || canDelete
 

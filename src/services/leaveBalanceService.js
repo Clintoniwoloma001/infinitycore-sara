@@ -1,6 +1,11 @@
-import { supabase } from '../supabaseClient'
-import { createService } from './supabaseService'
-import { getEmployeeCategory } from './leaveRulesService'
+import { supabase } from '../supabaseClient.js'
+import { createService } from './supabaseService.js'
+import {
+  LEAVE_TYPE_LABELS,
+  LEAVE_ENTITLEMENTS,
+  ANNUAL_CARRY_OVER_CAP,
+  balanceFor,
+} from '../domains/leave/entitlements.js'
 
 // ------------------------------------------------------------------
 // Leave entitlements are DATABASE-BACKED via the leave_rules table.
@@ -14,24 +19,7 @@ import { getEmployeeCategory } from './leaveRulesService'
 //   Paternity = 2 days
 //   No Sick Leave. No Personal Leave.
 // ------------------------------------------------------------------
-export const LEAVE_ENTITLEMENTS = {
-  annual: 10,
-  maternity: 90,
-  examination: 5,
-  paternity: 2,
-  unpaid: null, // no cap — always allowed, never deducted
-}
-
-// Max unused annual days that can roll into the next year.
-export const ANNUAL_CARRY_OVER_CAP = 5
-
-export const LEAVE_TYPE_LABELS = {
-  annual: 'Annual Leave',
-  maternity: 'Maternity Leave',
-  examination: 'Examination Leave',
-  paternity: 'Paternity Leave',
-  unpaid: 'Unpaid Leave',
-}
+export { LEAVE_TYPE_LABELS, LEAVE_ENTITLEMENTS, ANNUAL_CARRY_OVER_CAP, balanceFor }
 
 const leaveBalances = createService('leave_balances')
 
@@ -98,9 +86,21 @@ export async function getEffectiveEntitlements(employeeCategory = 'normal_staff'
   return entitlements
 }
 
+// Centralized per-employee leave entitlement. Returns:
+// { default_entitlement, manual_override, effective_entitlement, used_days, pending_days }
+export async function getEmployeeLeaveEntitlement(employeeId, leaveType) {
+  const { data, error } = await supabase.rpc('get_employee_leave_entitlement', {
+    p_employee_id: employeeId,
+    p_leave_type: leaveType,
+  })
+  if (error) throw error
+  return data || {}
+}
+
 // Fetch every balance row for one employee/year. Auto-creates any
-// missing rows AND syncs existing rows' entitled_days with leave_rules.
-export async function getEmployeeBalances(employeeId, employeeName, year = currentYear(), employeeCategory = 'normal_staff') {
+// missing rows using the centralized entitlement engine.
+// Existing manual overrides are NEVER clobbered.
+export async function getEmployeeBalances(employeeId, employeeName, year = currentYear()) {
   const { data, error } = await supabase
     .from('leave_balances')
     .select('*')
@@ -110,47 +110,27 @@ export async function getEmployeeBalances(employeeId, employeeName, year = curre
 
   const existing = data || []
 
-  // Get the authoritative entitlements from leave_rules
-  const entitlements = await getEffectiveEntitlements(employeeCategory)
-
-  // Sync existing rows: update entitled_days to match current leave_rules
-  const updates = []
-  for (const row of existing) {
-    if (row.leave_type === 'unpaid') continue
-    const correctEntitlement = entitlements[row.leave_type]
-    if (correctEntitlement !== undefined && Number(row.entitled_days) !== Number(correctEntitlement)) {
-      updates.push({
-        id: row.id,
-        entitled_days: correctEntitlement,
-      })
-    }
-  }
-
-  if (updates.length > 0) {
-    for (const u of updates) {
-      await supabase.from('leave_balances').update({ entitled_days: u.entitled_days }).eq('id', u.id)
-    }
-    // Update the in-memory copies
-    for (const u of updates) {
-      const row = existing.find((r) => r.id === u.id)
-      if (row) row.entitled_days = u.entitled_days
-    }
-  }
-
-  // Create missing rows
-  const missingTypes = Object.keys(entitlements).filter(
-    (t) => entitlements[t] !== null && !existing.some((b) => b.leave_type === t)
+  // Create missing rows using the centralized entitlement engine.
+  const missingTypes = Object.keys(LEAVE_ENTITLEMENTS).filter(
+    (t) => t !== 'unpaid' && !existing.some((b) => b.leave_type === t)
   )
 
   if (missingTypes.length > 0) {
-    const rows = missingTypes.map((leave_type) => ({
-      employee_id: employeeId,
-      employee_name: employeeName,
-      year,
-      leave_type,
-      entitled_days: entitlements[leave_type],
-      used_days: 0,
-    }))
+    const rows = []
+    for (const leave_type of missingTypes) {
+      const ent = await getEmployeeLeaveEntitlement(employeeId, leave_type)
+      rows.push({
+        employee_id: employeeId,
+        employee_name: employeeName,
+        year,
+        leave_type,
+        entitled_days: ent.effective_entitlement,
+        default_entitlement: ent.default_entitlement,
+        effective_entitlement: ent.effective_entitlement,
+        used_days: 0,
+        pending_days: 0,
+      })
+    }
     const { data: created, error: insertError } = await supabase
       .from('leave_balances')
       .upsert(rows, { onConflict: 'employee_id,year,leave_type', ignoreDuplicates: true })
@@ -160,15 +140,6 @@ export async function getEmployeeBalances(employeeId, employeeName, year = curre
   }
 
   return existing
-}
-
-// Calculate balance for a leave type from the balance rows.
-// entitled_days comes from the (now-synced) database row.
-export function balanceFor(balances, leaveType) {
-  if (leaveType === 'unpaid') return { entitled_days: null, used_days: 0, remaining: Infinity }
-  const b = balances.find((x) => x.leave_type === leaveType)
-  if (!b) return { entitled_days: LEAVE_ENTITLEMENTS[leaveType] || 0, used_days: 0, remaining: LEAVE_ENTITLEMENTS[leaveType] || 0 }
-  return { ...b, remaining: Number(b.entitled_days) - Number(b.used_days) }
 }
 
 // Deduct days from a balance on approval. Atomic-ish: re-reads the
@@ -217,8 +188,8 @@ export async function restoreBalance(employeeId, leaveType, days, year = current
 }
 
 // HR-wide view: every balance row for a given year.
-// Overrides entitled_days with values from leave_rules based on
-// each employee's category (from profiles.role).
+// Leave_balances is the per-employee source of truth for entitled_days
+// and used_days; HR edits in LeaveBalances are authoritative.
 export async function listAllBalances(year = currentYear()) {
   const { data: rows, error } = await supabase
     .from('leave_balances')
@@ -227,54 +198,67 @@ export async function listAllBalances(year = currentYear()) {
     .order('employee_name', { ascending: true })
   if (error) throw error
 
-  if (!rows || rows.length === 0) return []
-
-  // Fetch leave rules to override stale entitled_days
-  const dbRules = await fetchDbEntitlements()
-
-  // Fetch all profiles to determine employee category
-  const employeeIds = [...new Set(rows.map((r) => r.employee_id))]
-  const { data: profiles } = await supabase
-    .from('profiles')
-    .select('id, role')
-    .in('id', employeeIds)
-
-  const profileMap = new Map()
-  for (const p of profiles || []) {
-    profileMap.set(p.id, p)
-  }
-
-  // Override entitled_days with authoritative values from leave_rules
-  const result = rows.map((row) => {
-    if (row.leave_type === 'unpaid') return row
-    const profile = profileMap.get(row.employee_id)
-    const category = getEmployeeCategory(profile)
-    let correctEntitlement = null
-    if (dbRules && dbRules.length > 0) {
-      const specific = dbRules.find((r) => r.leave_type === row.leave_type && r.employee_category === category)
-      if (specific) correctEntitlement = Number(specific.entitled_days)
-      else {
-        const general = dbRules.find((r) => r.leave_type === row.leave_type && r.employee_category === null)
-        if (general) correctEntitlement = Number(general.entitled_days)
-      }
-    }
-    if (correctEntitlement !== null && Number(row.entitled_days) !== Number(correctEntitlement)) {
-      return { ...row, entitled_days: correctEntitlement }
-    }
-    return row
-  })
-
-  return result
+  return rows || []
 }
 
 // Manual HR correction of a specific balance row.
-export async function adjustBalance(id, { entitled_days, used_days }) {
+// Supports two modes:
+//   1. Legacy: pass entitled_days / used_days directly (treated as raw row edits)
+//   2. Override: pass manual_override + override_reason to set a per-employee
+//      entitlement override. effective_entitlement and entitled_days are kept in sync.
+export async function adjustBalance(id, { entitled_days, used_days, pending_days, manual_override, override_reason, resetToDefault = false }) {
+  const { data: current, error: fetchError } = await supabase.from('leave_balances').select('*').eq('id', id).single()
+  if (fetchError) throw fetchError
+
   const patch = {}
-  if (entitled_days !== undefined) patch.entitled_days = entitled_days
-  if (used_days !== undefined) patch.used_days = used_days
+  if (used_days !== undefined) patch.used_days = Number(used_days)
+  if (pending_days !== undefined) patch.pending_days = Number(pending_days)
+
+  if (resetToDefault) {
+    patch.manual_override = null
+    patch.override_reason = override_reason || 'Reset to system default'
+    patch.override_updated_at = new Date().toISOString()
+    patch.override_updated_by = (await supabase.auth.getUser()).data.user?.id
+    patch.effective_entitlement = current.default_entitlement
+    patch.entitled_days = current.default_entitlement
+  } else if (manual_override !== undefined) {
+    const overrideVal = manual_override === '' || manual_override === null ? null : Number(manual_override)
+    patch.manual_override = overrideVal
+    patch.override_reason = override_reason || null
+    patch.override_updated_at = new Date().toISOString()
+    patch.override_updated_by = (await supabase.auth.getUser()).data.user?.id
+    patch.effective_entitlement = overrideVal ?? current.default_entitlement
+    patch.entitled_days = patch.effective_entitlement
+  } else if (entitled_days !== undefined) {
+    // Legacy raw edit: keep entitlement fields aligned
+    patch.entitled_days = Number(entitled_days)
+    patch.effective_entitlement = Number(entitled_days)
+    if (current.manual_override != null) {
+      patch.manual_override = Number(entitled_days)
+    }
+  }
+
   const { data, error } = await supabase.from('leave_balances').update(patch).eq('id', id).select().single()
   if (error) throw error
+
+  // Audit the change
+  try {
+    await supabase.rpc('audit_leave_entitlement_change', {
+      p_balance_id: id,
+      p_old: current,
+      p_new: data,
+      p_reason: patch.override_reason || null,
+    })
+  } catch {
+    // Audit failure should not block the save
+  }
+
   return data
+}
+
+// Reset an employee's entitlement for a leave type to the system default.
+export async function resetLeaveEntitlement(id, reason) {
+  return adjustBalance(id, { resetToDefault: true, override_reason: reason })
 }
 
 export default leaveBalances

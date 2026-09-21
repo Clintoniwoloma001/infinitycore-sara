@@ -25,11 +25,11 @@ const btnGhost = `${btn} border border-slate-300 text-slate-700 hover:bg-slate-5
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 
 // Roles allowed to EDIT payroll records (all other roles are read-only).
-const PAYROLL_EDIT_ROLES = ['super_admin', 'hr_manager', 'hr_officer']
+const PAYROLL_EDIT_ROLES = ['super_admin', 'head_of_human_resources', 'hr_officer']
 // Roles allowed to import / override the Excel structure.
-const PAYROLL_IMPORT_ROLES = ['super_admin', 'admin', 'hr_manager']
+const PAYROLL_IMPORT_ROLES = ['super_admin', 'admin', 'head_of_human_resources']
 // Roles allowed to run a BankOne name enquiry and link an employee's bank account.
-const PAYROLL_BANK_LINK_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer']
+const PAYROLL_BANK_LINK_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer']
 
 // Default derived payroll schema — rendered dynamically from config.
 const DERIVED_PAYROLL_COLUMNS = [

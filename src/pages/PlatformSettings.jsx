@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Settings, Clock, Calendar, MapPin, Shield, Loader2, CheckCircle2, History, Coins, Save, PenLine } from 'lucide-react'
+import { Settings, Clock, Calendar, MapPin, Shield, Loader2, CheckCircle2, History, Coins, Save, PenLine, X } from 'lucide-react'
 import { platformSettingsService } from '../services/platformSettingsService'
 import signatureService, { uploadSignature } from '../services/signatureService'
 import { geofenceService } from '../services/geofenceService'
@@ -131,6 +131,23 @@ export default function PlatformSettings() {
     }
   }
 
+  const deleteGeofence = async (branchId) => {
+    setSaving(true)
+    try {
+      await geofenceService.update(branchId, {
+        latitude: null,
+        longitude: null,
+        geofence_radius: null,
+        geofence_active: false,
+      })
+      await load()
+    } catch (e) {
+      setError(e?.message || 'Failed to delete geofence')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const saveCurrency = async () => {
     const currency_code = String(currencyForm.currency_code || '').trim().toUpperCase()
     const currency_symbol = String(currencyForm.currency_symbol || '').trim()
@@ -179,7 +196,7 @@ export default function PlatformSettings() {
     try {
       const uploaded = await uploadSignature({ dataUrl, scope: signatureType })
       await signatureService.updatePlatformSignature(signatureType, uploaded.path)
-      setSignatures((current) => ({ ...current, [signatureType === 'hr_manager' ? 'hrManager' : 'management']: uploaded.preview }))
+      setSignatures((current) => ({ ...current, [signatureType === 'head_of_human_resources' ? 'hrManager' : 'management']: uploaded.preview }))
       setSignatureType(null)
       await load()
     } finally {
@@ -191,7 +208,7 @@ export default function PlatformSettings() {
     setSignatureSaving(true)
     try {
       await signatureService.updatePlatformSignature(type, null)
-      setSignatures((current) => ({ ...current, [type === 'hr_manager' ? 'hrManager' : 'management']: null }))
+      setSignatures((current) => ({ ...current, [type === 'head_of_human_resources' ? 'hrManager' : 'management']: null }))
     } finally {
       setSignatureSaving(false)
     }
@@ -387,26 +404,67 @@ export default function PlatformSettings() {
             <ErrorState title="No branches found" message="Create branches first before configuring geofences." />
           ) : (
             <>
-              <div className="flex flex-wrap gap-2">
-                {branches.map((b) => (
-                  <button
-                    key={b.id}
-                    onClick={() => setSelectedBranch(b)}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${selectedBranch?.id === b.id ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
-                  >
-                    {b.branch_name}
-                    {b.geofence_active && <span className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />}
-                  </button>
-                ))}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {branches.map((b) => {
+                  const configured = b.latitude != null && b.longitude != null
+                  return (
+                    <div key={b.id} className={`bg-white rounded-xl border p-4 transition ${selectedBranch?.id === b.id ? 'border-[#009944] ring-1 ring-[#009944]' : 'border-slate-200 hover:border-slate-300'}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h4 className="font-medium text-slate-900 truncate">{b.branch_name}</h4>
+                          <p className="text-xs text-slate-500 mt-0.5 truncate">{b.location || b.branch_code || '—'}</p>
+                        </div>
+                        <span className={`shrink-0 inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${b.geofence_active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {b.geofence_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                      <div className="mt-3 text-xs text-slate-500 space-y-1">
+                        {configured ? (
+                          <>
+                            <p>Lat: <span className="font-mono text-slate-700">{Number(b.latitude).toFixed(5)}</span></p>
+                            <p>Lng: <span className="font-mono text-slate-700">{Number(b.longitude).toFixed(5)}</span></p>
+                            <p>Radius: <span className="text-slate-700">{b.geofence_radius || 150}m</span></p>
+                          </>
+                        ) : (
+                          <p className="italic text-slate-400">No geofence configured</p>
+                        )}
+                      </div>
+                      <div className="mt-4 flex items-center gap-2">
+                        <button
+                          onClick={() => setSelectedBranch(b)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#009944] text-white text-xs font-medium hover:bg-[#007a36]"
+                        >
+                          {configured ? 'Edit' : 'Set'} Geofence
+                        </button>
+                        {configured && (
+                          <button
+                            onClick={() => {
+                              if (!window.confirm(`Delete the geofence for "${b.branch_name}"? This clears the coordinates and radius but does not affect historical attendance records.`)) return
+                              deleteGeofence(b.id)
+                            }}
+                            disabled={saving}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 text-rose-700 text-xs font-medium hover:bg-rose-50 disabled:opacity-60"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
               {selectedBranch && (
                 <div className="bg-white rounded-2xl border border-slate-200 p-6">
-                  <h3 className="text-base font-semibold text-slate-900 mb-1">{selectedBranch.branch_name}</h3>
-                  <p className="text-sm text-slate-500 mb-5">Configure geofence, working hours, and grace period for this branch.</p>
-                  <GeofenceEditor branch={selectedBranch} onSave={saveGeofence} busy={saving} />
+                  <div className="flex items-center justify-between mb-5">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-900">{selectedBranch.branch_name}</h3>
+                      <p className="text-sm text-slate-500">Configure geofence for this branch. Working hours and grace period are managed in Platform Settings → Working Hours.</p>
+                    </div>
+                    <button onClick={() => setSelectedBranch(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+                  </div>
+                  <GeofenceEditor branch={selectedBranch} onSave={saveGeofence} onDelete={deleteGeofence} busy={saving} />
                 </div>
               )}
-
             </>
           )}
         </div>
@@ -432,9 +490,9 @@ export default function PlatformSettings() {
               title="HR Manager Signature"
               description="Used automatically for Offer Letters, Memos, and other supported HR documents."
               value={signatures.hrManager}
-              onCapture={() => { setSignatureInputMode('pad'); setSignatureType('hr_manager') }}
-              onUpload={() => { setSignatureInputMode('upload'); setSignatureType('hr_manager') }}
-              onClear={() => clearSignature('hr_manager')}
+              onCapture={() => { setSignatureInputMode('pad'); setSignatureType('head_of_human_resources') }}
+              onUpload={() => { setSignatureInputMode('upload'); setSignatureType('head_of_human_resources') }}
+              onClear={() => clearSignature('head_of_human_resources')}
               disabled={signatureSaving}
             />
           </div>
@@ -471,7 +529,7 @@ export default function PlatformSettings() {
         open={Boolean(signatureType)}
         onClose={() => !signatureSaving && setSignatureType(null)}
         onSave={saveSignature}
-        title={signatureType === 'hr_manager' ? 'HR Manager Signature' : 'Management Signature'}
+        title={signatureType === 'head_of_human_resources' ? 'HR Manager Signature' : 'Management Signature'}
         initialMode={signatureInputMode}
         key={`${signatureType}-${signatureInputMode}`}
       />

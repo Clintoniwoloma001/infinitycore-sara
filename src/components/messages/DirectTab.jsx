@@ -8,14 +8,10 @@ import {
 import { readOutbox, syncOutbox } from '../../services/chatService'
 import MessageBubble from './MessageBubble'
 import Composer from './Composer'
+import PersonAvatar from './PersonAvatar'
+import { displayPersonName, personMatches } from './personUtils'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
-const initials = (name = '') => name.split(' ').filter(Boolean).slice(0, 2).map((n) => n[0]?.toUpperCase()).join('') || '?'
-const displayPersonName = (person) => (
-  person?.full_name && (!person.email || String(person.full_name).toLowerCase() !== String(person.email).toLowerCase())
-    ? person.full_name
-    : 'Unknown User'
-)
 
 function unreadCountsByThread(payload) {
   const result = {}
@@ -51,7 +47,7 @@ const fmtTime = (iso) => {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function DirectTab({ people, identity, onUnreadChange }) {
+export default function DirectTab({ people, identity, onUnreadChange, openThreadId, onThreadOpened }) {
   const { user, profile } = useAuth()
   const me = user?.id
   const myName = displayPersonName({ full_name: profile?.full_name, email: user?.email })
@@ -118,6 +114,36 @@ export default function DirectTab({ people, identity, onUnreadChange }) {
       updatePendingCount()
     })
   }, [me])
+
+  // Open a DM thread requested from another tab (e.g. "Message" from a channel member).
+  useEffect(() => {
+    if (!openThreadId) return
+    const open = async () => {
+      let threadsList = threads
+      if (threadsList.length === 0) {
+        threadsList = await loadThreads()
+      }
+      const found = threadsList.find((t) => t.id === openThreadId)
+      if (found) {
+        setActiveThread(found)
+      } else {
+        try {
+          const refreshed = await directChat.listThreads()
+          const match = refreshed.find((t) => t.id === openThreadId)
+          if (match) {
+            setThreads((prev) => {
+              if (prev.some((t) => t.id === match.id)) return prev
+              return [match, ...prev]
+            })
+            setActiveThread(match)
+          }
+        } catch (_) {}
+      }
+      onThreadOpened?.()
+    }
+    open()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openThreadId])
 
   useEffect(() => {
     const goOnline = async () => {
@@ -447,7 +473,7 @@ export default function DirectTab({ people, identity, onUnreadChange }) {
   }
 
   const filteredPeople = personSearch
-    ? people.filter((p) => `${p.full_name || ''} ${p.email || ''} ${p.department || ''}`.toLowerCase().includes(personSearch.toLowerCase()))
+    ? people.filter((p) => personMatches(p, personSearch))
     : people
 
   return (
@@ -482,7 +508,7 @@ export default function DirectTab({ people, identity, onUnreadChange }) {
                 onClick={() => { setActiveThread(t); setThreadMenuOpen(false) }}
                 className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-slate-50 transition-colors ${active ? 'bg-emerald-50/50' : ''}`}
               >
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0 ${active ? 'bg-[#009944]' : 'bg-slate-400'}`}>{initials(personName(other))}</div>
+                <PersonAvatar person={identity[other] || people.find((p) => p.id === other)} sizeClass="w-9 h-9" textClass="text-xs" />
                  <div className="min-w-0 flex-1">
                    <p className="text-sm font-medium text-slate-800 truncate">{personName(other)}</p>
                    <p className="text-xs text-slate-400 truncate">{t.last_sender_id === me ? 'You: ' : ''}{t.last_message || 'Say hello'}</p>
@@ -511,7 +537,7 @@ export default function DirectTab({ people, identity, onUnreadChange }) {
           <>
             <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-slate-400 flex items-center justify-center text-xs font-semibold text-white">{initials(personName(otherMember(activeThread)))}</div>
+                <PersonAvatar person={identity[otherMember(activeThread)] || people.find((p) => p.id === otherMember(activeThread))} sizeClass="w-9 h-9" textClass="text-xs" />
                 <div>
                   <p className="text-sm font-semibold text-slate-800">{personName(otherMember(activeThread))}</p>
                   <p className="text-[11px] text-slate-400">{connected ? 'Realtime enabled' : 'Connecting…'}</p>
@@ -615,13 +641,15 @@ export default function DirectTab({ people, identity, onUnreadChange }) {
             <div className="max-h-[50vh] overflow-y-auto divide-y divide-slate-50">
               {filteredPeople.length === 0 && <div className="px-5 py-10 text-center text-sm text-slate-400">No matching people.</div>}
               {filteredPeople.map((p) => (
-                <button key={p.id} onClick={() => openNewChat(p.id)} disabled={creating} className="w-full text-left px-5 py-3 flex items-center gap-3 hover:bg-emerald-50/50 disabled:opacity-50">
-                   <div className="w-9 h-9 rounded-full bg-slate-400 flex items-center justify-center text-xs font-semibold text-white">{initials(displayPersonName(p))}</div>
-                   <div className="min-w-0 flex-1">
-                     <p className="text-sm font-medium text-slate-800">{displayPersonName(p)}</p>
-                    <p className="text-xs text-slate-400 truncate">{p.department || p.role || p.email}</p>
-                  </div>
-                </button>
+                 <button key={p.id} onClick={() => openNewChat(p.id)} disabled={creating} className="w-full text-left px-5 py-3 flex items-center gap-3 hover:bg-emerald-50/50 disabled:opacity-50">
+                    <PersonAvatar person={p} sizeClass="w-9 h-9" textClass="text-xs" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-800">{displayPersonName(p)}</p>
+                     <p className="text-xs text-slate-400 truncate">
+                        {[p.department, p.position, p.role, p.employee_number || p.staff_id || p.staffId, p.email].filter(Boolean).join(' · ')}
+                      </p>
+                   </div>
+                 </button>
               ))}
             </div>
             {creating && <div className="px-5 py-4 text-center text-sm text-slate-500"><Loader2 className="w-4 h-4 animate-spin inline mr-1" /> Starting conversation…</div>}

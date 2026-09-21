@@ -98,11 +98,60 @@ export const hrOrganisationService = {
   },
 
   async listSupervisors(employeeId) {
-    let q = supabase.from('employee_supervisors').select('*')
+    let q = supabase
+      .from('employee_supervisors')
+      .select('*, employee:employee_id(full_name, department), supervisor:supervisor_employee_id(full_name, department, position)')
     if (employeeId) q = q.eq('employee_id', employeeId)
     const { data, error } = await q.order('level', { ascending: true })
     if (error) throw error
     return data || []
+  },
+
+  async upsertEmployeeSupervisor({ employeeId, supervisorEmployeeId, level = 1, supervisorTitle, source = 'hr_organisation' }) {
+    return orgRpc('upsert_employee_supervisor', {
+      p_employee_id: employeeId,
+      p_supervisor_employee_id: supervisorEmployeeId,
+      p_level: level,
+      p_supervisor_title: supervisorTitle || null,
+      p_source: source,
+    })
+  },
+
+  async deleteEmployeeSupervisor(id) {
+    return orgRpc('delete_employee_supervisor', { p_id: id })
+  },
+
+  async resolveHierarchyException(exceptionId, resolution = 'resolved', supervisorEmployeeId = null) {
+    return orgRpc('resolve_hierarchy_exception', {
+      p_exception_id: exceptionId,
+      p_resolution: resolution,
+      p_supervisor_employee_id: supervisorEmployeeId,
+    })
+  },
+
+  async resolveDataQualityException(exceptionId, resolution = 'resolved') {
+    return orgRpc('resolve_data_quality_exception', { p_exception_id: exceptionId, p_resolution: resolution })
+  },
+
+  async upsertDepartment({ code, name, sortOrder = 0, id }) {
+    return orgRpc('upsert_department', {
+      p_code: code,
+      p_name: name,
+      p_sort_order: sortOrder,
+      p_id: id || null,
+    })
+  },
+
+  async deleteDepartment(id) {
+    return orgRpc('delete_department', { p_id: id })
+  },
+
+  async assignEmployeeDepartment(employeeId, departmentName, reason) {
+    return orgRpc('assign_employee_department', {
+      p_employee_id: employeeId,
+      p_department_name: departmentName,
+      p_reason: reason || null,
+    })
   },
 
   async listBranchAreaAssignments() {

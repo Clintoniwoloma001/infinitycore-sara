@@ -6,7 +6,7 @@ import {
 import { useAuth } from '../../hooks/useAuth'
 import { announcements as annSvc, resolveDirectory } from '../../services/corporateChatService'
 
-const COMM_ADMIN_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer']
+const COMM_ADMIN_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer']
 
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
 
@@ -241,7 +241,7 @@ function ComposeModal({ people, publishing, onPublish, onClose }) {
   }, [targetType, channels.length])
 
   const filtered = (people || []).filter((p) =>
-    `${p.full_name || ''} ${p.email || ''} ${p.department || ''} ${p.position || ''}`.toLowerCase().includes(personSearch.toLowerCase())
+    `${p.full_name || ''} ${p.name || ''} ${p.email || ''} ${p.department || ''} ${p.position || ''} ${p.employee_number || p.staff_id || p.staffId || ''}`.toLowerCase().includes(personSearch.toLowerCase())
   )
 
   const togglePerson = (id) => {

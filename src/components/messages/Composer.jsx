@@ -4,13 +4,9 @@ import {
   ShieldAlert, Square, Trash2, X,
 } from 'lucide-react'
 import { extractMentions, scanSensitiveContent } from '../../services/corporateChatService'
+import { displayPersonName } from './personUtils'
 
-const pickText = (p) => `${p.full_name || ''} ${p.email || ''} ${p.position || ''} ${p.department || ''}`.toLowerCase()
-const personName = (person) => (
-  person?.full_name && (!person.email || String(person.full_name).toLowerCase() !== String(person.email).toLowerCase())
-    ? person.full_name
-    : 'Unknown User'
-)
+const pickText = (p) => `${p.full_name || ''} ${p.name || ''} ${p.email || ''} ${p.position || ''} ${p.department || ''} ${p.employee_number || p.staff_id || p.staffId || ''}`.toLowerCase()
 
 const ACCEPT_TYPES = [
   'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
@@ -242,7 +238,7 @@ export default function Composer({
   const insertMention = (person) => {
     const at = messageValue.lastIndexOf('@')
     const before = messageValue.slice(0, at)
-    const name = personName(person).split(' ')[0]
+    const name = displayPersonName(person).split(' ')[0]
     onChange(`${before}@${name} `)
     setMentionOpen(false)
     inputRef.current?.focus()
@@ -378,11 +374,11 @@ export default function Composer({
               className={`w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-slate-50 ${i === mentionIndex ? 'bg-slate-50' : ''}`}
             >
               <span className="w-7 h-7 rounded-full bg-slate-300 flex items-center justify-center text-[10px] font-semibold text-white shrink-0">
-                {personName(p).split(' ').filter(Boolean).slice(0, 2).map((n) => n[0]?.toUpperCase()).join('')}
+                {displayPersonName(p).split(' ').filter(Boolean).slice(0, 2).map((n) => n[0]?.toUpperCase()).join('')}
               </span>
               <span className="min-w-0">
-                <span className="block text-sm text-slate-800 truncate">{personName(p)}</span>
-                <span className="block text-xs text-slate-400 truncate">{p.position || p.department || p.role || ''}</span>
+                <span className="block text-sm text-slate-800 truncate">{displayPersonName(p)}</span>
+                <span className="block text-xs text-slate-400 truncate">{[p.position, p.department, p.role, p.employee_number || p.staff_id || p.staffId].filter(Boolean).join(' · ')}</span>
               </span>
             </button>
           ))}

@@ -4,7 +4,7 @@
 // pending request that has sat at its current stage longer than
 // ESCALATE_HOURS, this marks it `escalated = true` and notifies:
 //   - everyone holding the role required at that stage
-//   - all admin/super_admin/hr_manager, as oversight
+//   - all admin/super_admin/head_of_human_resources, as oversight
 //
 // It never skips a stage or auto-approves anything — the hierarchy
 // (Branch Manager → Area Manager → Head of Business → HR) is a real
@@ -19,7 +19,7 @@ const STAGE_ROLE_MAP = {
   branch_manager: ['branch_manager'],
   area_manager: ['area_manager'],
   head_of_business: ['head_of_business'],
-  hr: ['hr_manager'],
+  hr: ['head_of_human_resources'],
 }
 const STAGE_LABELS = {
   branch_manager: 'Branch Manager',
@@ -71,7 +71,7 @@ Deno.serve(async (_req) => {
       severity: 'warning',
     })
 
-    const rolesToNotify = [...(STAGE_ROLE_MAP[r.current_stage] || []), 'admin', 'super_admin', 'hr_manager']
+    const rolesToNotify = [...(STAGE_ROLE_MAP[r.current_stage] || []), 'admin', 'super_admin', 'head_of_human_resources']
     const { data: recipients } = await supabase.from('profiles').select('id').in('role', rolesToNotify)
 
     if (recipients?.length) {

@@ -1,24 +1,43 @@
-import React, { useState } from 'react'
-import { MapPin, Loader2, CheckCircle2, AlertTriangle, Crosshair, TestTube } from 'lucide-react'
+import React, { useMemo, useState } from 'react'
+import { MapPin, Loader2, CheckCircle2, AlertTriangle, Crosshair, TestTube, Trash2, X } from 'lucide-react'
 import { geofenceService, haversine } from '../../services/geofenceService'
 import { getPosition } from '../../services/attendanceService'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 
-export default function GeofenceEditor({ branch, onSave, busy }) {
+function validateGeofence(form) {
+  const errors = []
+  const lat = form.latitude === '' ? null : Number(form.latitude)
+  const lng = form.longitude === '' ? null : Number(form.longitude)
+  const radius = Number(form.geofence_radius)
+
+  if (lat == null || lng == null) {
+    errors.push('Latitude and longitude are required.')
+  } else {
+    if (Number.isNaN(lat) || lat < -90 || lat > 90) errors.push('Latitude must be between -90 and 90.')
+    if (Number.isNaN(lng) || lng < -180 || lng > 180) errors.push('Longitude must be between -180 and 180.')
+  }
+  if (Number.isNaN(radius) || radius <= 0) errors.push('Radius must be a positive number (metres).')
+  if (radius > 100000) errors.push('Radius cannot exceed 100,000m (100km).')
+  return errors
+}
+
+export default function GeofenceEditor({ branch, onSave, onDelete, busy }) {
   const [form, setForm] = useState({
-    latitude: branch?.latitude || '',
-    longitude: branch?.longitude || '',
-    geofence_radius: branch?.geofence_radius || 150,
-    geofence_active: branch?.geofence_active || false,
+    latitude: branch?.latitude ?? '',
+    longitude: branch?.longitude ?? '',
+    geofence_radius: branch?.geofence_radius ?? 150,
+    geofence_active: branch?.geofence_active ?? false,
   })
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState(null)
-  const [testCoords, setTestCoords] = useState(null)
   const [geoLoading, setGeoLoading] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   const update = (k, v) => setForm((p) => ({ ...p, [k]: v }))
+
+  const validationErrors = useMemo(() => validateGeofence(form), [form])
 
   const useMyLocation = async () => {
     setGeoLoading(true)
@@ -39,7 +58,6 @@ export default function GeofenceEditor({ branch, onSave, busy }) {
     setTestResult(null)
     try {
       const pos = await getPosition()
-      setTestCoords(pos)
       const result = geofenceService.testGeofence(pos.lat, pos.lng, {
         latitude: parseFloat(form.latitude),
         longitude: parseFloat(form.longitude),
@@ -54,16 +72,41 @@ export default function GeofenceEditor({ branch, onSave, busy }) {
   }
 
   const handleSave = () => {
+    if (validationErrors.length > 0) return
     onSave(branch.id, {
-      latitude: form.latitude ? parseFloat(form.latitude) : null,
-      longitude: form.longitude ? parseFloat(form.longitude) : null,
+      latitude: form.latitude === '' ? null : parseFloat(form.latitude),
+      longitude: form.longitude === '' ? null : parseFloat(form.longitude),
       geofence_radius: parseInt(form.geofence_radius) || 150,
       geofence_active: form.geofence_active,
     })
   }
 
+  const handleDelete = () => {
+    if (!window.confirm(`Clear the geofence configuration for "${branch.branch_name}"? This only removes the latitude, longitude and radius from the branch record. Historical attendance records are not affected.`)) return
+    onDelete?.(branch.id)
+  }
+
+  const hasConfig = branch?.latitude != null && branch?.longitude != null
+  const updatedAt = branch?.updated_at ? new Date(branch.updated_at).toLocaleString() : null
+
   return (
     <div className="space-y-5">
+      {/* Status / metadata header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div className="flex items-center gap-2">
+          <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ${form.geofence_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
+            <MapPin className="w-3 h-3" />
+            {form.geofence_active ? 'Active' : 'Inactive'}
+          </span>
+          {hasConfig && (
+            <span className="text-xs text-slate-500">
+              Configured: {Number(branch.latitude).toFixed(5)}, {Number(branch.longitude).toFixed(5)} · {branch.geofence_radius || 150}m radius
+            </span>
+          )}
+        </div>
+        {updatedAt && <span className="text-xs text-slate-400">Last updated: {updatedAt}</span>}
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelCls}>Latitude</label>
@@ -99,12 +142,20 @@ export default function GeofenceEditor({ branch, onSave, busy }) {
         </div>
       </div>
 
+      {validationErrors.length > 0 && (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+          <ul className="list-disc list-inside space-y-0.5">
+            {validationErrors.map((err, i) => <li key={i}>{err}</li>)}
+          </ul>
+        </div>
+      )}
+
       <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800">
-        Working days, start/end time, and grace period are managed only in Platform Settings → Working Hours. This editor controls this branch's attendance location and radius.
+        Working days, start/end time, and grace period are managed only in Platform Settings → Working Hours. This editor controls this branch's attendance location and radius. Historical attendance records keep the distance/status that was calculated at the time of clock-in.
       </div>
 
       {/* Test location */}
-      {form.latitude && form.longitude && (
+      {form.latitude && form.longitude && validationErrors.length === 0 && (
         <div className="rounded-xl border border-slate-200 p-4">
           <div className="flex items-center justify-between mb-3">
             <p className="text-sm font-medium text-slate-700 flex items-center gap-1.5"><TestTube className="w-4 h-4 text-slate-400" /> Test Location</p>
@@ -121,9 +172,16 @@ export default function GeofenceEditor({ branch, onSave, busy }) {
         </div>
       )}
 
-      <button onClick={handleSave} disabled={busy} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
-        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Save Geofence Settings
-      </button>
+      <div className="flex flex-wrap items-center gap-3 pt-2">
+        <button onClick={handleSave} disabled={busy || validationErrors.length > 0} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-60">
+          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Update Geofence
+        </button>
+        {hasConfig && (
+          <button onClick={handleDelete} disabled={busy} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-rose-200 text-rose-700 text-sm font-medium hover:bg-rose-50 disabled:opacity-60">
+            <Trash2 className="w-4 h-4" /> Delete Geofence
+          </button>
+        )}
+      </div>
     </div>
   )
 }

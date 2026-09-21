@@ -2,7 +2,7 @@
 // Termination authorization verification (npm run test:termination-auth)
 //
 // Proves end-to-end that employee termination/firing/archiving is
-// restricted to `super_admin` and `hr_manager` at EVERY layer of
+// restricted to `super_admin` and `head_of_human_resources` at EVERY layer of
 // InfinityCore, by static source inspection of the shipped modules:
 //
 //   1. Frontend gate  — src/services/terminationAuthorization.js role
@@ -46,8 +46,8 @@ const aNeedle = (label, needle, min = 1) => {
   if (n < min) fail(`${label}: expected ≥ ${min} occurrence(s) of "${needle}", found ${n}`)
   return n
 }
-aNeedle('termination allowlist', "['super_admin', 'hr_manager']", 2)
-aNeedle('archive allowlist', "['super_admin', 'hr_manager']", 2)
+aNeedle('termination allowlist', "['super_admin', 'head_of_human_resources']", 2)
+aNeedle('archive allowlist', "['super_admin', 'head_of_human_resources']", 2)
 if (!/canTerminateEmployee\s*\(/.test(auth)) fail('client must expose canTerminateEmployee')
 if (!/canArchiveEmployee\s*\(/.test(auth)) fail('client must expose canArchiveEmployee')
 if (!/PERSONNEL_TERMINATION_ROLES/.test(auth)) fail('client must define PERSONNEL_TERMINATION_ROLES')

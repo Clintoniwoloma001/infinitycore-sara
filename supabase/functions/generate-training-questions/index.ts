@@ -42,7 +42,7 @@ const MIN_TEXT_CHARS = 40
 
 // Who may draft KSS questions: union of training management (super_admin,
 // admin, branch_manager — mirror send-training-invites) and training HR roles.
-const ALLOWED_ROLES = ['super_admin', 'admin', 'branch_manager', 'hr_manager', 'hr_officer']
+const ALLOWED_ROLES = ['super_admin', 'admin', 'branch_manager', 'head_of_human_resources', 'hr_officer']
 
 // Exact user-facing copy required by the feature brief.
 const EXTRACTION_FAILED = 'Unable to extract readable text from this document. Please upload a text-based PDF/DOCX/TXT file or enter the questions manually.'

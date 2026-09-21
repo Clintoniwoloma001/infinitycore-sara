@@ -33,7 +33,7 @@ function originOf(req) {
   return req.headers.get('Origin') || `https://${req.headers.get('Host') || 'localhost'}`
 }
 
-const HR_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer']
+const HR_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer']
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {

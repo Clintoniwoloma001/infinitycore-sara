@@ -301,7 +301,7 @@ export default function EmployeeProfile() {
   const canIssueLetter = isAdmin || isHR
 
   // Strict employee-lifecycle actions (Phase 37). Only super_admin and
-  // hr_manager see the buttons (UX); the server-side RPC re-verifies
+  // head_of_human_resources see the buttons (UX); the server-side RPC re-verifies
   // the authenticated user's role before any write is permitted.
   const confirmTerminate = async (options) => {
     setLifecycleBusy(true)

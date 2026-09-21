@@ -176,6 +176,10 @@ console.log('\n■ UI wiring')
   }
   ok('performance components all present (SectionEditor / RulesBuilder / ReorderList / editors / controls)')
 
+  const editors = readFileSync(join(ROOT, '..', 'src', 'components', 'performance', 'editors.jsx'), 'utf8')
+  assert.ok(editors.includes('export function QualificationEditor'), 'QualificationEditor must be exported')
+  assert.ok(editors.includes("'bonus.qualification': QualificationEditor"), 'bonus.qualification must be registered in SECTION_EDITORS')
+
   const pkg = JSON.parse(readFileSync(join(ROOT, '..', 'package.json'), 'utf8'))
   assert.ok(pkg.scripts && pkg.scripts['test:rules-builder'], 'package.json must expose test:rules-builder')
   ok('package.json exposes "test:rules-builder"')

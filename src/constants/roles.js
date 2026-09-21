@@ -18,7 +18,7 @@ export const ROLES = {
   LOAN_OFFICER: 'loan_officer',
   RELATIONSHIP_MANAGER: 'relationship_manager',
   CUSTOMER_SERVICE: 'customer_service',
-  HR_MANAGER: 'hr_manager',
+  HEAD_OF_HUMAN_RESOURCES: 'head_of_human_resources',
   HR_OFFICER: 'hr_officer',
   STAFF: 'staff',
   CUSTOMER: 'customer',
@@ -39,7 +39,7 @@ export const ROLE_HIERARCHY = {
   [ROLES.HEAD_OF_AUDIT]: 72,
   [ROLES.LOAN_OFFICER]: 60,
   [ROLES.RELATIONSHIP_MANAGER]: 60,
-  [ROLES.HR_MANAGER]: 60,
+  [ROLES.HEAD_OF_HUMAN_RESOURCES]: 60,
   [ROLES.CUSTOMER_SERVICE]: 50,
   [ROLES.HR_OFFICER]: 50,
   [ROLES.STAFF]: 40,
@@ -146,9 +146,9 @@ export const ROLE_METADATA = {
     color: '#f59e0b',
     icon: 'Headphones',
   },
-  [ROLES.HR_MANAGER]: {
-    label: 'HR Manager',
-    description: 'Manage recruitment and HR processes',
+  [ROLES.HEAD_OF_HUMAN_RESOURCES]: {
+    label: 'Head of Human Resources',
+    description: 'Lead, manage and own the human-resources function across the bank',
     primaryModule: 'hr',
     color: '#dc2626',
     icon: 'Users',
@@ -330,6 +330,7 @@ export const ROLE_PERMISSIONS = {
     'branches.read',
     'reports.read',
     'support.read',
+    'hr.leave.manage',
     'hr.attendance.self',
     'hr.attendance.manage',
     'work.tasks.manage',
@@ -461,7 +462,7 @@ export const ROLE_PERMISSIONS = {
     'support.resolve',
     'hr.attendance.self',
   ],
-  [ROLES.HR_MANAGER]: [
+  [ROLES.HEAD_OF_HUMAN_RESOURCES]: [
     'hr.jobs.create',
     'hr.jobs.manage',
     'hr.applications.read',
@@ -660,7 +661,7 @@ export const ROLE_MODULES = {
     'customers',
     'my_training',
   ],
-  [ROLES.HR_MANAGER]: [
+  [ROLES.HEAD_OF_HUMAN_RESOURCES]: [
     'hr',
     'dashboard',
     'my_training',
@@ -692,7 +693,7 @@ export const ROLE_MODULES = {
 export function assignableRoles(actorRole) {
   if (actorRole === ROLES.SUPER_ADMIN) return Object.values(ROLES)
   if (actorRole === ROLES.ADMIN) return Object.values(ROLES).filter((r) => r !== ROLES.SUPER_ADMIN)
-  if (actorRole === ROLES.AREA_MANAGER || actorRole === ROLES.HR_MANAGER) {
+  if (actorRole === ROLES.AREA_MANAGER || actorRole === ROLES.HEAD_OF_HUMAN_RESOURCES) {
     return Object.values(ROLES).filter((r) => ![ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.AREA_MANAGER, ROLES.HEAD_OF_BUSINESS, ROLES.HEAD_OF_OPERATIONS, ROLES.HEAD_OF_E_BUSINESS, ROLES.FINANCIAL_CONTROLLER, ROLES.HEAD_OF_RISK_COMPLIANCE, ROLES.HEAD_OF_LEGAL, ROLES.HEAD_OF_AUDIT].includes(r))
   }
   if (actorRole === ROLES.BRANCH_MANAGER) {

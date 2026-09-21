@@ -3,7 +3,7 @@ import { ROLES } from '../../constants/roles'
 const MANAGEMENT_ROLES = new Set([
   ROLES.SUPER_ADMIN,
   ROLES.ADMIN,
-  ROLES.HR_MANAGER,
+  ROLES.HEAD_OF_HUMAN_RESOURCES,
   ROLES.HR_OFFICER,
   ROLES.BRANCH_MANAGER,
   ROLES.AREA_MANAGER,
@@ -19,7 +19,7 @@ const MANAGEMENT_ROLES = new Set([
 const ORGANIZATION_FILTER_ROLES = new Set([
   ROLES.SUPER_ADMIN,
   ROLES.ADMIN,
-  ROLES.HR_MANAGER,
+  ROLES.HEAD_OF_HUMAN_RESOURCES,
   ROLES.HR_OFFICER,
 ])
 
@@ -32,7 +32,7 @@ export function getDashboardPermissions(auth, employee = null) {
     actualRole,
     canViewManagement: MANAGEMENT_ROLES.has(actualRole) || executivePosition,
     canFilterOrganization: ORGANIZATION_FILTER_ROLES.has(actualRole) || executivePosition,
-    canViewHrIntelligence: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.HR_OFFICER].includes(actualRole),
+    canViewHrIntelligence: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.HEAD_OF_HUMAN_RESOURCES, ROLES.HR_OFFICER].includes(actualRole),
     executivePosition,
   }
 }

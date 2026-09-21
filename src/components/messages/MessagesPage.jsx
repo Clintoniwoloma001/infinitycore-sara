@@ -7,6 +7,7 @@ import DirectTab from './DirectTab'
 import Conversations from './Conversations'
 import AnnouncementsTab from './AnnouncementsTab'
 import SavedTab from './SavedTab'
+import { displayPersonName } from './personUtils'
 
 const TABS = [
   { key: 'direct', label: 'Direct', icon: MessageSquare },
@@ -17,12 +18,7 @@ const TABS = [
   { key: 'mentions', label: 'Mentions', icon: AtSign },
 ]
 
-const realPersonName = (person) => {
-  if (person?.full_name && (!person.email || String(person.full_name).toLowerCase() !== String(person.email).toLowerCase())) {
-    return person.full_name
-  }
-  return 'Unknown User'
-}
+const realPersonName = (person) => displayPersonName(person)
 
 export default function MessagesPage() {
   const { user, profile } = useAuth()
@@ -38,6 +34,7 @@ export default function MessagesPage() {
   const [inviteError, setInviteError] = useState('')
   const [joiningInvite, setJoiningInvite] = useState(false)
   const [reloadTick, setReloadTick] = useState(0)
+  const [pendingDmThreadId, setPendingDmThreadId] = useState(null)
 
   // Directory for pickers: staff across the platform (including me).
   // Sourced from the get_messaging_directory RPC — profiles/employees are
@@ -222,9 +219,31 @@ export default function MessagesPage() {
         </div>
       ) : (
         <>
-          {activeTab.key === 'direct' && <DirectTab people={people} identity={identity} onUnreadChange={setDirectUnread} />}
-          {activeTab.key === 'groups' && <Conversations key={`group-${reloadTick}`} kind="group" people={people} identity={identity} />}
-          {activeTab.key === 'channels' && <Conversations key={`channel-${reloadTick}`} kind="channel" people={people} identity={identity} />}
+          {activeTab.key === 'direct' && <DirectTab people={people} identity={identity} onUnreadChange={setDirectUnread} openThreadId={pendingDmThreadId} onThreadOpened={() => setPendingDmThreadId(null)} />}
+          {activeTab.key === 'groups' && (
+            <Conversations
+              key={`group-${reloadTick}`}
+              kind="group"
+              people={people}
+              identity={identity}
+              onStartDirectMessage={(threadId) => {
+                setPendingDmThreadId(threadId)
+                setTabAndDeepLink('direct')
+              }}
+            />
+          )}
+          {activeTab.key === 'channels' && (
+            <Conversations
+              key={`channel-${reloadTick}`}
+              kind="channel"
+              people={people}
+              identity={identity}
+              onStartDirectMessage={(threadId) => {
+                setPendingDmThreadId(threadId)
+                setTabAndDeepLink('direct')
+              }}
+            />
+          )}
           {activeTab.key === 'announcements' && <AnnouncementsTab people={people} identity={identity} />}
           {(activeTab.key === 'saved' || activeTab.key === 'mentions') && <SavedTab identity={identity} />}
         </>

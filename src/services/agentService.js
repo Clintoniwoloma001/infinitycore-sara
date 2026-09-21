@@ -158,7 +158,7 @@ export async function runSaraCommand({ command, pool, ctx }) {
   // for users whose permission set cannot satisfy them.
   if (parsed.blocked === 'permission' || (isWriteIntent(parsed.intent) && (!canExecuteIntent(parsed.intent, ctx)))) {
     if (parsed.intent === 'TERMINATE_EMPLOYEE') {
-      return { type: 'text', message: "I can't terminate employees from your current InfinityCore role. Only super_admin and hr_manager users are authorized to terminate employees — please ask an authorized HR manager instead." }
+      return { type: 'text', message: "I can't terminate employees from your current InfinityCore role. Only super_admin and Head of Human Resources users are authorized to terminate employees — please ask an authorized HR manager instead." }
     }
     return { type: 'text', message: "I can't do that with your current permissions. Approving or rejecting leave requires leave management rights — please use the Leave Requests page instead." }
   }
@@ -333,10 +333,10 @@ export async function runSaraCommand({ command, pool, ctx }) {
 
     case 'TERMINATE_EMPLOYEE': {
       // ROLE GATE (canonical — mirrors the server-side RPC): only
-      // super_admin and hr_manager may terminate employees. This check
+      // super_admin and Head of Human Resources may terminate employees. This check
       // is UX-only; terminate_employee re-verifies on the server.
       if (!canTerminateEmployee(ctx?.role)) {
-        return { type: 'text', message: "I can't terminate employees from your current InfinityCore role. Only super_admin and hr_manager users are authorized to terminate employees — please ask an authorized HR manager instead." }
+        return { type: 'text', message: "I can't terminate employees from your current InfinityCore role. Only super_admin and Head of Human Resources users are authorized to terminate employees — please ask an authorized HR manager instead." }
       }
       const target = parsed.filters.employee
       if (!target) {
@@ -362,7 +362,7 @@ export async function runSaraCommand({ command, pool, ctx }) {
         type: 'confirm',
         intent: 'TERMINATE_EMPLOYEE',
         employee: emp,
-        message: `I found ${emp.full_name} — ${emp.position || 'no position'}${emp.department ? ` · ${emp.department}` : ''}${emp.branch ? ` · ${emp.branch}` : ''} (${employeeLabel(emp)}).\n\nTerminate this employee? This is permanent, restricted to super_admin/hr_manager, and cannot be undone. History is preserved.`,
+        message: `I found ${emp.full_name} — ${emp.position || 'no position'}${emp.department ? ` · ${emp.department}` : ''}${emp.branch ? ` · ${emp.branch}` : ''} (${employeeLabel(emp)}).\n\nTerminate this employee? This is permanent, restricted to super_admin/Head of Human Resources, and cannot be undone. History is preserved.`,
       }
     }
 

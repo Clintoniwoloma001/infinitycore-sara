@@ -53,8 +53,8 @@ const users = await readFile(`${root}src/pages/Users.jsx`, 'utf8')
 // Re-invite button in pending rows, gated to invite-capable roles.
 assert.match(
   users,
-  /\[['"]super_admin['"],\s*['"]admin['"],\s*['"]hr_manager['"]\]\.includes\(actorRole\)[\s\S]*?Re-invite/,
-  'Re-invite button must be gated to super_admin/admin/hr_manager'
+  /\[['"]super_admin['"],\s*['"]admin['"],\s*['"]head_of_human_resources['"]\]\.includes\(actorRole\)[\s\S]*?Re-invite/,
+  'Re-invite button must be gated to super_admin/admin/head_of_human_resources'
 )
 assert.match(users, /resendInvitationForProfile\(u,/, 'Re-invite must call resendInvitationForProfile')
 assert.match(

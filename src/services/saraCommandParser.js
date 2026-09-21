@@ -45,7 +45,7 @@ function extractBranch(text) {
 // Strict termination detection. This is the deterministic entry point
 // for firing/dismissing an employee. It only EXTRACTS the target and
 // intent — the caller (agentService) is still responsible for role
-// checking (super_admin / hr_manager ONLY), employee resolution, user
+// checking (super_admin / head_of_human_resources ONLY), employee resolution, user
 // confirmation, and the audited terminate_employee RPC.
 // ------------------------------------------------------------------
 const TERMINATION_VERBS = /\b(terminate|fire|dismiss|let go|lay off|discharge|relieve)\b/i

@@ -120,7 +120,7 @@ export const employeeService = {
   // STRICT TERMINATION / ARCHIVE AUTHORIZATION (Phase 37).
   //
   // Termination and archive are employee-lifecycle operations reserved
-  // for `super_admin` and `hr_manager` users. The authorization check
+  // for `super_admin` and `head_of_human_resources` users. The authorization check
   // is enforced SERVER-SIDE by the SECURITY DEFINER RPCs and the
   // employees_termination_guard trigger — this client call never
   // supplies an actor/role; the backend derives the actor from the
@@ -143,8 +143,8 @@ export const employeeService = {
   },
 
   // Delete (decommission) an employee end-to-end. Restricted to
-  // super_admin/hr_manager on the server. The delete_employee RPC:
-  //   - re-verifies the actor role (super_admin / hr_manager),
+  // super_admin/head_of_human_resources on the server. The delete_employee RPC:
+  //   - re-verifies the actor role (super_admin / head_of_human_resources),
   //   - refuses to delete a Super Admin account or the actor's own record,
   //   - archives the employee (history preserved — never a physical delete),
   //   - cancels open payroll rows and drops the employee from the roster,

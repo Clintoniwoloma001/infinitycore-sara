@@ -45,7 +45,7 @@ export default function TerminationModal({ employee, onClose, onConfirm, busy, e
         <div className="px-5 py-4 space-y-4">
           <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 flex items-start gap-2">
             <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0" />
-            This action is restricted to <span className="font-semibold">super_admin</span> and <span className="font-semibold">hr_manager</span> roles only. Your identity is verified server-side — the record is never deleted and full history is preserved.
+            This action is restricted to <span className="font-semibold">super_admin</span> and <span className="font-semibold">Head of Human Resources</span> roles only. Your identity is verified server-side — the record is never deleted and full history is preserved.
           </div>
 
           {/* Employee details */}

@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails'
-const HR_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer']
+const HR_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer']
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',

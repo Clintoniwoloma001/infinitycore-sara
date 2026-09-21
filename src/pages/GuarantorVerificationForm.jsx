@@ -5,7 +5,6 @@ import {
   Loader2, Send, Trash2, Upload, XCircle, Camera, PenTool, IdCard, Home, User,
 } from 'lucide-react'
 import Logo from '../components/Logo'
-import SignaturePad from '../components/SignaturePad'
 import CameraCapture from '../components/CameraCapture'
 import { guarantorVerificationService } from '../services/guarantorVerificationService'
 import { LoadingState } from '../components/PageStates'
@@ -286,19 +285,53 @@ export default function GuarantorVerificationForm() {
       <div className="space-y-4">
         <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 text-sm text-blue-900">
           <p className="font-medium">Electronic Signature</p>
-          <p className="mt-1 text-blue-700">Sign using your mouse, touchscreen, or stylus in the box below.</p>
+          <p className="mt-1 text-blue-700">Type your full legal name or initials below to sign this guarantor form. This electronic signature has the same effect as a handwritten signature.</p>
         </div>
-        {signature ? (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm text-emerald-700">
-              <CheckCircle2 className="w-5 h-5" /> <span className="font-medium">Signature captured</span>
+        <div className="space-y-3">
+          <Field label="Type your signature" required>
+            <div className="relative">
+              <input
+                className={`${inputCls} pr-20`}
+                value={signature || ''}
+                onChange={(e) => setSignature(e.target.value)}
+                placeholder="e.g. John Doe or J.D."
+                maxLength={120}
+                autoComplete="off"
+              />
+              {signature && (
+                <button
+                  type="button"
+                  onClick={() => setSignature('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-rose-600 hover:text-rose-700 px-2 py-1 rounded hover:bg-rose-50 transition-colors"
+                >
+                  Clear
+                </button>
+              )}
             </div>
-            <img src={signature} alt="Signature" className="w-full max-w-md rounded-lg border border-slate-300" />
-            <button type="button" onClick={() => setSignature(null)} className="text-sm text-[#009944] hover:underline">Re-sign</button>
-          </div>
-        ) : (
-          <SignaturePad onChange={(dataUrl) => setSignature(dataUrl)} />
-        )}
+          </Field>
+          {signature ? (
+            <div className="transition-all duration-300 ease-out">
+              <p className="text-xs text-slate-500 mb-1.5">Signature preview</p>
+              {signature.startsWith('data:') ? (
+                <img src={signature} alt="Signature" className="w-full max-w-md rounded-lg border border-slate-300" />
+              ) : (
+                <div className="w-full max-w-md rounded-lg border border-slate-300 bg-white p-4 min-h-[5rem] flex items-center">
+                  <span className="font-serif italic text-xl text-slate-800">{signature}</span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="w-full max-w-md rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 p-4 min-h-[5rem] flex items-center justify-center text-slate-400 text-sm">
+              Your signature will appear here
+            </div>
+          )}
+          {signature && (
+            <div className="flex items-center gap-2 text-sm text-emerald-700">
+              <CheckCircle2 className="w-4 h-4" /> <span className="font-medium">Signature captured</span>
+            </div>
+          )}
+          <p className="text-xs text-slate-400">Legacy drawn signatures are still displayed if already on file.</p>
+        </div>
       </div>
     )
     return (

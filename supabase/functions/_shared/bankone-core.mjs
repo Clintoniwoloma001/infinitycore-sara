@@ -99,10 +99,10 @@ export function checkSecretHealth({ baseUrl = '', token = '', timeoutMs = '' } =
 }
 
 // Roles permitted to run live BankOne queries. Mirrors the repository's
-// can_manage_bankone() gate (super_admin/admin/hr_manager/hr_officer/
+// can_manage_bankone() gate (super_admin/admin/head_of_human_resources/hr_officer/
 // head_of_operations/financial_controller) so the Edge Function does not
 // invent a second authorization system.
-export const BANKONE_QUERY_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer', 'head_of_operations', 'financial_controller']
+export const BANKONE_QUERY_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer', 'head_of_operations', 'financial_controller']
 
 export function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)

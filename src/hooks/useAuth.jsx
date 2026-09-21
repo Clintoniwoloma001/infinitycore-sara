@@ -221,7 +221,7 @@ export function AuthProvider({ children }) {
     email: user?.email,
     isAdmin: actualRole === ROLES.ADMIN || actualRole === ROLES.SUPER_ADMIN,
     isManager: [ROLES.BRANCH_MANAGER, ROLES.AREA_MANAGER, ROLES.HEAD_OF_BUSINESS, ROLES.HEAD_OF_OPERATIONS, ROLES.HEAD_OF_E_BUSINESS, ROLES.FINANCIAL_CONTROLLER, ROLES.HEAD_OF_RISK_COMPLIANCE, ROLES.HEAD_OF_LEGAL, ROLES.HEAD_OF_AUDIT].includes(actualRole),
-    isHR: [ROLES.HR_MANAGER, ROLES.HR_OFFICER].includes(actualRole),
+    isHR: [ROLES.HEAD_OF_HUMAN_RESOURCES, ROLES.HR_OFFICER].includes(actualRole),
     isCustomer: actualRole === ROLES.CUSTOMER,
     isStaff: actualRole === ROLES.STAFF,
   }

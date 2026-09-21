@@ -139,4 +139,94 @@ export function locationDistanceLabel(record) {
   return `${Math.round(distance)}m`
 }
 
-export default { locationLabel, recordCoords, recordHasGps, locationStatusCode, locationStatusMeta, locationDistanceLabel, clockingLocationName, recordDistanceMeters, recordRadiusMeters }
+// =====================================================================
+// ASSIGNED-BRANCH GEOFENCE HELPERS (HR / audit view)
+//
+// These keep the authoritative branch geofence (from Platform Settings)
+// separate from the employee's actual GPS clocking location.
+// =====================================================================
+
+function assignedBranch(record) {
+  const r = record || {}
+  const b = r.branches || r.employees?.branches
+  if (Array.isArray(b)) return b[0] || null
+  return b || null
+}
+
+function sideCoords(record, side) {
+  const r = record || {}
+  const lat = side === 'clock_out' ? toNumber(r.clock_out_lat) : toNumber(r.clock_in_lat)
+  const lng = side === 'clock_out' ? toNumber(r.clock_out_lng) : toNumber(r.clock_in_lng)
+  if (lat == null || lng == null) return null
+  return { lat, lng }
+}
+
+export function assignedBranchGeofence(record) {
+  const branch = assignedBranch(record)
+  if (!branch) return null
+  return {
+    id: branch.id,
+    name: branch.branch_name || record.employees?.branch || 'Assigned branch',
+    latitude: toNumber(branch.latitude),
+    longitude: toNumber(branch.longitude),
+    radius: toNumber(branch.geofence_radius) ?? DEFAULT_GEOFENCE_RADIUS,
+    active: branch.geofence_active !== false,
+  }
+}
+
+export function assignedBranchGeofenceText(record) {
+  const g = assignedBranchGeofence(record)
+  if (!g) return null
+  const coords = g.latitude != null && g.longitude != null ? `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)}` : 'No coordinates'
+  return `${g.name} · ${coords} · ${g.radius}m`
+}
+
+export function assignedBranchDistanceMeters(record, side = 'clock_in') {
+  if (!record) return null
+  const coords = sideCoords(record, side)
+  const branch = assignedBranchGeofence(record)
+  if (!coords || !branch || branch.latitude == null || branch.longitude == null) return null
+  return haversineMeters(coords.lat, coords.lng, branch.latitude, branch.longitude)
+}
+
+export function assignedBranchDistanceLabel(record, side = 'clock_in') {
+  const d = assignedBranchDistanceMeters(record, side)
+  return d == null ? null : `${Math.round(d)}m`
+}
+
+export function assignedBranchStatusCode(record, side = 'clock_in') {
+  const distance = assignedBranchDistanceMeters(record, side)
+  if (distance == null) return 'no_data'
+  const branch = assignedBranchGeofence(record)
+  const radius = branch?.radius ?? DEFAULT_GEOFENCE_RADIUS
+  return distance <= radius ? 'within' : 'outside'
+}
+
+export function assignedBranchStatusMeta(record, side = 'clock_in') {
+  return LOCATION_STATUS_META[assignedBranchStatusCode(record, side)] || LOCATION_STATUS_META.no_data
+}
+
+export function clockingLocationText(record, side = 'clock_in') {
+  const coords = sideCoords(record, side)
+  if (!coords) return null
+  return `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`
+}
+
+export default {
+  locationLabel,
+  recordCoords,
+  recordHasGps,
+  locationStatusCode,
+  locationStatusMeta,
+  locationDistanceLabel,
+  clockingLocationName,
+  recordDistanceMeters,
+  recordRadiusMeters,
+  assignedBranchGeofence,
+  assignedBranchGeofenceText,
+  assignedBranchDistanceMeters,
+  assignedBranchDistanceLabel,
+  assignedBranchStatusCode,
+  assignedBranchStatusMeta,
+  clockingLocationText,
+}

@@ -1,4 +1,5 @@
-import { supabase } from '../supabaseClient'
+import { supabase } from '../supabaseClient.js'
+import { getEmployeeCategory } from '../domains/leave/entitlements.js'
 
 // ------------------------------------------------------------------
 // Leave Rules Service — database-backed leave policy configuration.
@@ -32,17 +33,7 @@ export const FALLBACK_ENTITLEMENTS = {
   unpaid: null,
 }
 
-// Determine employee category from role/position
-export function getEmployeeCategory(employee) {
-  if (!employee) return 'normal_staff'
-  const role = (employee.role || '').toLowerCase()
-  const position = (employee.position || '').toLowerCase()
-
-  if (role === 'md' || position.includes('managing director') || position === 'md') return 'md'
-  if (['super_admin', 'admin', 'hr_manager', 'branch_manager', 'area_manager', 'head_of_business', 'operations_manager', 'head_of_operations', 'head_of_e_business', 'financial_controller', 'head_of_risk_compliance', 'head_of_legal', 'head_of_audit'].includes(role)) return 'management_staff'
-  if (position.includes('manager') || position.includes('head') || position.includes('director')) return 'management_staff'
-  return 'normal_staff'
-}
+export { getEmployeeCategory }
 
 export const leaveRulesService = {
   // Fetch all leave rules from DB

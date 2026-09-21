@@ -4,7 +4,7 @@
 //   - AUTHENTICATES the caller from their Bearer JWT (never trusts the
 //     client to declare identity),
 //   - derives the caller's role server-side from their profiles row and
-//     only allows HR personnel (super_admin / admin / hr_manager / hr_officer),
+//     only allows HR personnel (super_admin / admin / head_of_human_resources / hr_officer),
 //   - sends ONLY a scoped, structured payload to OpenAI
 //     (OPENAI_API_KEY lives in function secrets — never the browser),
 //   - writes results back through Postgres using the SERVICE ROLE key
@@ -37,7 +37,7 @@ const OPENAI_RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses'
 const MODEL = 'gpt-4o-mini'
 
 const ALLOWED_ACTIONS = ['screen_candidate', 'analyze_cv', 'generate_assessment', 'analyze_assessment', 'analyze_interview', 'generate_questions', 'analyze_candidate_scorecard']
-const HR_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer']
+const HR_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer']
 const DAILY_LIMIT = 30
 const MIN_INTERVAL_SECONDS = 2
 const MAX_FILE_BYTES = 2 * 1024 * 1024 // 2 MB

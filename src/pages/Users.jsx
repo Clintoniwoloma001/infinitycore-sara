@@ -321,7 +321,7 @@ export default function Users() {
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-medium hover:bg-rose-50 disabled:opacity-50">
                         <XCircle className="w-3.5 h-3.5" /> Reject
                       </button>
-                      {['super_admin', 'admin', 'hr_manager'].includes(actorRole) && (
+                      {['super_admin', 'admin', 'head_of_human_resources'].includes(actorRole) && (
                         <button onClick={() => reInvite(u)} disabled={busyId === u.id}
                           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium hover:bg-slate-50 disabled:opacity-50">
                           <Send className="w-3.5 h-3.5" /> Re-invite

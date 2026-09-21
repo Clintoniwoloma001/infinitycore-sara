@@ -594,3 +594,62 @@ must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
 - Test: `npm run test:name-enquiry` — `tests/bankoneNameEnquiry.test.mjs`. Manual action:
   set `BANKONE_API_TOKEN`/`BANKONE_API_BASE_URL` project secrets and confirm the exact Qore
   `GetAccountData` request/response sample before the first live smoke test.
+
+## Phase — Role rename: HR Manager → Head of Human Resources
+- SQL migration: `supabase/migrations/20260921000010_roles_head_of_human_resources.sql` — run in
+  Supabase SQL Editor after `20260921000009_hr_jobs_archive_edit_delete.sql`. Idempotent/additive
+  (wrapped in `begin; … commit;`).
+  - Renames the `roles` row in place (`role_name = 'head_of_human_resources'`,
+    `display_name = 'Head of Human Resources'`) — the row id is preserved so
+    `role_permissions` stay attached.
+  - Migrates live `profiles.role` rows and rebuilds `profiles_role_check` with the 18-role
+    catalog (now `head_of_human_resources`, no `hr_manager`).
+  - Re-issues **145 RLS policies** and **146 SECURITY DEFINER functions/RPCs** that enumerated
+    `hr_manager`, including `approve_user` (both overloads), `enforce_role_change_policy`,
+    `can_author_announcement`, `training_is_manager`, leave/attendance/payroll/recruitment
+    gates, etc. A generator extracted the *latest* definition of every affected object from
+    the repo's chronological SQL history, so superseded definitions are never restored.
+  - Re-runs the Phase 6 dynamic `execute format('create policy "%s_read" …')` loop so the
+    new role reaches `employee_education`, `employee_work_history`, `employee_fidelity_bonds`
+    (the `employee_guarantors` override from Phase 49 still wins because explicit policies are
+    re-issued after the dynamic block).
+- Frontend: `src/constants/roles.js` renames the constant to
+  `HEAD_OF_HUMAN_RESOURCES: 'head_of_human_resources'` and updates the UI label to
+  "Head of Human Resources". Every `ROLES.HR_MANAGER` consumer (`dashboardPermissions.js`,
+  `RoleSwitcher.jsx`, `useAuth.jsx`) and every src string literal `'hr_manager'` were updated.
+- Edge functions: role literals in `bankone-core.mjs`, `sara-intent`, `send-assessment-email`,
+  `generate-training-questions`, `create-user`, `escalate-leave-requests`, `bankone-name-enquiry`,
+  `bankone-transaction-status`, `sara-candidate-analysis`, `webauthn-register-options`, and
+  `invite-employees` now use `head_of_human_resources`.
+- Intentionally untouched: the `employees.hr_manager_signature_path` DB column / UI field
+  keeps its physical name (only the platform role changed).
+- Tests: `npm run test:roles-head-hr` — `tests/rolesHeadOfHr.test.mjs`; existing
+  `test:roles-head-operations` was updated to expect the renamed role in the frontend +
+  edge-function role lists. `npm run build` passes. Run in the SQL Editor before the change
+  takes effect in the hosted project.
+
+## Phase — HR Organisation Module UX updates
+- SQL migration: `supabase/migrations/20260921000013_hr_organisation_module_updates.sql` — run in
+  Supabase SQL Editor after `20260921000012_leave_balance_authoritative.sql`. Idempotent/additive
+  (wrapped in `begin; … commit;`).
+  - Adds write RLS policies (`*_write`) on `employee_supervisors`, `hierarchy_exceptions`,
+    `data_quality_exceptions`, and `departments` gated to `super_admin`/`admin`/`head_of_human_resources`.
+  - New SECURITY DEFINER RPCs: `upsert_employee_supervisor`, `delete_employee_supervisor`,
+    `resolve_hierarchy_exception` (optionally materialises the supervisor mapping),
+    `resolve_data_quality_exception`, `upsert_department`, `delete_department` (blocked if
+    employees are still assigned), and `assign_employee_department` (updates both `employees`
+    and linked `profiles` rows, audited).
+- `src/services/hrOrganisationService.js` gains matching methods and enriches
+  `listSupervisors()` with employee/supervisor details.
+- `src/pages/HROrganisation.jsx`:
+  - **Hierarchy & Supervisors** tab: editable supervisor mapping table, department-filtered
+    supervisor dropdown (always includes MD / Head of HR / Head of Business via global role
+    heuristic), blank-supervisor rows highlighted, explicit **Add Row** button, status filter
+    and Resolve/Dismiss/Reopen actions on hierarchy exceptions.
+  - **Data Quality Issues** tab: rows are clickable and open a detail modal with linked
+    employee info (when `entity_type='employee'`) and Resolve/Dismiss/Reopen actions.
+  - **Structure** tab: expandable department rows showing assigned employees, **Edit**
+    department modal, **Add Department**, and inline assignment of unassigned/other-department
+    employees. Unassigned employees grouped separately.
+- Test: `npm run test:hr-organisation` — `tests/hrOrganisationModule.test.mjs`. `npm run build`
+  passes.

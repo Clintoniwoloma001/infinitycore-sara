@@ -16,8 +16,8 @@ const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 // engine that the save path persists. A reason is mandatory — enforced
 // server-side by upsert_employee_compensation.
 //
-// Role-based flow (Phase 66): super_admin and hr_manager persist directly
-// (super_admin is not audited; hr_manager edits are). When signatureRequired
+// Role-based flow (Phase 66): super_admin and head_of_human_resources persist directly
+// (super_admin is not audited; head_of_human_resources edits are). When signatureRequired
 // (HR Officer), "Save" hands the payload to onNeedSignature so the parent can
 // open the signature pad modal and only then persist with the signature.
 export default function CompensationEditorModal({ employeeId, onClose, onSaved, signatureRequired = false, onNeedSignature }) {

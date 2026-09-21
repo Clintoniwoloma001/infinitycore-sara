@@ -14,7 +14,7 @@
 //   * This function independently authenticates the caller via
 //     supabase.auth.getUser() (never trusts client-supplied identity) and then
 //     authorizes against the SAME role gate the database uses for BankOne
-//     management (can_manage_bankone: super_admin/admin/hr_manager/hr_officer/
+//     management (can_manage_bankone: super_admin/admin/head_of_human_resources/hr_officer/
 //     head_of_operations/financial_controller). No second authorization system
 //     is invented.
 //

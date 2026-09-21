@@ -2,7 +2,13 @@ import React, { useEffect, useState } from 'react'
 import { X, MapPin, CheckCircle2, AlertTriangle, Clock, Crosshair, Gauge } from 'lucide-react'
 import { attendanceService } from '../../services/attendanceService'
 import { LoadingState, ErrorState } from '../PageStates'
-import { clockingLocationName, locationDistanceLabel, locationStatusMeta } from '../../utils/attendanceLocation'
+import {
+  assignedBranchGeofence,
+  assignedBranchGeofenceText,
+  assignedBranchDistanceLabel,
+  assignedBranchStatusMeta,
+  clockingLocationText,
+} from '../../utils/attendanceLocation'
 
 export default function LocationAuditModal({ record, onClose }) {
   const [audit, setAudit] = useState([])
@@ -27,9 +33,11 @@ export default function LocationAuditModal({ record, onClose }) {
 
   if (!record) return null
 
-  const geoInside = record.geofence_status === 'inside'
-  const geoOutside = record.geofence_status === 'outside'
-  const statusMeta = locationStatusMeta(record)
+  const geo = assignedBranchGeofence(record)
+  const clockInStatus = assignedBranchStatusMeta(record, 'clock_in')
+  const clockOutStatus = record.clock_out ? assignedBranchStatusMeta(record, 'clock_out') : null
+  const geoInside = clockInStatus.code === 'within'
+  const geoOutside = clockInStatus.code === 'outside'
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
@@ -51,13 +59,22 @@ export default function LocationAuditModal({ record, onClose }) {
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-1.5"><MapPin className="w-4 h-4 text-slate-400" /> Attendance Location Summary</p>
                 <div className="space-y-2 text-sm">
-                  <AuditRow icon={MapPin} label="Assigned Branch" value={record.employees?.branches?.branch_name || record.branches?.branch_name || record.employees?.branch || 'No assigned branch'} />
-                  <AuditRow icon={MapPin} label="Clock-in Location" value={clockingLocationName(record, 'clock_in') || 'No location data'} />
-                  <AuditRow icon={MapPin} label="Clock-out Location" value={record.clock_out ? (clockingLocationName(record, 'clock_out') || 'No location data') : '—'} />
-                  <AuditRow icon={MapPin} label="Location Difference" value={locationDistanceLabel(record) || 'No location data'} />
+                  <AuditRow icon={MapPin} label="Assigned Branch" value={geo?.name || record.employees?.branches?.branch_name || record.branches?.branch_name || record.employees?.branch || 'No assigned branch'} />
+                  <AuditRow icon={MapPin} label="Branch Geofence" value={assignedBranchGeofenceText(record) || 'No geofence configured'} />
+                  <AuditRow icon={MapPin} label="Clock-in Location" value={clockingLocationText(record, 'clock_in') || 'No location data'} />
+                  <AuditRow icon={MapPin} label="Clock-out Location" value={record.clock_out ? (clockingLocationText(record, 'clock_out') || 'No location data') : '—'} />
+                  <AuditRow icon={MapPin} label="Clock-in Difference" value={assignedBranchDistanceLabel(record, 'clock_in') || 'No location data'} />
+                  {record.clock_out && (
+                    <AuditRow icon={MapPin} label="Clock-out Difference" value={assignedBranchDistanceLabel(record, 'clock_out') || 'No location data'} />
+                  )}
                   <AuditRow icon={CheckCircle2}
-                    iconColor={statusMeta.code === 'within' ? 'text-emerald-600' : statusMeta.code === 'outside' ? 'text-rose-600' : 'text-slate-400'}
-                    label="Location Status" value={statusMeta.label} />
+                    iconColor={clockInStatus.code === 'within' ? 'text-emerald-600' : clockInStatus.code === 'outside' ? 'text-rose-600' : 'text-slate-400'}
+                    label="Clock-in Status" value={clockInStatus.label} />
+                  {record.clock_out && clockOutStatus && (
+                    <AuditRow icon={CheckCircle2}
+                      iconColor={clockOutStatus.code === 'within' ? 'text-emerald-600' : clockOutStatus.code === 'outside' ? 'text-rose-600' : 'text-slate-400'}
+                      label="Clock-out Status" value={clockOutStatus.label} />
+                  )}
                 </div>
               </div>
               {/* Clock-in verification */}
@@ -69,15 +86,13 @@ export default function LocationAuditModal({ record, onClose }) {
                   <AuditRow icon={geoInside ? CheckCircle2 : geoOutside ? AlertTriangle : MapPin}
                     iconColor={geoInside ? 'text-emerald-600' : geoOutside ? 'text-rose-600' : 'text-slate-400'}
                     label="Geofence Result"
-                    value={statusMeta.label} />
-                  {record.clock_in_distance != null && (
-                    <AuditRow icon={MapPin} label="Distance from Branch" value={`${Math.round(record.clock_in_distance)}m`} />
-                  )}
+                    value={clockInStatus.label} />
+                  <AuditRow icon={MapPin} label="Distance from Branch" value={assignedBranchDistanceLabel(record, 'clock_in') || 'No location data'} />
                   {record.clock_in_accuracy != null && (
                     <AuditRow icon={Gauge} label="GPS Accuracy" value={`±${Math.round(record.clock_in_accuracy)}m`} />
                   )}
                   {record.clock_in_lat != null && (
-                    <AuditRow icon={Crosshair} label="Coordinates" value={`${record.clock_in_lat.toFixed(4)}, ${record.clock_in_lng.toFixed(4)}`} />
+                    <AuditRow icon={Crosshair} label="Coordinates" value={`${record.clock_in_lat.toFixed(5)}, ${record.clock_in_lng.toFixed(5)}`} />
                   )}
                   <AuditRow icon={Clock} label="Timestamp" value={record.clock_in ? new Date(record.clock_in).toLocaleString() : '—'} />
                   {record.late_minutes > 0 && (
@@ -88,19 +103,21 @@ export default function LocationAuditModal({ record, onClose }) {
 
               {/* Clock-out verification */}
               {record.clock_out && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className={`rounded-xl border p-4 ${clockOutStatus?.code === 'within' ? 'border-emerald-200 bg-emerald-50' : clockOutStatus?.code === 'outside' ? 'border-rose-200 bg-rose-50' : 'border-slate-200 bg-slate-50'}`}>
                   <p className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-1.5">
                     <Clock className="w-4 h-4 text-slate-400" /> Clock-Out Verification
                   </p>
                   <div className="space-y-2 text-sm">
-                    {record.clock_out_distance != null && (
-                      <AuditRow icon={MapPin} label="Distance from Branch" value={`${Math.round(record.clock_out_distance)}m`} />
-                    )}
+                    <AuditRow icon={clockOutStatus?.code === 'within' ? CheckCircle2 : clockOutStatus?.code === 'outside' ? AlertTriangle : MapPin}
+                      iconColor={clockOutStatus?.code === 'within' ? 'text-emerald-600' : clockOutStatus?.code === 'outside' ? 'text-rose-600' : 'text-slate-400'}
+                      label="Geofence Result"
+                      value={clockOutStatus?.label || 'No location data'} />
+                    <AuditRow icon={MapPin} label="Distance from Branch" value={assignedBranchDistanceLabel(record, 'clock_out') || 'No location data'} />
                     {record.clock_out_accuracy != null && (
                       <AuditRow icon={Gauge} label="GPS Accuracy" value={`±${Math.round(record.clock_out_accuracy)}m`} />
                     )}
                     {record.clock_out_lat != null && (
-                      <AuditRow icon={Crosshair} label="Coordinates" value={`${record.clock_out_lat.toFixed(4)}, ${record.clock_out_lng.toFixed(4)}`} />
+                      <AuditRow icon={Crosshair} label="Coordinates" value={`${record.clock_out_lat.toFixed(5)}, ${record.clock_out_lng.toFixed(5)}`} />
                     )}
                     <AuditRow icon={Clock} label="Timestamp" value={new Date(record.clock_out).toLocaleString()} />
                     {record.early_departure_minutes > 0 && (

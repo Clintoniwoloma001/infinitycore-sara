@@ -114,7 +114,7 @@ export const payrollProfileService = {
   },
 
   // Save compensation. Role-based (Phase 66): super_admin edits with no
-  // audit; hr_manager edits (audited); hr_officer MUST pass a base64 PNG
+  // audit; head_of_human_resources edits (audited); hr_officer MUST pass a base64 PNG
   // signature. reason required. Audited to payroll_audit_logs + audit_logs.
   //   basic        – monthly basic salary
   //   allowances   – [{ name?, component_id?, category?, amount }]

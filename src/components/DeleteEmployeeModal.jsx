@@ -15,7 +15,7 @@ const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm fo
 //
 // Deleting an employee therefore:
 //   - Requires the SAME authorization as every other personnel-lifecycle
-//     action (super_admin / hr_manager only — see terminationAuthorization.js,
+//     action (super_admin / Head of Human Resources only — see terminationAuthorization.js,
 //     the single source of truth referenced by useAuth.canTerminate/
 //     canArchive/canDelete).
 //   - Archives the employee (history preserved, audited), cancels any open
@@ -44,7 +44,7 @@ export default function DeleteEmployeeModal({ employee, onClose, onConfirm, busy
         <div className="px-5 py-4 space-y-4">
           <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 flex items-start gap-2">
             <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0" />
-            This action is restricted to <span className="font-semibold">super_admin</span> and <span className="font-semibold">hr_manager</span> roles only. Identity is verified server-side. Deleting removes the employee from the roster and payroll (open payroll rows are cancelled), deactivates their platform login, and archives the record — history is preserved, and <span className="font-semibold">Super Admin accounts cannot be deleted</span>.
+            This action is restricted to <span className="font-semibold">super_admin</span> and <span className="font-semibold">Head of Human Resources</span> roles only. Identity is verified server-side. Deleting removes the employee from the roster and payroll (open payroll rows are cancelled), deactivates their platform login, and archives the record — history is preserved, and <span className="font-semibold">Super Admin accounts cannot be deleted</span>.
           </div>
 
           <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">

@@ -40,8 +40,11 @@
     "test:profiles-unique": "node tests/profilesEmailUnique.test.mjs",
     "test:profiles-fk": "node tests/profilesAuthFk.test.mjs",
     "test:hr-jobs": "node tests/hrJobsLifecycle.test.mjs",
+    "test:hr-organisation": "node tests/hrOrganisationModule.test.mjs",
     "test:roles-head-operations": "node tests/rolesHeadOperations.test.mjs",
-    "test:name-enquiry": "node tests/bankoneNameEnquiry.test.mjs"
+    "test:roles-head-hr": "node tests/rolesHeadOfHr.test.mjs",
+    "test:name-enquiry": "node tests/bankoneNameEnquiry.test.mjs",
+    "test:leave-entitlements": "node tests/leaveEntitlements.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

@@ -12,10 +12,10 @@ export const APPROVAL_CHAIN = [
   { role: 'branch_manager', label: 'Branch Manager' },
   { role: 'area_manager', label: 'Area Manager' },
   { role: 'head_of_business', label: 'Head of Business' },
-  { role: 'hr_manager', label: 'HR (Final)' },
+  { role: 'head_of_human_resources', label: 'HR (Final)' },
 ]
 
-export const APPROVER_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'hr_manager', 'hr_officer']
+export const APPROVER_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'head_of_human_resources', 'hr_officer']
 
 export const currentStage = (r) => APPROVAL_CHAIN[(r.approval_level || 1) - 1]
 export const isFinalStage = (r) => (r.approval_level || 1) >= APPROVAL_CHAIN.length

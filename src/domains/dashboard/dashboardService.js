@@ -55,7 +55,7 @@ async function getSelfSnapshot(userId) {
     attendanceService.getToday(employee.id).catch(() => null),
     attendanceService.getHistory(employee.id, { limit: 31 }).catch(() => []),
     read(supabase.from('leave_requests').select('*').eq('created_by', userId).order('created_at', { ascending: false }).limit(8)),
-    read(supabase.from('leave_balances').select('leave_type, entitled_days, used_days, year').eq('employee_id', userId).eq('year', currentYear())),
+    read(supabase.from('leave_balances').select('leave_type, effective_entitlement, entitled_days, used_days, pending_days, year').eq('employee_id', userId).eq('year', currentYear())),
     kpiService.list({ employeeId: employee.id }).catch(() => []),
     targetService.list({ employeeId: employee.id }).catch(() => []),
     workTaskService.list({ assignedTo: userId }).catch(() => []),

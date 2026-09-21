@@ -11,19 +11,9 @@ import {
 } from '../../services/corporateChatService'
 import MessageBubble from './MessageBubble'
 import Composer from './Composer'
-
-const AVATAR_PALETTE = [
-  'bg-emerald-500', 'bg-sky-500', 'bg-violet-500', 'bg-amber-500',
-  'bg-rose-500', 'bg-indigo-500', 'bg-teal-500', 'bg-fuchsia-500',
-]
-
-function hueFor(str = '') {
-  let h = 0
-  for (const c of String(str)) h = (h * 31 + c.charCodeAt(0)) % 997
-  return AVATAR_PALETTE[h % AVATAR_PALETTE.length]
-}
-
-const initials = (name = '') => name.split(' ').filter(Boolean).slice(0, 2).map((n) => n[0]?.toUpperCase()).join('') || '?'
+import PersonAvatar from './PersonAvatar'
+import { displayPersonName, initials, hueFor, personMatches } from './personUtils'
+import { directChat } from '../../services/corporateChatService'
 
 const fmtTime = (iso) => {
   if (!iso) return ''
@@ -33,19 +23,11 @@ const fmtTime = (iso) => {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-const COMM_ADMIN_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer']
-
-// A name resolver that never leaks a raw UUID for unknown directory entries.
-const displayPersonName = (person) => {
-  const raw = person?.full_name || person?.name || ''
-  return raw && (!person?.email || String(raw).toLowerCase() !== String(person?.email || '').toLowerCase())
-    ? raw
-    : 'Unknown User'
-}
+const COMM_ADMIN_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer']
 
 const typeLabel = (channel) => ({ branch: 'Branch', area: 'Area', department: 'Department', announcement: 'Announcements' })[channel.channel_type] || (channel.channel_type === 'role' ? 'Role' : 'Team')
 
-export default function Conversations({ kind, people, identity }) {
+export default function Conversations({ kind, people, identity, onStartDirectMessage }) {
   const { profile } = useAuth()
   const isCommAdmin = COMM_ADMIN_ROLES.includes(profile?.role)
   const [me, setMe] = useState(null)
@@ -699,6 +681,7 @@ export default function Conversations({ kind, people, identity }) {
           myRole={myRole}
           onClose={() => setShowMembers(false)}
           onChange={openConversation}
+          onStartDirectMessage={onStartDirectMessage}
         />
       )}
 
@@ -735,7 +718,7 @@ export default function Conversations({ kind, people, identity }) {
   )
 }
 
-function MemberPanel({ kind, conversation, members, identity, people, me, myRole, onClose, onChange }) {
+function MemberPanel({ kind, conversation, members, identity, people, me, myRole, onClose, onChange, onStartDirectMessage }) {
   const { profile } = useAuth()
   const isCommAdmin = COMM_ADMIN_ROLES.includes(profile?.role)
   const canManage = ['owner', 'admin'].includes(myRole) || isCommAdmin
@@ -766,12 +749,25 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
   const filteredMembers = (members || []).filter((m) => {
     if (!q) return true
     const ident = identity[m.member_id]
-    return `${ident?.name || ''} ${ident?.email || ''} ${ident?.department || ''} ${ident?.position || ''} ${ident?.staffId || ''} ${ident?.branch || ''}`.toLowerCase().includes(q)
+    if (!ident) return false
+    return personMatches(
+      {
+        ...ident,
+        full_name: ident.name,
+        email: ident.email,
+        employee_number: ident.staffId,
+        staff_id: ident.staffId,
+        department: ident.department,
+        position: ident.position,
+        branch: ident.branch,
+      },
+      q
+    )
   })
   const filteredAvailable = (people || []).filter((p) =>
     p.id !== me &&
     !members.some((m) => m.member_id === p.id) &&
-    (!q || `${displayPersonName(p)} ${p.email || ''} ${p.department || ''} ${p.position || ''}`.toLowerCase().includes(q))
+    personMatches(p, q)
   )
 
   // Automatic membership is a channel concept; groups are always manual.
@@ -967,17 +963,24 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
           {filteredMembers.length === 0 && <div className="px-5 py-8 text-center text-sm text-slate-400">No members match your search.</div>}
           {filteredMembers.map((m) => {
             const ident = identity[m.member_id]
-            const memberName = displayPersonName(ident) || 'Unknown User'
+            const memberName = displayPersonName(ident)
             const isMe = m.member_id === me
             const isOwner = m.role === 'owner'
             const suspended = !!m.suspended_until
             const isSuspendForm = suspendFor === m.member_id
+            const startDm = async () => {
+              if (!ident?.userId || isMe || !onStartDirectMessage) return
+              try {
+                const thread = await directChat.getOrCreate(ident.userId)
+                if (thread?.id) onStartDirectMessage(thread.id)
+              } catch (e) {
+                setInviteError(e?.message || 'Could not start direct message')
+              }
+            }
             return (
               <div key={m.member_id} className="px-5 py-3">
                 <div className="flex items-center gap-3">
-                  <div className={`w-9 h-9 rounded-full ${hueFor(memberName)} flex items-center justify-center text-xs font-semibold text-white shrink-0`}>
-                    {initials(memberName)}
-                  </div>
+                  <PersonAvatar person={ident} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-slate-800 truncate">{isMe ? 'You' : memberName}</p>
                     <p className="text-xs text-slate-400 truncate">
@@ -997,32 +1000,37 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
                       </p>
                     )}
                   </div>
-                  {canChangeRoles && !isMe && !isOwner ? (
-                    <select
-                      value={m.role}
-                      onChange={(e) => setRole(m.member_id, e.target.value)}
-                      disabled={busy}
-                      aria-label={`Role for ${memberName}`}
-                      className="text-xs rounded-lg border border-slate-200 px-2 py-1 bg-white disabled:opacity-50"
-                    >
-                      <option value="owner">Owner</option>
-                      <option value="admin">Admin</option>
-                      <option value="moderator">Moderator</option>
-                      <option value="member">Member</option>
-                    </select>
-                  ) : (
-                    <span className="text-[11px] uppercase tracking-wide text-slate-400">{m.role}</span>
-                  )}
-                  {canManage && !isMe && !isOwner && (
-                    <div className="flex items-center gap-2 shrink-0">
-                      {suspended ? (
-                        <button onClick={() => doUnsuspend(m.member_id)} disabled={busy} className="text-xs text-emerald-600 hover:text-emerald-800 hover:underline disabled:opacity-50">Resume</button>
-                      ) : (
-                        <button onClick={() => openSuspend(m.member_id, 7)} disabled={busy} className={`text-xs hover:underline disabled:opacity-50 ${isSuspendForm ? 'text-slate-400' : 'text-amber-600 hover:text-amber-800'}`}>Suspend</button>
-                      )}
-                      <button onClick={() => removeMember(m.member_id)} disabled={busy} className="text-xs text-rose-500 hover:text-rose-700 hover:underline disabled:opacity-50">Remove</button>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {!isMe && onStartDirectMessage && (
+                      <button onClick={startDm} className="text-xs text-[#009944] hover:text-[#007a36] hover:underline">Message</button>
+                    )}
+                    {canChangeRoles && !isMe && !isOwner ? (
+                      <select
+                        value={m.role}
+                        onChange={(e) => setRole(m.member_id, e.target.value)}
+                        disabled={busy}
+                        aria-label={`Role for ${memberName}`}
+                        className="text-xs rounded-lg border border-slate-200 px-2 py-1 bg-white disabled:opacity-50"
+                      >
+                        <option value="owner">Owner</option>
+                        <option value="admin">Admin</option>
+                        <option value="moderator">Moderator</option>
+                        <option value="member">Member</option>
+                      </select>
+                    ) : (
+                      <span className="text-[11px] uppercase tracking-wide text-slate-400">{m.role}</span>
+                    )}
+                    {canManage && !isMe && !isOwner && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        {suspended ? (
+                          <button onClick={() => doUnsuspend(m.member_id)} disabled={busy} className="text-xs text-emerald-600 hover:text-emerald-800 hover:underline disabled:opacity-50">Resume</button>
+                        ) : (
+                          <button onClick={() => openSuspend(m.member_id, 7)} disabled={busy} className={`text-xs hover:underline disabled:opacity-50 ${isSuspendForm ? 'text-slate-400' : 'text-amber-600 hover:text-amber-800'}`}>Suspend</button>
+                        )}
+                        <button onClick={() => removeMember(m.member_id)} disabled={busy} className="text-xs text-rose-500 hover:text-rose-700 hover:underline disabled:opacity-50">Remove</button>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 {isSuspendForm && (
                   <div className="mt-2 ml-12 rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2">
@@ -1141,9 +1149,7 @@ function CreateConversationModal({ kind, people, onClose, onCreated }) {
             return (
               <button key={p.id} onClick={() => toggle(p.id)} className="w-full text-left px-5 py-2.5 flex items-center gap-3 hover:bg-slate-50">
                 <input type="checkbox" checked={checked} readOnly className="w-4 h-4 accent-[#009944]" />
-                <div className={`w-8 h-8 rounded-full ${hueFor(displayPersonName(p))} flex items-center justify-center text-[10px] font-semibold text-white shrink-0`}>
-                  {initials(displayPersonName(p))}
-                </div>
+                <PersonAvatar person={p} sizeClass="w-8 h-8" textClass="text-[10px]" />
                 <div className="min-w-0 flex-1">
                      <p className="text-sm text-slate-800 truncate">{displayPersonName(p)}</p>
                   <p className="text-xs text-slate-400 truncate">{p.department || p.position || ''}</p>

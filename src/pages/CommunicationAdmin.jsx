@@ -11,7 +11,7 @@ import {
   buildExportFile, resolveDirectory,
 } from '../services/corporateChatService'
 
-const ADMIN_ROLES = ['super_admin', 'admin', 'hr_manager', 'hr_officer']
+const ADMIN_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer']
 
 const STATUS_STYLE = {
   open: 'text-rose-700 bg-rose-50 border-rose-200',

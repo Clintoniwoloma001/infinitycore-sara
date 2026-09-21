@@ -234,6 +234,33 @@ export function RegulatoryEditor({ draft, setDraft }) {
   )
 }
 
+// --------------------------------------------------------------- QUALIFICATION
+export function QualificationEditor({ draft, setDraft }) {
+  const patch = (patch) => setDraft({ ...draft, ...patch })
+  return (
+    <div className="grid md:grid-cols-2 gap-4">
+      <Field label="Minimum MPR" hint="Staff must score at least this MPR percentage.">
+        <NumInput value={draft.mpr_min} onChange={(v) => patch({ mpr_min: v })} suffix="%" />
+      </Field>
+      <Field label="Maximum MPR" hint="Staff must score no more than this MPR percentage.">
+        <NumInput value={draft.mpr_max} onChange={(v) => patch({ mpr_max: v })} suffix="%" />
+      </Field>
+      <Field label="PAR threshold" hint="Portfolio at risk must be at most this percentage.">
+        <NumInput value={draft.par_pct} onChange={(v) => patch({ par_pct: v })} suffix="%" />
+      </Field>
+      <Field label="New-staff PAR threshold" hint="Tighter PAR limit for staff in their probation/wait period.">
+        <NumInput value={draft.new_staff_par_pct} onChange={(v) => patch({ new_staff_par_pct: v })} suffix="%" />
+      </Field>
+      <Field label="Portfolio achievement" hint="Portfolio delivered against target.">
+        <NumInput value={draft.portfolio_achievement_pct} onChange={(v) => patch({ portfolio_achievement_pct: v })} suffix="%" />
+      </Field>
+      <Field label="SME PAR max days" hint="SME loans must not exceed this many days past due.">
+        <NumInput value={draft.sme_par_max_days} onChange={(v) => patch({ sme_par_max_days: v })} suffix="days" />
+      </Field>
+    </div>
+  )
+}
+
 // --------------------------------------------------------------- BONUS
 export function BonusEditor({ draft, setDraft, designations = [] }) {
   const designationOptions = useMemo(() => {
@@ -372,6 +399,7 @@ export const SECTION_EDITORS = {
   'mobility.allowance_bands': MobilityEditor,
   'sanctions.performance': SanctionsEditor,
   'regulatory.reference_values': RegulatoryEditor,
+  'bonus.qualification': QualificationEditor,
   'bonus.productivity': BonusEditor,
 }
 

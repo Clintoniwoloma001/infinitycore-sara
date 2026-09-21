@@ -6,7 +6,7 @@ import { rpcWithRetry } from './rpcHelper'
 // Presentation-derived MPR/PAR/grades/mobility/bonus/sanctions values
 // stored as versioned JSON config items. Reads inherit the phase-26
 // RLS select policy; writes go through SECURITY DEFINER RPCs that
-// require super_admin/admin/hr_manager and write an audit trail.
+// require super_admin/admin/head_of_human_resources and write an audit trail.
 // ------------------------------------------------------------------
 
 async function configRpc(name, args) {

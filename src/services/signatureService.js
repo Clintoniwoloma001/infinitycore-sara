@@ -53,7 +53,7 @@ export async function fileToProcessedSignature(file) {
 export async function uploadSignature({ dataUrl, scope, id = null }) {
   const processed = await processSignatureImage(dataUrl)
   const blob = dataUrlToBlob(processed)
-  const prefix = scope === 'employee' ? `signatures/employees/${id}` : `signatures/${scope === 'hr_manager' ? 'hr-manager' : 'management'}`
+  const prefix = scope === 'employee' ? `signatures/employees/${id}` : `signatures/${scope === 'head_of_human_resources' ? 'hr-manager' : 'management'}`
   const path = `${prefix}/${crypto.randomUUID()}.png`
   const { error } = await supabase.storage.from('documents').upload(path, blob, {
     contentType: 'image/png',

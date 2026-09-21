@@ -98,7 +98,7 @@ assert.ok(management.includes("id: 'bindings', label: 'Device Binding'"), 'bindi
 assert.ok(management.includes('function DeviceBindingsTab({ setNotice })'), 'DeviceBindingsTab is missing')
 assert.match(management, /clearDeviceBinding\(binding\.device_fingerprint_hash, binding\.binding_date/)
 assert.match(management, /listDeviceBindingBlocks\(d \|\| null, 20\)/)
-assert.ok(management.includes("['super_admin', 'admin', 'hr_manager', 'hr_officer', 'branch_manager']"), 'management role gate is missing')
+assert.ok(management.includes("['super_admin', 'admin', 'head_of_human_resources', 'hr_officer', 'branch_manager']"), 'management role gate is missing')
 
 // --- Frontend: fingerprint util semantics ---
 assert.ok(util.includes('infinitycore_qr_device_id'), 'storage key is missing')

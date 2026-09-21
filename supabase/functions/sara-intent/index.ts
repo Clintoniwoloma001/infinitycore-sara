@@ -30,7 +30,7 @@ const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY', 'PEN
 const WRITE_INTENTS = ['APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE']
 const ALL_INTENTS = [...new Set([...READ_INTENTS, ...WRITE_INTENTS, 'HELP', 'UNKNOWN'])]
 
-const WRITE_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'hr_manager', 'hr_officer']
+const WRITE_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'head_of_human_resources', 'hr_officer']
 const LOAN_READ_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'head_of_operations', 'loan_officer', 'relationship_manager']
 
 // Employee termination is STRICTLY restricted to these two InfinityCore
@@ -38,7 +38,7 @@ const LOAN_READ_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager
 // RPC / employees_termination_guard trigger on execution. Frontend role
 // claims are never trusted; this list is derived from the authenticated
 // user's profile row.
-const TERMINATION_ROLES = ['super_admin', 'hr_manager']
+const TERMINATION_ROLES = ['super_admin', 'head_of_human_resources']
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',

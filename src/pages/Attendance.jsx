@@ -105,7 +105,7 @@ export default function Attendance() {
   // Role-scoped views
   const isBranchManager = role === 'branch_manager' || hasPermission('attendance.branch.read')
   const isAreaManager = role === 'area_manager' || hasPermission('attendance.area.read')
-  const isHRorAdmin = ['super_admin', 'admin', 'hr_manager', 'hr_officer'].includes(role) || isAdmin
+  const isHRorAdmin = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer'].includes(role) || isAdmin
   const [viewScope, setViewScope] = useState('my') // 'my' | 'branch' | 'area'
   const [teamRows, setTeamRows] = useState([])
   const [teamLoading, setTeamLoading] = useState(false)
