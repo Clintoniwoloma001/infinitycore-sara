@@ -479,7 +479,7 @@ export const attendanceService = {
   async listTerminalDevices() {
     const { data, error } = await supabase
       .from('attendance_devices')
-      .select('id, device_name, device_type, status, active, branch_id, last_seen_at, created_at, updated_at')
+      .select('id, device_name, device_type, status, active, branch_id, last_seen_at, created_at, updated_at, token_generated_at')
       .eq('device_type', 'attendance_terminal')
       .order('created_at', { ascending: true })
     if (error) throw error
@@ -490,6 +490,21 @@ export const attendanceService = {
     const { data, error } = await supabase.rpc('create_attendance_terminal_token', {
       p_device_id: deviceId,
       p_device_name: 'QR Attendance Terminal',
+    })
+    if (error) throw error
+    return data
+  },
+
+  /**
+   * The CURRENT live QR token for a terminal, read from the locked-down
+   * server-side view-link store. Lets View QR re-render the exact QR/link
+   * without generating a brand-new token. Returns { has_qr, token, status,
+   * generated_at } — has_qr=false when the terminal has no live token
+   * (never generated, or revoked).
+   */
+  async getTerminalQrLink(deviceId) {
+    const { data, error } = await supabase.rpc('get_attendance_terminal_qr_link', {
+      p_device_id: deviceId,
     })
     if (error) throw error
     return data

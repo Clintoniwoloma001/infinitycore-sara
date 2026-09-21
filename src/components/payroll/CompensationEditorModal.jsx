@@ -15,7 +15,12 @@ const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 // pension, net, mid/end) is produced by the preview RPC using the same
 // engine that the save path persists. A reason is mandatory — enforced
 // server-side by upsert_employee_compensation.
-export default function CompensationEditorModal({ employeeId, onClose, onSaved }) {
+//
+// Role-based flow (Phase 66): super_admin and hr_manager persist directly
+// (super_admin is not audited; hr_manager edits are). When signatureRequired
+// (HR Officer), "Save" hands the payload to onNeedSignature so the parent can
+// open the signature pad modal and only then persist with the signature.
+export default function CompensationEditorModal({ employeeId, onClose, onSaved, signatureRequired = false, onNeedSignature }) {
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState(null)
   const [basic, setBasic] = useState('')
@@ -23,6 +28,7 @@ export default function CompensationEditorModal({ employeeId, onClose, onSaved }
   const [deductions, setDeductions] = useState([])
   const [newAllowance, setNewAllowance] = useState({ name: '', amount: '' })
   const [newDeduction, setNewDeduction] = useState({ name: '', amount: '' })
+  const [overrides, setOverrides] = useState({ gross: '', net: '', mid: '', end: '' })
   const [reason, setReason] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
@@ -51,6 +57,12 @@ export default function CompensationEditorModal({ employeeId, onClose, onSaved }
             .map((p) => ({ component_id: p.component_id, name: p.name, amount: String(p.amount ?? '') }))
         )
         setPreview(res.snapshot && Object.keys(res.snapshot).length ? res.snapshot : null)
+        setOverrides({
+          gross: res.payroll_gross_override != null ? String(res.payroll_gross_override) : '',
+          net: res.payroll_net_override != null ? String(res.payroll_net_override) : '',
+          mid: res.payroll_mid_override != null ? String(res.payroll_mid_override) : '',
+          end: res.payroll_end_override != null ? String(res.payroll_end_override) : '',
+        })
       })
       .catch((e) => setError(e?.message || 'Unable to load compensation'))
       .finally(() => { if (active) setLoading(false) })
@@ -104,15 +116,25 @@ export default function CompensationEditorModal({ employeeId, onClose, onSaved }
       setError('A reason is required (at least 5 characters).')
       return
     }
+    const payload = {
+      employeeId,
+      basic: num(basic),
+      allowances: allowances.map((a) => ({ component_id: a.component_id || null, name: a.name, amount: num(a.amount), category: a.category || 'other' })),
+      deductions: deductions.map((d) => ({ component_id: d.component_id || null, name: d.name, amount: num(d.amount) })),
+      reason: reason.trim(),
+      grossOverride: overrides.gross === '' ? null : num(overrides.gross),
+      netOverride: overrides.net === '' ? null : num(overrides.net),
+      midOverride: overrides.mid === '' ? null : num(overrides.mid),
+      endOverride: overrides.end === '' ? null : num(overrides.end),
+    }
+    // HR Officer edits require a captured signature first (Phase 66).
+    if (signatureRequired && typeof onNeedSignature === 'function') {
+      onNeedSignature(payload)
+      return
+    }
     setBusy('save'); setError('')
     try {
-      await payrollProfileService.upsertEmployeeCompensation({
-        employeeId,
-        basic: num(basic),
-        allowances: allowances.map((a) => ({ component_id: a.component_id || null, name: a.name, amount: num(a.amount), category: a.category || 'other' })),
-        deductions: deductions.map((d) => ({ component_id: d.component_id || null, name: d.name, amount: num(d.amount) })),
-        reason: reason.trim(),
-      })
+      await payrollProfileService.upsertEmployeeCompensation(payload)
       onSaved()
       onClose()
     } catch (e) {
@@ -286,6 +308,37 @@ export default function CompensationEditorModal({ employeeId, onClose, onSaved }
                   <button onClick={() => addRow('deduction')} disabled={!newDeduction.name.trim()} className="inline-flex items-center gap-1 px-3 h-10 rounded-lg bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 disabled:opacity-40">
                     <Plus className="w-4 h-4" /> Add
                   </button>
+                </div>
+              </div>
+
+              {/* Manual payroll outcomes (override engine-derived figures) */}
+              <div className="rounded-lg border border-violet-200 bg-violet-50/40 p-4">
+                <h4 className="text-sm font-semibold text-slate-700 mb-1">Manual payroll outcomes (override)</h4>
+                <p className="text-xs text-slate-400 mb-3">
+                  Leave blank to keep the payroll engine&apos;s derived figures. When set, <span className="font-medium text-slate-500">Gross</span>,{' '}
+                  <span className="font-medium text-slate-500">Net</span>, <span className="font-medium text-slate-500">Mid-month</span> and{' '}
+                  <span className="font-medium text-slate-500">Month-end</span> are forced to these amounts in the Payroll Master and BankOne push.
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    ['Gross', 'gross', preview?.gross_monthly],
+                    ['Net', 'net', preview?.net_monthly],
+                    ['Mid-month', 'mid', preview?.mid_month],
+                    ['Month-end', 'end', preview?.end_month],
+                  ].map(([label, key, derived]) => (
+                    <div key={key}>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">{label}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder={derived != null ? money(derived).replace('₦', '') : 'Auto'}
+                        className={`${inputCls} ${overrides[key] !== '' ? 'border-violet-400 ring-1 ring-violet-200' : ''}`}
+                        value={overrides[key]}
+                        onChange={(e) => setOverrides((o) => ({ ...o, [key]: e.target.value }))}
+                      />
+                    </div>
+                  ))}
                 </div>
               </div>
 

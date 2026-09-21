@@ -113,22 +113,43 @@ export const payrollProfileService = {
     return data
   },
 
-  // Save compensation. Server-side only (super_admin/admin/hr_manager),
-  // reason required, audited to audit_logs. Inputs:
+  // Save compensation. Role-based (Phase 66): super_admin edits with no
+  // audit; hr_manager edits (audited); hr_officer MUST pass a base64 PNG
+  // signature. reason required. Audited to payroll_audit_logs + audit_logs.
   //   basic        – monthly basic salary
   //   allowances   – [{ name?, component_id?, category?, amount }]
   //   deductions   – [{ name?, component_id?, amount }]
   //   reason       – required (>= 5 chars)
-  async upsertEmployeeCompensation({ employeeId, basic, allowances = [], deductions = [], reason = '' }) {
+  //   signature    – base64 PNG data URL (mandatory for hr_officer)
+  //   ipAddress    – best-effort caller IP for the audit trail
+  //   gross/net/mid/endOverride – manual payroll-outcome overrides (null to
+  //     keep the engine-derived figure, a value to force it)
+  async upsertEmployeeCompensation({ employeeId, basic, allowances = [], deductions = [], reason = '', signature = null, ipAddress = null, grossOverride = null, netOverride = null, midOverride = null, endOverride = null }) {
     const { data, error } = await supabase.rpc('upsert_employee_compensation', {
       p_employee_id: employeeId,
       p_basic: Number(basic || 0),
       p_allowances: allowances,
       p_deductions: deductions,
       p_reason: reason,
+      p_signature: signature || null,
+      p_ip_address: ipAddress || null,
+      p_gross_override: grossOverride != null && grossOverride !== '' ? Number(grossOverride) : null,
+      p_net_override: netOverride != null && netOverride !== '' ? Number(netOverride) : null,
+      p_mid_override: midOverride != null && midOverride !== '' ? Number(midOverride) : null,
+      p_end_override: endOverride != null && endOverride !== '' ? Number(endOverride) : null,
     })
     if (error) throw error
     return data // { ok, employee_id, period_label, breakdown }
+  },
+
+  // Payroll audit trail (Phase 66). Read-only for payroll roles.
+  async listAudit({ employeeId = null, limit = 100 } = {}) {
+    const { data, error } = await supabase.rpc('list_payroll_audit', {
+      p_employee_id: employeeId,
+      p_limit: limit,
+    })
+    if (error) throw error
+    return data || []
   },
 
   // Derived-totals preview, NO writes. Mirrors the exact breakdown the

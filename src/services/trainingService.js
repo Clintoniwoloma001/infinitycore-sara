@@ -100,6 +100,20 @@ export const trainingService = {
     return data || { status: 'failed', error: 'No response from the invite service' }
   },
 
+  // AI-assisted KSS question drafting. The document is decoded + parsed
+  // server-side by the `generate-training-questions` edge function; only the
+  // extracted text reaches OpenAI. Returns validated question-bank lines in
+  // the existing "Question | Correct answer | Option 1, Option 2, Option 3"
+  // format. Nothing is written to the bank — HR reviews/edits first.
+  async generateQuestionsFromDocument({ title, description = '', fileName, fileBase64, sessionId = null }) {
+    if (!fileName || !fileBase64) throw new Error('A training document is required.')
+    const { data, error } = await supabase.functions.invoke('generate-training-questions', {
+      body: { title, description, fileName, fileBase64, sessionId },
+    })
+    if (error) throw error
+    return data || { ok: false, error: 'No response from the AI question-drafting service' }
+  },
+
   async getDashboard(filters = {}) {
     const { data, error } = await supabase.rpc('get_training_dashboard', {
       p_start_date: filters.startDate || null,

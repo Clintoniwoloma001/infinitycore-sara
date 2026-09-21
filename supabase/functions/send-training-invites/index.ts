@@ -108,7 +108,7 @@ Deno.serve(async (req) => {
     deliveryLine,
   ].filter(Boolean)
   if (session.description) detailLines.push(`Description: ${session.description}`)
-  if (isVirtual && attendanceLink) detailLines.push(`Attendance: ${attendanceLink}`)
+  if (attendanceLink) detailLines.push(`Attendance: ${attendanceLink}`)
 
   const bodyText = detailLines.join('\n')
   const emailSubject = `Training invitation: ${session.title} (${String(session.training_type).toUpperCase()})`

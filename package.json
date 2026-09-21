@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "homepage": "https://clintoniwoloma001.github.io/infinitycore-sara",
   "type": "module",
-  "description": "Infinity Bank Operations Platform \u2014 Vite + React + Supabase SARA AI ENEABLED",
+  "description": "Infinity Bank Operations Platform — Vite + React + Supabase SARA AI ENEABLED",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -24,13 +24,18 @@
     "test:training-schema": "node tests/trainingSchema.test.mjs",
     "test:training-delivery": "node tests/trainingDeliveryMeetings.test.mjs",
     "test:training-attendance": "node tests/trainingAttendanceLink.test.mjs",
+    "test:meeting-link": "node tests/meetingLink.test.mjs",
+    "test:kss-channel": "node tests/kssChannelInvites.test.mjs",
+    "test:question-generation": "node tests/trainingQuestionGeneration.test.mjs",
     "test:bankone": "node scripts/test-bankone-integration.mjs",
     "test:termination-auth": "node scripts/verify-termination-auth.mjs",
     "test:reinvite": "node tests/reinviteReviewModal.test.mjs",
-    "test:payroll-compensation": "node tests/payrollCompensation.test.mjs"
+    "test:payroll-compensation": "node tests/payrollCompensation.test.mjs",
+    "test:qr-terminal": "node tests/qrTerminalView.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",
+    "hermes": "^0.4.4",
     "html2pdf.js": "^0.10.3",
     "lucide-react": "^0.475.0",
     "qrcode.react": "^4.2.0",
@@ -38,7 +43,8 @@
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
     "react-signature-canvas": "^1.1.0-alpha.2",
-    "recharts": "^2.15.4"
+    "recharts": "^2.15.4",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

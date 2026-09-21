@@ -216,3 +216,125 @@ credentials arrive; the platform file overrides them (listed last in `env_file:`
   gross, net, package chips) via `get_employee_compensation`.
 - Test: `npm run test:payroll-compensation` — `tests/payrollCompensation.test.mjs`
   (migration-content assertions, no live DB).
+
+## Phase 65 — QR Terminal "View QR" persistence + status consistency
+- SQL migration: `supabase/migrations/20260920000001_attendance_fix_qr_view_link_status.sql` —
+  run in Supabase SQL Editor after `20260920000000_attendance_device_daily_binding.sql`.
+  Idempotent/additive.
+  - Root cause: `create_attendance_terminal_token` stored only a SHA-256 of the raw token
+    in `attendance_devices.device_token`, and the raw token was returned to the browser
+    exactly once, so View QR after a reload could never re-render the current QR without
+    minting a brand-new token. The temporary `20260919000000` repair had also redefined
+    revoke to write a token-nulling `'suspended'` (pre-Phase 62 legacy behaviour), so
+    genuinely revoked terminals surfaced as "Suspended" and Resume could revive a
+    token-less terminal.
+  - Adds `attendance_terminal_view_links` (device_id PK → attendance_devices ON DELETE
+    CASCADE, token_hex raw) — RLS-enabled, `revoke all` from anon/authenticated, NO direct
+    read path. Only read via `get_attendance_terminal_qr_link(uuid)` SECURITY DEFINER RPC
+    (super_admin/admin/hr_manager) so View QR re-renders the exact current QR/link WITHOUT
+    regenerating. Raw tokens never sit in any RLS-visible column; purged on revoke/delete.
+  - Status model restored: revoke writes `status='revoked'` + nulls token + clears the view
+    link; legacy token-less `'suspended'` terminals re-labelled `'revoked'`; suspend keeps
+    token + view link (resume needs no reprint); resume only from suspended; delete only
+    from revoked. Adds `attendance_devices.token_generated_at` for the Generated column.
+  - Public scan gates (`validate_attendance_terminal_employee` /
+    `validate_attendance_terminal_location` / `clock_attendance_terminal`, fingerprint-aware
+    signatures unchanged) now resolve the terminal by token including non-active states and
+    reject a suspended terminal with "This terminal is temporarily suspended. …" instead of
+    the misleading "invalid or revoked". No attendance record is ever created for a
+    non-active terminal.
+- `attendanceService.js`: `listTerminalDevices()` also selects `token_generated_at`; new
+  `getTerminalQrLink(deviceId)` wraps the gated RPC.
+- `AttendanceManagement.jsx` QR Attendance tab: View QR now loads the CURRENT live link from
+  the server (`getTerminalQrLink`) instead of the session-only `linksByDevice` cache, so it
+  works after reloads and shows the actual functional QR + copyable link. Only when no live
+  token exists (never generated or revoked) does the modal offer Generate. Removed the
+  silent "regenerate to view" side effect. Terminals table gains a Generated column
+  (`token_generated_at`).
+- Test: `npm run test:qr-terminal` — `tests/qrTerminalView.test.mjs` (migration-content
+  assertions, no live DB).
+
+## Phase 64 — Training & Development extension (Meet OAuth fix, invites, KSS channel, AI questions)
+Cross-cutting completion of the Training & Development roadmap. No SQL migration for
+Phase 1/4 (frontend + edge-function only) — but `schema_phase63_kss_channel_training_invites.sql`
+must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
+`send-training-invites`, `create-google-meet`, `create-zoom-meeting`,
+`generate-training-questions` deployed (`supabase functions deploy`).
+
+### Phase 1 — Google Meet OAuth fix + permanent manual-link fallback
+- Root cause: `create-google-meet` returned `not_connected` because the invoking user had
+  never completed Google OAuth (no `integration_connections` row for `google_calendar`);
+  the Training page had no Connect action and `SessionMeetingPanel` had no manual fallback.
+- `src/lib/meetingLink.js` — SHARED URL validators used by both UI and tests:
+  `isValidHttpUrl` (http/https only) and `isValidMeetingUrl` (host exactly
+  `meet.google.com` or `www.meet.google.com`, path non-empty; no over-validation — the
+  underlying Google payload is validated server-side on save anyway).
+- `Training.jsx`:
+  - `SessionMeetingPanel` now accepts `userId`; on `connectionFailed`
+    (`/OAuth|not connected|not_configured/i`) shows a **Connect / Reconnect Google
+    account** button that `window.open`s the OAuth URL from
+    `interviewService.connectGoogleCalendar(userId)`, plus a **Use a manual link** paste
+    box (placeholder `https://meet.google.com/xxx-xxxx-xxx`); `saveManualLink` validates
+    with `isValidMeetingUrl` and persists via `trainingService.attachMeeting(session.id,
+    { meetingUrl, platform, externalMeetingId: null })`. Manual links work for BOTH
+    physical and virtual sessions; `meeting_url` remains the single source of truth.
+  - `CreateTraining` similarly shows the Connect button when its provider call fails.
+- **Clinton (manual action):** complete the Google consent the first time from the
+  Training page — provider-generated Meet/Zoom links cannot be minted without a
+  connected OAuth account. Edge functions must be deployed.
+
+### Phase 2 — Multi-channel training invitations
+- `send-training-invites` was already fully wired (Resend email + in-app
+  notifications + KSS channel post). One fix: attendance link is now appended for ALL
+  delivery modes (`if (attendanceLink)` instead of `if (isVirtual && attendanceLink)`),
+  so physical-session invites also carry the QR/attendance link. `TRAINING_MANAGE_ROLES`
+  = super_admin/admin/branch_manager (matches frontend `canManage`).
+- Covered by `schema_phase63_kss_channel_training_invites.sql` (invites + KSS channel).
+
+### Phase 3 — KSS channel + automatic membership
+- No new code needed: `schema_phase63_kss_channel_training_invites.sql` adds the
+  `kss-announcements` auto channel (`ensure_kss_channel()`, `kss_channel_add_member`
+  `on conflict do nothing`, `trg_profiles_active_kss_member`, grants, bootstrap select);
+  membership pushes into the existing Phase 40/60 engine
+  (`send_mention_message`, `sync_auto_channel_members` override that no longer hardcodes
+  the branch_manger role). Offboarding / off-boarded-employee membership removal is
+  already handled by Phase 60 triggers
+  (`trg_employee_auto_channel_sync`, `trg_profile_auto_channel_sync`,
+  `reconcile_auto_channel_membership_for_employee` deletes only `auto_added = true` rows).
+
+### Phase 4 — AI-assisted KSS question generation
+- New edge function `supabase/functions/generate-training-questions/index.ts`:
+  - POST `{ title, description?, fileName, fileBase64, sessionId? }`; Bearer auth;
+    role allow-list `super_admin/admin/branch_manager/hr_manager/hr_officer`;
+    `.txt/.pdf/.docx` only; ≤ 2 MB.
+  - Extracts text **server-side** (TXT text-decode, PDF via `npm:unpdf@1.8.1`
+    `extractText`, DOCX via `npm:mammoth@1.12.3` `extractRawText` — both dynamically
+    imported in try/catch). Raw files never reach OpenAI; only extracted text is sent.
+  - Refuses to call the AI when extraction yields < 40 meaningful chars, returning the
+    exact copy: "Unable to extract readable text from this document. Please upload a
+    text-based PDF/DOCX/TXT file or enter the questions manually."
+  - Rate-limited via the existing `consume_sara_ai_usage(30, 2)`; OpenAI `gpt-4o-mini`
+    with `response_format: json_object`, temperature 0.2, 30s abort.
+  - Strict validation lives in `supabase/functions/_shared/kssQuestionValidator.js`
+    (shared with the test suite): exactly 3 questions, non-empty fields, exactly 3
+    non-empty options, `correct_answer` present verbatim among options, no duplicates.
+    On failure returns the exact copy: "AI generated questions could not be validated.
+    Please retry or enter questions manually."
+  - Output uses the EXISTING KSS bank line format
+    `Question | Correct answer | Option 1, Option 2, Option 3` and is fed into the
+    existing question-bank editor + rotation/grading pipeline — never bypasses it.
+  - Writes `AI_QUESTION_GENERATION` audit rows (metadata only; document text never
+    logged, stored, or returned).
+- `trainingService.generateQuestionsFromDocument({ title, description, fileName,
+  fileBase64, sessionId })` wraps the invoke.
+- `Training.jsx` **CreateTraining**: "Generate Questions from Document" panel under the
+  KSS question-bank textarea — file input (`.txt,.pdf,.docx`, client-side 2 MB check),
+  fills `form.question_text` with the three drafted lines for HR review/editing;
+  nothing is auto-submitted/auto-assigned. Exact extraction/validation errors surface
+  verbatim.
+- The function NEVER writes to `training_questions`, never creates sessions, never
+  assigns participants.
+- Tests: `npm run test:meeting-link`, `npm run test:kss-channel`,
+  `npm run test:question-generation` (node assertions incl. validator unit tests).
+- **Clinton (manual action):** add `OPENAI_API_KEY` project secret if absent (shared
+  with SARA), deploy the edge function, apply `schema_phase63_kss_channel_training_invites.sql`.

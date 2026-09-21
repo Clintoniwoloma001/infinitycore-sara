@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { BarChart3, BookOpen, CalendarDays, CheckCircle2, ClipboardCheck, Clock3, Copy, Download, ExternalLink, Link2, MapPin, Plus, RefreshCw, Share2, Users, Video, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { trainingService, TRAINING_TYPES, buildQuestionSets, calculateTrainingManHours, formatTrainingType, hours } from '../services/trainingService'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
 import { formatDate } from '../lib/utils'
 import { useAuth } from '../hooks/useAuth'
+import { connectGoogleCalendar } from '../services/interviewService'
+import { isValidHttpUrl, isValidMeetingUrl } from '../lib/meetingLink'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1.5'
@@ -41,15 +43,18 @@ function copyText(text, onDone) {
   onDone?.()
 }
 
-// Basic well-formed-URL check for the manual meeting-link fallback. No
-// domain whitelist — any https/http link the facilitator supplies is fine.
-function isValidHttpUrl(value) {
-  try {
-    const url = new URL(String(value || '').trim())
-    return url.protocol === 'http:' || url.protocol === 'https:'
-  } catch {
-    return false
-  }
+// Read a chosen .txt/.pdf/.docx File into a base64 string for the server-side
+// AI question-drafting edge function. The raw file never reaches OpenAI.
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result || '')
+      resolve(result.includes(',') ? result.split(',')[1] : result)
+    }
+    reader.onerror = () => reject(new Error('The document could not be read — please try again.'))
+    reader.readAsDataURL(file)
+  })
 }
 
 // Build an ISO start/end for meeting providers from the session date + times.
@@ -71,7 +76,7 @@ function sessionNotStarted(session) {
 }
 
 export default function Training() {
-  const { hasPermission } = useAuth()
+  const { hasPermission, user } = useAuth()
   const canManage = hasPermission('hr.training.manage')
   const [tab, setTab] = useState('dashboard')
   const [form, setForm] = useState(blankForm)
@@ -222,8 +227,8 @@ export default function Training() {
       </div>
 
       {tab === 'dashboard' && <TrainingDashboard summary={summary} dashboard={dashboard} dateRange={dateRange} setDateRange={setDateRange} onRefresh={async () => { setLoading(true); try { setDashboard(await trainingService.getDashboard(dateRange)) } catch (e) { setError(e?.message || 'Dashboard could not be refreshed.') } finally { setLoading(false) } }} onOpenSessions={() => setTab('sessions')} />}
-      {tab === 'sessions' && <SessionsTab sessions={filteredSessions} search={sessionSearch} setSearch={setSessionSearch} onRefresh={load} canManage={canManage} />}
-      {tab === 'create' && (canManage ? <CreateTraining form={form} set={set} employees={employees} venues={venues} options={options} busy={busy} onSubmit={createSession} /> : <ErrorState title="Training management restricted" message="Your role can view training intelligence but cannot create or assign sessions." />)}
+      {tab === 'sessions' && <SessionsTab sessions={filteredSessions} search={sessionSearch} setSearch={setSessionSearch} onRefresh={load} canManage={canManage} userId={user?.id} />}
+      {tab === 'create' && (canManage ? <CreateTraining form={form} set={set} employees={employees} venues={venues} options={options} busy={busy} onSubmit={createSession} userId={user?.id} /> : <ErrorState title="Training management restricted" message="Your role can view training intelligence but cannot create or assign sessions." />)}
     </div>
   )
 }
@@ -265,7 +270,7 @@ function ChartCard({ title, rows, labelKey, valueKey, suffix }) {
   return <div className="bg-white border border-slate-200 rounded-xl p-5"><div className="flex items-center justify-between mb-5"><h2 className="font-semibold text-slate-900">{title}</h2><BarChart3 className="w-4 h-4 text-[#009944]" /></div>{rows.length === 0 ? <div className="h-40 flex items-center justify-center text-sm text-slate-400">No records in this range.</div> : <div className="h-40 flex items-end gap-2 overflow-x-auto pb-5">{rows.slice(-12).map((row) => { const value = Number(row[valueKey] || 0); return <div key={row[labelKey]} className="h-full min-w-[48px] flex-1 flex flex-col items-center justify-end gap-2"><span className="text-[10px] text-slate-500">{value}{suffix}</span><div className="w-full max-w-10 rounded-t-md bg-gradient-to-t from-[#007a4a] to-[#00a85a]" style={{ height: `${Math.max(5, (value / max) * 100)}%` }} /><span className="text-[10px] text-slate-400 truncate max-w-16" title={row[labelKey]}>{row[labelKey]}</span></div> })}</div>}</div>
 }
 
-function SessionsTab({ sessions, search, setSearch, onRefresh, canManage }) {
+function SessionsTab({ sessions, search, setSearch, onRefresh, canManage, userId }) {
   const [meetingSession, setMeetingSession] = useState(null)
   const [attendanceSession, setAttendanceSession] = useState(null)
   return (
@@ -299,7 +304,7 @@ function SessionsTab({ sessions, search, setSearch, onRefresh, canManage }) {
             </tbody>
           </table>
         </div>}
-      {meetingSession && canManage && <SessionMeetingPanel session={meetingSession} onClose={() => setMeetingSession(null)} onRefresh={async () => { await onRefresh(); setMeetingSession(null) }} />}
+      {meetingSession && canManage && <SessionMeetingPanel session={meetingSession} onClose={() => setMeetingSession(null)} onRefresh={async () => { await onRefresh(); setMeetingSession(null) }} userId={userId} />}
       {attendanceSession && canManage && <SessionAttendancePanel session={attendanceSession} onClose={() => setAttendanceSession(null)} onRefresh={async () => { await onRefresh(); setAttendanceSession(null) }} />}
     </div>
   )
@@ -312,12 +317,42 @@ function DeliveryCell({ session }) {
   return <span className="inline-flex items-center gap-1.5 text-slate-700"><MapPin className="w-3.5 h-3.5 text-[#009944]" />{session.venue_name || session.location || 'Physical'}</span>
 }
 
-function SessionMeetingPanel({ session, onClose, onRefresh }) {
+function SessionMeetingPanel({ session, onClose, onRefresh, userId }) {
   const [platform, setPlatform] = useState(session.meeting_platform || 'google_meet')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [manualLinkInput, setManualLinkInput] = useState('')
   const hasMeeting = Boolean(session.meeting_url)
+  const connectionFailed = /OAuth|not connected|not_configured/i.test(error || '')
+
+  const connectGoogle = () => {
+    if (!userId) {
+      setError('You must be signed in to connect your Google account.')
+      return
+    }
+    const { url, error: connectError } = connectGoogleCalendar(userId)
+    if (!url) {
+      setError(connectError || 'Google OAuth is not configured (VITE_GOOGLE_CLIENT_ID is missing).')
+      return
+    }
+    window.open(url, '_blank', 'width=520,height=640')
+    setNotice('Complete the Google consent in the new window, then click Generate Meeting Link again — or paste a manual link below.')
+  }
+
+  const saveManualLink = () => {
+    setError(''); setNotice('')
+    const value = String(manualLinkInput || '').trim()
+    if (!isValidMeetingUrl(value)) {
+      setError('That does not look like a Google Meet link. Use a normal https://meet.google.com/xxx-xxxx-xxx URL.')
+      return
+    }
+    setBusy(true)
+    trainingService.attachMeeting(session.id, { meetingUrl: value, platform, externalMeetingId: null })
+      .then(() => { setManualLinkInput(''); setNotice('Manual meeting link saved.'); return onRefresh() })
+      .catch((e) => setError(e?.message || 'The manual meeting link could not be saved.'))
+      .finally(() => setBusy(false))
+  }
 
   const generate = async (regenerate = false) => {
     setBusy(true); setError(''); setNotice('')
@@ -333,9 +368,9 @@ function SessionMeetingPanel({ session, onClose, onRefresh }) {
         sessionId: session.id,
       })
       if (result.status !== 'created' || !result.meetingUrl) {
-        if (result.status === 'not_configured') throw new Error('Provider integration is not configured. Connect Google Calendar/Meet or Zoom before generating a meeting link.')
-        if (result.status === 'not_connected') throw new Error('Your provider account is not connected. Complete the OAuth connection first.')
-        throw new Error(result.error || 'The meeting could not be created by the provider.')
+        if (result.status === 'not_configured') throw new Error('Provider integration is not configured. Configure Google Calendar/Meet or Zoom in your provider dashboard — or paste a Google Meet link below.')
+        if (result.status === 'not_connected') throw new Error('Your provider account is not connected. Connect Google below, or paste a Google Meet link below.')
+        throw new Error(`${result.error || 'The meeting could not be created by the provider.'} — or paste a Google Meet link below.`)
       }
       await trainingService.attachMeeting(session.id, { ...result, platform })
       setNotice(regenerate ? 'Meeting regenerated and saved.' : 'Meeting created and saved.')
@@ -408,6 +443,15 @@ function SessionMeetingPanel({ session, onClose, onRefresh }) {
               </div>
               <button onClick={() => generate(false)} disabled={busy} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#009944] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#007a36] disabled:opacity-50"><Video className="w-4 h-4" /> {busy ? 'Creating meeting...' : 'Generate Meeting Link'}</button>
               <p className="text-xs text-slate-400">Creates a real {platform === 'zoom' ? 'Zoom' : 'Google Meet'} meeting via the server-side provider integration using this session's date and time.</p>
+              {connectionFailed && <button onClick={connectGoogle} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-[#009944] px-4 py-2 text-xs font-medium text-[#009944] hover:bg-emerald-50"><Link2 className="w-3.5 h-3.5" /> Connect / Reconnect Google account</button>}
+              <div className="rounded-lg border border-dashed border-slate-300 p-3 space-y-2">
+                <p className="text-xs font-medium text-slate-600">Use a manual link</p>
+                <div className="flex items-center gap-2">
+                  <input className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" placeholder="https://meet.google.com/xxx-xxxx-xxx" value={manualLinkInput} onChange={(e) => setManualLinkInput(e.target.value)} />
+                  <button onClick={saveManualLink} disabled={busy} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-[#009944] px-3 text-xs font-medium text-[#009944] hover:bg-emerald-50 disabled:opacity-50"><Link2 className="w-3.5 h-3.5" /> Save link</button>
+                </div>
+                <p className="text-xs text-slate-400">Paste a Google Meet join URL. Saves into the same meeting-link field used by provider-generated meetings, invitations and notifications.</p>
+              </div>
             </>
           )}
           <div className="flex justify-end gap-2 pt-2"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">Close</button></div>
@@ -539,7 +583,7 @@ function SessionAttendancePanel({ session, onClose, onRefresh }) {
   )
 }
 
-function CreateTraining({ form, set, employees, venues, options, busy, onSubmit }) {
+function CreateTraining({ form, set, employees, venues, options, busy, onSubmit, userId }) {
   const selected = new Set(form.employee_ids)
   const toggleEmployee = (id) => set('employee_ids', selected.has(id) ? form.employee_ids.filter((item) => item !== id) : [...form.employee_ids, id])
   const isKss = form.training_type === 'kss' || form.assessment_required
@@ -548,6 +592,45 @@ function CreateTraining({ form, set, employees, venues, options, busy, onSubmit 
   const [meetingOk, setMeetingOk] = useState('')
   const [manualLinkInput, setManualLinkInput] = useState('')
   const [meetingManual, setMeetingManual] = useState(false)
+  const connectionFailed = /OAuth|not connected|not_configured/i.test(meetingError || '')
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiError, setAiError] = useState('')
+  const [aiOk, setAiOk] = useState('')
+  const [aiFile, setAiFile] = useState(null)
+  const aiFileRef = useRef(null)
+
+  const runAiGenerate = async () => {
+    setAiError(''); setAiOk('')
+    if (!form.title.trim()) { setAiError('Enter the training title first — the title and description are used as AI context.'); return }
+    if (!aiFile) { setAiError('Select a .txt, .pdf or .docx training document first.'); return }
+    setAiBusy(true)
+    try {
+      const fileBase64 = await readFileAsBase64(aiFile)
+      const result = await trainingService.generateQuestionsFromDocument({
+        title: form.title.trim(),
+        description: form.description.trim(),
+        fileName: aiFile.name,
+        fileBase64,
+      })
+      if (!result?.ok) throw new Error(result?.error || 'Questions could not be generated.')
+      set('question_text', result.questions.join('\n'))
+      setAiOk(`3 questions drafted from "${aiFile.name}". Review and edit them below before creating the session — nothing is submitted automatically.`)
+      setAiFile(null)
+      if (aiFileRef.current) aiFileRef.current.value = ''
+    } catch (e) {
+      setAiError(e?.message || 'Questions could not be generated.')
+    } finally {
+      setAiBusy(false)
+    }
+  }
+
+  const connectGoogle = () => {
+    if (!userId) { setMeetingError('You must be signed in to connect your Google account.'); return }
+    const { url, error: connectError } = connectGoogleCalendar(userId)
+    if (!url) { setMeetingError(connectError || 'Google OAuth is not configured (VITE_GOOGLE_CLIENT_ID is missing).'); return }
+    window.open(url, '_blank', 'width=520,height=640')
+    setMeetingOk('Complete the Google consent in the new window, then generate the meeting link again — or paste a manual link below.')
+  }
 
   const selectVenue = (branchId) => {
     const branch = venues.find((b) => b.id === branchId)
@@ -657,6 +740,7 @@ function CreateTraining({ form, set, employees, venues, options, busy, onSubmit 
                 <div className="rounded-lg border border-slate-200 p-3 space-y-3">
                   <button type="button" onClick={generateMeeting} disabled={meetingBusy} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#009944] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#007a36] disabled:opacity-50"><Video className="w-4 h-4" /> {meetingBusy ? 'Creating meeting...' : 'Generate Meeting Link'}</button>
                   <p className="text-xs text-slate-400">Creates a real meeting using the training title, date and time through the secure server-side provider integration.</p>
+                  {connectionFailed && <button type="button" onClick={connectGoogle} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-[#009944] px-4 py-2 text-xs font-medium text-[#009944] hover:bg-emerald-50"><Link2 className="w-3.5 h-3.5" /> Connect / Reconnect Google account</button>}
                   <div className="rounded-lg border border-dashed border-slate-300 p-3 space-y-2">
                     <p className="text-xs font-medium text-slate-600">Or paste a meeting link</p>
                     <div className="flex items-center gap-2">
@@ -732,6 +816,23 @@ function CreateTraining({ form, set, employees, venues, options, busy, onSubmit 
         <div className="mt-4">
           <label className={labelCls}>KSS question bank (one question per line: Question | Correct answer | Option 1, Option 2, Option 3)</label>
           <textarea className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" rows={6} placeholder={'What is the confidentiality rule? | All customer data is confidential | We can share internally, It should be posted on social media, Only managers may access'} value={form.question_text} onChange={(e) => set('question_text', e.target.value)} />
+          <div className="mt-3 rounded-lg border border-slate-200 p-3 space-y-2">
+            <p className="text-xs font-semibold text-slate-700">Generate questions from a document (AI drafting)</p>
+            <p className="text-xs text-slate-400">Uploads a .txt / .pdf / .docx training document. The text is extracted server-side and exactly three multiple-choice questions are drafted into the question bank above for your review. Never sent to the AI before text extraction; nothing is auto-submitted.</p>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <input ref={aiFileRef} type="file" accept=".txt,.pdf,.docx" disabled={aiBusy} onChange={(e) => {
+                const file = e.target.files?.[0] || null
+                setAiError(''); setAiOk('')
+                if (!file) { setAiFile(null); return }
+                if (!/\.(txt|pdf|docx)$/i.test(file.name)) { setAiFile(null); e.target.value = ''; setAiError('Invalid file type. Only .txt, .pdf and .docx training documents are supported.'); return }
+                if (file.size > 2 * 1024 * 1024) { setAiFile(null); e.target.value = ''; setAiError('This document is larger than 2 MB. Please upload a smaller file or enter questions manually.'); return }
+                setAiFile(file)
+              }} className="text-xs text-slate-600" />
+              <button type="button" onClick={runAiGenerate} disabled={aiBusy} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#009944] px-4 text-sm font-medium text-white hover:bg-[#007a36] disabled:opacity-50"><ClipboardCheck className="w-4 h-4" /> {aiBusy ? 'Generating...' : 'Generate Questions from Document'}</button>
+            </div>
+            {aiOk && <p className="text-xs text-emerald-600">{aiOk}</p>}
+            {aiError && <p className="text-xs text-rose-600">{aiError}</p>}
+          </div>
         </div>
       </div>
 

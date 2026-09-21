@@ -741,8 +741,10 @@ function QrTerminalTab({ setNotice }) {
   const [devices, setDevices] = useState([])
   const [selectedId, setSelectedId] = useState('')
   const [terminalLink, setTerminalLink] = useState('')
-  const [linksByDevice, setLinksByDevice] = useState({})
   const [showQr, setShowQr] = useState('')
+  const [qrLink, setQrLink] = useState('')
+  const [qrLoading, setQrLoading] = useState(false)
+  const [qrError, setQrError] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [busyId, setBusyId] = useState('')
@@ -762,10 +764,6 @@ function QrTerminalTab({ setNotice }) {
 
   useEffect(() => { load() }, [])
 
-  const rememberLink = (deviceId, link) => {
-    setLinksByDevice((prev) => (prev[deviceId] === link ? prev : { ...prev, [deviceId]: link }))
-  }
-
   const generate = async () => {
     setBusy(true)
     try {
@@ -773,8 +771,7 @@ function QrTerminalTab({ setNotice }) {
       setSelectedId(result.device_id)
       const link = buildTerminalUrl(result.token)
       setTerminalLink(link)
-      rememberLink(result.device_id, link)
-      setNotice({ kind: 'ok', text: 'QR attendance terminal generated. The raw token is shown only in this link.' })
+      setNotice({ kind: 'ok', text: 'QR attendance terminal generated. The link above can be re-viewed anytime from the terminal list.' })
       await load()
     } catch (e) {
       setNotice({ kind: 'error', text: e?.message || 'Could not generate terminal QR' })
@@ -789,7 +786,7 @@ function QrTerminalTab({ setNotice }) {
     try {
       await attendanceService.revokeTerminal(selectedId)
       setTerminalLink('')
-      setLinksByDevice((prev) => { const next = { ...prev }; delete next[selectedId]; return next })
+      if (showQr === selectedId) { setShowQr(''); setQrLink('') }
       setNotice({ kind: 'ok', text: 'Terminal link revoked. Existing QR codes will no longer work.' })
       await load()
     } catch (e) {
@@ -850,9 +847,8 @@ function QrTerminalTab({ setNotice }) {
     setBusyId(device.id)
     attendanceService.revokeTerminal(device.id)
       .then(async () => {
-        setLinksByDevice((prev) => { const next = { ...prev }; delete next[device.id]; return next })
         setTerminalLink((cur) => (device.id === selectedId ? '' : cur))
-        if (showQr === device.id) setShowQr('')
+        if (showQr === device.id) { setShowQr(''); setQrLink('') }
         setNotice({ kind: 'ok', text: 'Terminal revoked. The QR token is destroyed.' })
         await load()
       })
@@ -865,7 +861,7 @@ function QrTerminalTab({ setNotice }) {
     setBusyId(device.id)
     attendanceService.deleteTerminal(device.id)
       .then(async () => {
-        if (showQr === device.id) setShowQr('')
+        if (showQr === device.id) { setShowQr(''); setQrLink('') }
         setNotice({ kind: 'ok', text: 'Terminal deleted.' })
         await load()
       })
@@ -873,16 +869,34 @@ function QrTerminalTab({ setNotice }) {
       .finally(() => setBusyId(''))
   }
 
-  const ensureQr = async (device) => {
-    setBusy(true)
+  const openQrView = async (device) => {
+    setShowQr(device.id)
+    setQrLoading(true)
+    setQrError('')
+    setQrLink('')
     try {
-      const result = await attendanceService.generateTerminalToken(device.id)
-      rememberLink(device.id, buildTerminalUrl(result.token))
+      const info = await attendanceService.getTerminalQrLink(device.id)
+      setQrLink(info?.has_qr && info.token ? buildTerminalUrl(info.token) : '')
+    } catch (e) {
+      setQrError(e?.message || 'Could not load this terminal link')
+    } finally {
+      setQrLoading(false)
+    }
+  }
+
+  const modalGenerate = async () => {
+    setQrLoading(true)
+    setQrError('')
+    try {
+      const result = await attendanceService.generateTerminalToken(showQr || null)
+      setQrLink(buildTerminalUrl(result.token))
+      if (result.device_id === selectedId) setTerminalLink(buildTerminalUrl(result.token))
+      setNotice({ kind: 'ok', text: 'New terminal QR generated. The previous QR link is invalid.' })
       await load()
     } catch (e) {
-      setNotice({ kind: 'error', text: e?.message || 'Could not generate terminal QR' })
+      setQrError(e?.message || 'Could not generate terminal QR')
     } finally {
-      setBusy(false)
+      setQrLoading(false)
     }
   }
 
@@ -892,7 +906,7 @@ function QrTerminalTab({ setNotice }) {
 
   const renderActions = (device) => (
     <div className="flex flex-wrap gap-1.5">
-      <button onClick={() => setShowQr(device.id)} className={`${actionBtn} ${plainBtn}`}><Eye className="w-3.5 h-3.5" /> View QR</button>
+      <button onClick={() => openQrView(device)} className={`${actionBtn} ${plainBtn}`}><Eye className="w-3.5 h-3.5" /> View QR</button>
       {device.status === 'active' && (
         <button onClick={() => suspendDevice(device)} className={`${actionBtn} bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100`}><Pause className="w-3.5 h-3.5" /> Suspend</button>
       )}
@@ -909,11 +923,12 @@ function QrTerminalTab({ setNotice }) {
   )
 
   const qrDevice = devices.find((d) => d.id === showQr)
+  const closeQrModal = () => { setShowQr(''); setQrLink(''); setQrError('') }
   const qrModal = qrDevice ? (() => {
-    const link = linksByDevice[qrDevice.id] || ''
+    const link = qrLink
     const meta = statusMeta(qrDevice)
     return (
-      <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4" onClick={() => setShowQr('')}>
+      <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4" onClick={closeQrModal}>
         <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -923,10 +938,22 @@ function QrTerminalTab({ setNotice }) {
                 {qrDevice.last_seen_at && <span className="ml-2">Last seen {new Date(qrDevice.last_seen_at).toLocaleString()}</span>}
               </p>
             </div>
-            <button onClick={() => setShowQr('')} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            <button onClick={closeQrModal} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"><X className="w-5 h-5" /></button>
           </div>
 
-          {link ? (
+          {qrLoading ? (
+            <div className="py-8 text-center">
+              <Loader2 className="w-5 h-5 mx-auto animate-spin text-[#009944]" />
+              <p className="text-sm text-slate-500 mt-2">Loading the current terminal QR…</p>
+            </div>
+          ) : qrError ? (
+            <div className="space-y-3">
+              <p className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-3">{qrError}</p>
+              <button onClick={modalGenerate} disabled={busy} className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />} Generate new QR
+              </button>
+            </div>
+          ) : link ? (
             <div className="space-y-3">
               <div className="bg-white border border-slate-200 rounded-xl p-4 w-fit mx-auto">
                 <QRCodeCanvas id="attendance-terminal-qr-modal" value={link} size={220} level="H" includeMargin />
@@ -937,15 +964,16 @@ function QrTerminalTab({ setNotice }) {
                 <button onClick={() => downloadQr('attendance-terminal-qr-modal')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Download className="w-3.5 h-3.5" /> Download</button>
                 <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"><Printer className="w-3.5 h-3.5" /> Print</button>
               </div>
-              <button onClick={() => ensureQr(qrDevice)} disabled={busy} className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-[#009944] text-[#009944] text-sm font-medium hover:bg-[#009944]/5 disabled:opacity-50">
+              <button onClick={modalGenerate} disabled={busy} className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-[#009944] text-[#009944] text-sm font-medium hover:bg-[#009944]/5 disabled:opacity-50">
                 {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Regenerate QR
               </button>
-              {qrDevice.status !== 'active' && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">Regenerating will reactivate this terminal with a brand-new QR.</p>}
+              {qrDevice.status === 'suspended' && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">Suspended — this terminal does not accept scans right now. The QR below is preserved and will work again after Resume without reprinting.</p>}
+              {qrDevice.status !== 'active' && qrDevice.status !== 'suspended' && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">Regenerating will reactivate this terminal with a brand-new QR.</p>}
             </div>
           ) : (
             <div className="space-y-3">
-              <p className="text-sm text-slate-500">No QR is available for this terminal right now. Generate one to display, download, and print it.</p>
-              <button onClick={() => ensureQr(qrDevice)} disabled={busy} className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+              <p className="text-sm text-slate-500">This terminal has no current QR link{qrDevice.status === 'revoked' ? ' — it was revoked' : ''}. Generate one to display, download, and print it.</p>
+              <button onClick={modalGenerate} disabled={busy} className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
                 {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />} Generate QR
               </button>
               {qrDevice.status === 'revoked' && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">This terminal is revoked. Generating a QR will revive it with a brand-new token.</p>}
@@ -1017,6 +1045,7 @@ function QrTerminalTab({ setNotice }) {
                 <tr className="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
                   <th className="py-2 pr-3 font-medium">Terminal</th>
                   <th className="py-2 pr-3 font-medium">Status</th>
+                  <th className="py-2 pr-3 font-medium">Generated</th>
                   <th className="py-2 pr-3 font-medium">Last seen</th>
                   <th className="py-2 pr-3 font-medium">Actions</th>
                 </tr>
@@ -1031,6 +1060,7 @@ function QrTerminalTab({ setNotice }) {
                     <td className="py-3 pr-3">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${statusMeta(device).cls}`}>{statusMeta(device).label}</span>
                     </td>
+                    <td className="py-3 pr-3 text-xs text-slate-500">{device.token_generated_at ? new Date(device.token_generated_at).toLocaleString() : '—'}</td>
                     <td className="py-3 pr-3 text-xs text-slate-500">{device.last_seen_at ? new Date(device.last_seen_at).toLocaleString() : 'Never scanned'}</td>
                     <td className="py-3">
                       {busyId === device.id ? <Loader2 className="w-4 h-4 animate-spin text-[#009944]" /> : renderActions(device)}

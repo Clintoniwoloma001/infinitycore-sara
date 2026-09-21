@@ -46,6 +46,117 @@ begin
   return new;
 end; $$;
 
+-- Override of the Phase 60 sync with the same behaviour EXCEPT it no longer
+-- hard-requires a live auth session. Membership is derived purely from org
+-- data, and added_by already falls back to the channel creator, so the
+-- old "Not authenticated" guard only blocked legitimate system/bootstrap
+-- contexts (this migration's `select ensure_kss_channel()` under the
+-- postgres role, and server-side provisioning). For authenticated callers
+-- nothing changes — it is still SECURITY DEFINER and granted to authenticated only.
+create or replace function public.sync_auto_channel_members(p_channel_id uuid)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_me uuid := auth.uid();
+  v_channel record;
+  v_qualifying uuid[] := '{}';
+  v_added int := 0;
+  v_removed int := 0;
+  v_total int := 0;
+begin
+  select * into v_channel from public.message_channels where id = p_channel_id;
+  if v_channel.id is null then raise exception 'Channel not found'; end if;
+  if not v_channel.is_auto then raise exception 'Channel is not an auto channel'; end if;
+  v_me := coalesce(v_me, v_channel.creator_id);
+
+  -- Recompute the set of user ids that currently qualify for this channel.
+  if v_channel.auto_source = 'branch' then
+    select coalesce(array_agg(e.user_id), '{}') into v_qualifying
+    from public.employees e
+    where e.branch_id = v_channel.auto_source_id
+      and e.user_id is not null
+      and e.employment_status in ('active', 'on_leave')
+      and coalesce(e.is_archived, false) = false;
+
+  elsif v_channel.auto_source = 'area' then
+    select coalesce(array_agg(e.user_id), '{}') into v_qualifying
+    from public.employees e
+    join public.branch_area_assignments ba
+      on ba.branch_id = e.branch_id and ba.is_current
+    where ba.area_id = v_channel.auto_source_id
+      and e.user_id is not null
+      and e.employment_status in ('active', 'on_leave')
+      and coalesce(e.is_archived, false) = false;
+
+  elsif v_channel.auto_source = 'department' then
+    select coalesce(array_agg(e.user_id), '{}') into v_qualifying
+    from public.employees e
+    where public.employee_matches_department_channel(e.id, v_channel.auto_source_role)
+      and e.user_id is not null
+      and e.employment_status in ('active', 'on_leave')
+      and coalesce(e.is_archived, false) = false;
+
+  elsif v_channel.auto_source = 'role' then
+    if v_channel.auto_source_role = 'all' then
+      select coalesce(array_agg(p.id), '{}') into v_qualifying
+      from public.profiles p
+      where p.status = 'active' and p.role <> 'customer';
+    elsif v_channel.auto_source_role = 'management' then
+      select coalesce(array_agg(p.id), '{}') into v_qualifying
+      from public.profiles p
+      where p.role in ('super_admin', 'admin', 'head_of_business', 'operations_manager', 'branch_manager', 'area_manager')
+        and p.status = 'active';
+    elsif v_channel.auto_source_role = 'executive' then
+      select coalesce(array_agg(p.id), '{}') into v_qualifying
+      from public.profiles p
+      where p.role in ('super_admin', 'admin', 'head_of_business')
+        and p.status = 'active';
+    elsif v_channel.auto_source_role = 'hr' then
+      select coalesce(array_agg(p.id), '{}') into v_qualifying
+      from public.profiles p
+      where p.role in ('hr_manager', 'hr_officer', 'super_admin', 'admin')
+        and p.status = 'active';
+    else
+      select coalesce(array_agg(p.id), '{}') into v_qualifying
+      from public.profiles p
+      where p.role = v_channel.auto_source_role and p.status = 'active';
+    end if;
+  end if;
+
+  -- Insert everyone who qualifies (as automatic members).
+  insert into public.message_channel_members (channel_id, member_id, role, added_by, auto_added)
+  select p_channel_id, q.uid, 'member', coalesce(v_me, v_channel.creator_id), true
+  from unnest(v_qualifying) as q(uid)
+  where not exists (
+    select 1 from public.message_channel_members cm
+    where cm.channel_id = p_channel_id and cm.member_id = q.uid
+  );
+  get diagnostics v_added = row_count;
+
+  -- Remove memberships that no longer qualify — ONLY automatic ones
+  -- (auto_added = true). Manual memberships and the owner row survive.
+  delete from public.message_channel_members cm
+  where cm.channel_id = p_channel_id
+    and cm.auto_added = true
+    and cm.member_id <> all(v_qualifying);
+  get diagnostics v_removed = row_count;
+
+  select count(*) into v_total
+  from public.message_channel_members where channel_id = p_channel_id;
+
+  perform public.write_communication_audit(
+    'channel', p_channel_id, 'channel_members_synced', null,
+    null, jsonb_build_object('member_count', v_total, 'added', v_added, 'removed', v_removed),
+    'auto membership sync'
+  );
+
+  return jsonb_build_object(
+    'ok', true, 'channel_id', p_channel_id,
+    'member_count', v_total, 'added', v_added, 'removed', v_removed
+  );
+end; $$;
+grant execute on function public.sync_auto_channel_members(uuid) to authenticated;
+
 create or replace function public.ensure_kss_channel()
 returns jsonb
 language plpgsql security definer set search_path = public as $$

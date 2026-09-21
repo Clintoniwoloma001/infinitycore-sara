@@ -1,14 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
-  AlertTriangle, CheckCircle2, Clock, Download, FileSpreadsheet, Loader2,
-  PenLine, RefreshCw, Send, ShieldCheck, Wallet, XCircle,
+  AlertTriangle, CheckCircle2, Clock, Download, FileSpreadsheet, History, Loader2,
+  PenLine, RefreshCw, Send, ShieldCheck, Trash2, Upload, Wallet, XCircle,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import SignaturePad from '../components/SignaturePad'
 import CompensationEditorModal from '../components/payroll/CompensationEditorModal'
+import PayrollSignatureModal from '../components/payroll/PayrollSignatureModal'
+import PayrollAuditModal from '../components/payroll/PayrollAuditModal'
+import PayrollImportModal from '../components/payroll/PayrollImportModal'
 import { payrollService } from '../services/payrollService'
 import { payrollPushService, PUSH_STATUS } from '../services/payrollPushService'
+import { payrollImportService } from '../services/payrollImportService'
+import { payrollProfileService } from '../services/payrollProfileService'
+import { getClientIp } from '../lib/clientIp'
 import { date, money } from './hrShared'
 
 const cardCls = 'bg-white rounded-lg border border-slate-200 p-5 mb-6'
@@ -16,6 +22,30 @@ const btn = 'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-
 const btnPrimary = `${btn} bg-[#009944] text-white hover:bg-[#007a36] disabled:opacity-50`
 const btnGhost = `${btn} border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50`
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
+
+// Roles allowed to EDIT payroll records (all other roles are read-only).
+const PAYROLL_EDIT_ROLES = ['super_admin', 'hr_manager', 'hr_officer']
+// Roles allowed to import / override the Excel structure.
+const PAYROLL_IMPORT_ROLES = ['super_admin', 'admin', 'hr_manager']
+
+// Default derived payroll schema — rendered dynamically from config.
+const DERIVED_PAYROLL_COLUMNS = [
+  { key: 'salary', label: 'Basic' },
+  { key: 'allowances', label: 'Allowances' },
+  { key: 'gross', label: 'Gross' },
+  { key: 'deductions_total', label: 'Deductions' },
+  { key: 'net', label: 'Net' },
+  { key: 'mid_month', label: 'Mid-month' },
+  { key: 'end_month', label: 'Month-end' },
+]
+
+// Render an imported schema cell: numbers / numeric strings as money,
+// everything else verbatim.
+function impCell(v) {
+  if (v === null || v === undefined || v === '' || v === '—') return '—'
+  const n = Number(v)
+  return Number.isFinite(n) ? money(n) : v
+}
 
 const STATE_STYLE = {
   PRODUCTION_ENABLED: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -243,6 +273,8 @@ export default function PayrollBankOne() {
                       <th className="py-2 pr-3 text-right">Gross</th>
                       <th className="py-2 pr-3 text-right">Deductions</th>
                       <th className="py-2 pr-3 text-right">Net</th>
+                      <th className="py-2 pr-3 text-right">Mid-month</th>
+                      <th className="py-2 pr-3 text-right">End-month</th>
                       {canEditCompensation && <th className="py-2 text-right">Compensation</th>}
                     </tr>
                   </thead>
@@ -259,6 +291,8 @@ export default function PayrollBankOne() {
                         <td className="py-2 pr-3 text-right">{m.gross != null ? money(m.gross) : '—'}</td>
                         <td className="py-2 pr-3 text-right">{m.deductions_total != null ? money(m.deductions_total) : '—'}</td>
                         <td className="py-2 pr-3 text-right font-semibold text-slate-800">{m.net != null ? money(m.net) : '—'}</td>
+                        <td className="py-2 pr-3 text-right">{m.mid_month != null ? money(m.mid_month) : '—'}</td>
+                        <td className="py-2 pr-3 text-right">{m.end_month != null ? money(m.end_month) : '—'}</td>
                         {canEditCompensation && (
                           <td className="py-2 text-right">
                             <button
