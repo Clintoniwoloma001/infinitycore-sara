@@ -17,6 +17,47 @@ export const DEFAULT_APPROVAL_CHAIN = [
 export const APPROVAL_CHAIN = DEFAULT_APPROVAL_CHAIN // backwards-compat alias
 export const APPROVER_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'head_of_human_resources', 'hr_officer', 'line_manager']
 
+// ------------------------------------------------------------------
+// Configurable leave approval workflow (Settings > Leave Rules).
+// Builder-persisted; falls back to the legacy template when empty.
+// ------------------------------------------------------------------
+export const WORKFLOW_ROLES = [
+  { key: 'line_manager', label: 'Line Manager' },
+  { key: 'branch_manager', label: 'Branch Manager' },
+  { key: 'area_manager', label: 'Area Manager' },
+  { key: 'head_of_human_resources', label: 'Head of Human Resources' },
+  { key: 'head_of_business', label: 'Head of Business' },
+  { key: 'head_of_operations', label: 'Head of Operations' },
+  { key: 'hr_officer', label: 'HR Officer' },
+  { key: 'financial_controller', label: 'Financial Controller' },
+  { key: 'head_of_risk_compliance', label: 'Head of Risk & Compliance' },
+  { key: 'head_of_audit', label: 'Head of Audit' },
+  { key: 'head_of_legal', label: 'Head of Legal' },
+  { key: 'head_of_e_business', label: 'Head of E-Business' },
+  { key: 'admin', label: 'Admin' },
+  { key: 'super_admin', label: 'Super Admin' },
+]
+
+export async function getApprovalWorkflow() {
+  return (await rpcWithRetry(() => supabase.rpc('get_leave_approval_workflow'))) || []
+}
+
+export async function saveApprovalWorkflow(workflow, reason) {
+  return await rpcWithRetry(() => supabase.rpc('save_leave_approval_workflow', {
+    p_workflow: workflow,
+    p_reason: reason || null,
+  }))
+}
+
+export async function submitLeaveFeedback({ requestId, turnaroundRating, easeRating, feedbackText }) {
+  return await rpcWithRetry(() => supabase.rpc('submit_leave_feedback', {
+    p_request_id: requestId,
+    p_turnaround_rating: turnaroundRating,
+    p_ease_rating: easeRating,
+    p_text: feedbackText || null,
+  }))
+}
+
 export async function getApprovalChainForRequest(request) {
   if (request?.approval_chain && Array.isArray(request.approval_chain)) {
     return request.approval_chain

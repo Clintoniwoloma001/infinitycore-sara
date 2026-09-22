@@ -368,10 +368,10 @@ export const attendanceService = {
     }
     const deviceFingerprint = await getDeviceFingerprint().catch(() => '')
     const { data, error } = await supabase.rpc('clock_in_secure', {
-      p_lat: coords?.lat ?? null,
-      p_lng: coords?.lng ?? null,
-      p_accuracy: coords?.accuracy ?? null,
-      p_device_fingerprint: deviceFingerprint || null,
+      p_lat: parseFloat(coords?.lat ?? 0) || 0,
+      p_lng: parseFloat(coords?.lng ?? 0) || 0,
+      p_accuracy: coords?.accuracy != null ? parseFloat(coords.accuracy) : null,
+      p_device_fingerprint: String(deviceFingerprint || ''),
     })
     if (error) throw new Error(normalizeAttendanceError(error.message))
     logAction({ action: 'ATTENDANCE_CLOCK_IN', entityType: 'AttendanceRecord', entityId: data.attendance_id, details: 'Clock in via geofence RPC' })
@@ -406,10 +406,10 @@ export const attendanceService = {
     const deviceFingerprint = await getDeviceFingerprint().catch(() => '')
     const { data, error } = await supabase.rpc('clock_out_secure', {
       p_attendance_id: attendanceId,
-      p_lat: coords?.lat ?? null,
-      p_lng: coords?.lng ?? null,
-      p_accuracy: coords?.accuracy ?? null,
-      p_device_fingerprint: deviceFingerprint || null,
+      p_lat: parseFloat(coords?.lat ?? 0) || 0,
+      p_lng: parseFloat(coords?.lng ?? 0) || 0,
+      p_accuracy: coords?.accuracy != null ? parseFloat(coords.accuracy) : null,
+      p_device_fingerprint: String(deviceFingerprint || ''),
     })
     if (error) throw new Error(normalizeAttendanceError(error.message))
     logAction({ action: 'ATTENDANCE_CLOCK_OUT', entityType: 'AttendanceRecord', entityId: attendanceId, details: 'Clock out via geofence RPC' })

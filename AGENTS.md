@@ -787,3 +787,75 @@ must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
 - Test: `npm run test:messages-identity` — `tests/messagesIdentity.test.mjs` (migration content,
   `indexIdentityById` no-coercion, `isActiveAccount` truth table, PeoplePicker wiring, bubble/layout
   avatars). `npm run build` passes.
+
+## Phase — Midnight Auto Clock-Out @ 17:00 (verified + scheduled)
+- SQL migration: `supabase/migrations/20260922000009_attendance_auto_clockout_midnight.sql` — run in
+  Supabase SQL Editor after `20260922000008` (or the latest migration before it). Idempotent/additive.
+  - Adds `attendance_records.auto_clock_out boolean default false` (with partial index) and
+    re-issues `attendance_auto_clockout_close_sessions()` so still-open sessions from days before
+    today are closed at the shift day's work-end time: default 17:00 from
+    `hr_platform_settings.default_work_end_time` with an exact `17:00` fallback. Role gate includes
+    the renamed `head_of_human_resources` alongside the original `hr_manager`/`hr_officer`.
+  - The clock_out timestamp is `(attendance_date + work_end) at time zone att_app_timezone()` —
+    i.e. **17:00 on the shift day**, never the time the job actually ran. Updates set
+    `auto_clock_out=true`, write an `attendance_events` row, and audit `ATTENDANCE_AUTO_CLOCK_OUT`.
+  - Registers pg_cron job `infinitycore-attendance-auto-clockout` for `5 0 * * *`, guarded by
+    `pg_extension extname='pg_cron'` presence.
+- `src/pages/AttendanceManagement.jsx` records table now shows an **Auto** badge next to the
+  clock-out time for auto-closed rows.
+- Test: `npm run test:auto-clockout-midnight` — `tests/attendanceAutoClockout.test.mjs`.
+  `npm run build` passes.
+
+## Phase — Leave Approval Workflow Builder + 30-min Reminders + Mandatory Feedback
+- SQL migration: `supabase/migrations/20260922000010_leave_approval_workflow_feedback.sql` — run in
+  Supabase SQL Editor after `20260922000009` (or the latest migration before it). Idempotent/additive.
+  - Adds `hr_platform_settings.leave_approval_workflow` (builder-owned JSONB array of role/user
+    levels with SLA hours and auto-escalate), `leave_requests.current_approval_level`,
+    `stage_entered_at`, `last_reminded_at`, `feedback_submitted`, and the `leave_feedback` table.
+  - New RPCs: `get_leave_workflow_chain_for_employee()`, `get_leave_approval_workflow()`,
+    `save_leave_approval_workflow()`, `submit_leave_feedback()`, `_leave_stage_approver_ids()`,
+    and `notify_leave_approvers()`.
+  - Re-issues `get_leave_approval_chain_for_request()` and `process_leave_decision()` to prefer the
+    workflow (falling back to the legacy template) and to sync reminder/SLA columns. Forwarding a
+    request resets `stage_entered_at`/`last_reminded_at` and immediately notifies the next approver.
+  - Registers pg_cron `infinitycore-leave-approver-reminders` for `*/30 * * * *`, sending
+    `type='urgent'` in-app notifications to current-stage approvers; escalates to the next level
+    when the configured SLA is exceeded and auto-escalate is enabled.
+- Frontend:
+  - `src/services/leaveApprovalsService.js`: `WORKFLOW_ROLES`, `getApprovalWorkflow`,
+    `saveApprovalWorkflow`, `submitLeaveFeedback`.
+  - `src/pages/Settings.jsx` Leave Rules tab: new `LeaveWorkflowBuilder` card (add role/user
+    levels, reorder, SLA, escalate toggle, audited save reason) using the shared `PeoplePicker`
+    for user selection.
+  - `src/components/leave/LeaveApprovalReminder.jsx` + `src/components/Layout.jsx`: persistent
+    urgent banner + Sara speech + browser notification + vibration, refreshing every 30 minutes
+    while the user still has pending approvals.
+  - `src/components/leave/LeaveFeedbackModal.jsx` + `src/components/Layout.jsx`: mandatory blocking
+    modal for requesters after a leave is approved/rejected; requires 1–5 star turnaround/ease
+    ratings and a 10+ character feedback note.
+  - `src/pages/LeaveRequests.jsx`: create/cancellation payloads seed `current_approval_level` and
+    `stage_entered_at`.
+- Test: `npm run test:leave-workflow` — `tests/leaveWorkflowFeedback.test.mjs`.
+  `npm run build` passes.
+
+## Phase — Mobile biometric security guard + canonical attendance clock functions
+- SQL migration: `supabase/migrations/20260922000007_mobile_device_biometric_security.sql`
+  (idempotent/additive) now begins with `create table if not exists public.mobile_device_sessions`
+  so the biometric migration is safe to run even when `20260922000006_mobile_device_sessions.sql`
+  has not yet been applied in a given environment.
+- SQL migration: `supabase/migrations/20260922000011_attendance_clock_in_canonical.sql` — run in
+  Supabase SQL Editor after `20260922000010`. Idempotent/additive.
+  - Drops all overloaded variants of `public.attendance_clock_in_for_employee` and
+    `public.attendance_clock_out_for_employee`.
+  - Creates a single canonical 10-parameter version of each function with explicit,
+    strongly typed parameters and trailing defaults (`p_geofence_override uuid`,
+    `p_allow_outside boolean`). Web (8-arg), terminal (10-arg), and mobile (10-arg)
+    callers all resolve unambiguously to the same function, eliminating the
+    "function is not unique" error caused by ambiguous overload resolution.
+  - Revokes direct `authenticated` access to the internal helpers; authenticated
+    clients continue to call the guarded `clock_in_secure` / `clock_out_secure` wrappers.
+- `src/services/attendanceService.js`: `clockIn` / `clockOut` now explicitly cast
+  latitude, longitude, and accuracy to `float` and the device fingerprint to `string`
+  before sending the RPC payload.
+- Tests: `npm run test:clock-in-canonical` — `tests/attendanceClockInCanonical.test.mjs`.
+  `npm run build` passes.

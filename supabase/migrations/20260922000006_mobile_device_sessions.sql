@@ -73,21 +73,6 @@ revoke all on public.mobile_device_sessions from anon, authenticated, public;
 create unique index if not exists uq_mobile_device_sessions_one_active
   on public.mobile_device_sessions (user_id) where is_active is true;
 
-grant execute on function public.mobile_get_my_employee() to authenticated;
-grant execute on function public.mobile_device_register(text) to authenticated;
-grant execute on function public.mobile_device_validate(text) to authenticated;
-grant execute on function public.mobile_device_revoke(text) to authenticated;
-grant execute on function public.mobile_clock_in(float, float, float, text, uuid, text, text, boolean, text) to authenticated;
-grant execute on function public.mobile_clock_out(uuid, float, float, float, text, uuid, text, text, boolean, text) to authenticated;
-grant execute on function public.mobile_attendance_summary(date, date, uuid, text) to authenticated;
-revoke execute on function public.mobile_get_my_employee() from anon, public;
-revoke execute on function public.mobile_device_register(text) from anon, public;
-revoke execute on function public.mobile_device_validate(text) from anon, public;
-revoke execute on function public.mobile_device_revoke(text) from anon, public;
-revoke execute on function public.mobile_clock_in(float, float, float, text, uuid, text, text, boolean, text) from anon, public;
-revoke execute on function public.mobile_clock_out(uuid, float, float, float, text, uuid, text, text, boolean, text) from anon, public;
-revoke execute on function public.mobile_attendance_summary(date, date, uuid, text) from anon, public;
-
 -- ---------------------------------------------------------------------------
 -- 2. MY EMPLOYEE — resolves the caller's own employees row without exposing
 --    the employees table to self-read (RLS only grants HR roles).
@@ -464,3 +449,21 @@ begin
   limit 500;
 end;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- 6. PERMISSIONS (must be after function definitions)
+-- ---------------------------------------------------------------------------
+grant execute on function public.mobile_get_my_employee() to authenticated;
+grant execute on function public.mobile_device_register(text) to authenticated;
+grant execute on function public.mobile_device_validate(text) to authenticated;
+grant execute on function public.mobile_device_revoke(text) to authenticated;
+grant execute on function public.mobile_clock_in(float, float, float, text, uuid, text, text, boolean, text) to authenticated;
+grant execute on function public.mobile_clock_out(uuid, float, float, float, text, uuid, text, text, boolean, text) to authenticated;
+grant execute on function public.mobile_attendance_summary(date, date, uuid, text) to authenticated;
+revoke execute on function public.mobile_get_my_employee() from anon, public;
+revoke execute on function public.mobile_device_register(text) from anon, public;
+revoke execute on function public.mobile_device_validate(text) from anon, public;
+revoke execute on function public.mobile_device_revoke(text) from anon, public;
+revoke execute on function public.mobile_clock_in(float, float, float, text, uuid, text, text, boolean, text) from anon, public;
+revoke execute on function public.mobile_clock_out(uuid, float, float, float, text, uuid, text, text, boolean, text) from anon, public;
+revoke execute on function public.mobile_attendance_summary(date, date, uuid, text) from anon, public;

@@ -137,6 +137,8 @@ export default function LeaveRequests() {
         reason: form.reason,
         status: 'pending',
         approval_level: 1,
+        current_approval_level: 1,
+        stage_entered_at: new Date().toISOString(),
         is_cancellation: false,
         created_by: user?.id,
       })
@@ -193,7 +195,7 @@ export default function LeaveRequests() {
       // back through the same chain before it actually takes effect.
       if (!window.confirm('This leave is already approved. Submitting a cancellation will route it back through your configured approval chain before it takes effect. Continue?')) return
       try {
-        await svc.update(r.id, { status: 'pending', is_cancellation: true, approval_level: 1, approval_chain: null })
+        await svc.update(r.id, { status: 'pending', is_cancellation: true, approval_level: 1, current_approval_level: 1, stage_entered_at: new Date().toISOString(), approval_chain: null })
         await logAction({ action: 'leave_cancellation_requested', entityType: 'LeaveRequest', entityId: r.id, details: `${r.employee_name} requested cancellation of an approved leave — routed for re-approval`, userName })
         load()
       } catch (e) { alert(e?.message || 'Failed to request cancellation.') }

@@ -342,7 +342,14 @@ function RecordsTab({ setNotice }) {
                       <td className="px-5 py-3 text-slate-600">{r.employees?.branches?.branch_name || r.branches?.branch_name || r.employees?.branch || '—'}</td>
                       <td className="px-5 py-3 text-slate-600">{new Date(r.attendance_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
                       <td className="px-5 py-3 text-slate-600 tabular-nums">{r.clock_in ? new Date(r.clock_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                      <td className="px-5 py-3 text-slate-600 tabular-nums">{r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                      <td className="px-5 py-3 text-slate-600 tabular-nums">
+                        {r.clock_out ? new Date(r.clock_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                        {r.auto_clock_out && (
+                          <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200" title="Closed automatically at the scheduled work-end time (no manual clock-out was recorded)">
+                            Auto
+                          </span>
+                        )}
+                      </td>
                       <td className="px-5 py-3 text-slate-600 tabular-nums">{formatWorkedHours(r)}</td>
                       <td className="px-5 py-3"><StatusPill status={r.status} /></td>
                       <td className="px-5 py-3 text-slate-600">{r.late_minutes > 0 ? `${r.late_minutes}m` : '—'}</td>

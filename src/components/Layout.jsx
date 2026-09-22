@@ -11,6 +11,8 @@ import { resolveDirectory } from '../services/corporateChatService'
 import Sara from './sara/Sara'
 import OnboardingFlow from './OnboardingFlow'
 import OnboardingStatusBanner from './OnboardingStatusBanner'
+import LeaveApprovalReminder from './leave/LeaveApprovalReminder'
+import LeaveFeedbackModal from './leave/LeaveFeedbackModal'
 import onboardingStatusService, { ONBOARDING_STATES } from '../services/onboardingStatusService'
 import {
   clearOnboardingDismiss,
@@ -185,11 +187,13 @@ export default function Layout({ children }) {
         <main className="flex-1 overflow-y-auto">
           <div className="max-w-7xl mx-auto px-4 lg:px-8 py-6">
             {showBanner && <OnboardingStatusBanner status={onboardingStatus} onContinue={openOnboarding} onDismiss={dismissBanner} />}
+            <LeaveApprovalReminder />
             {children}
           </div>
         </main>
       </div>
       <Sara />
+      <LeaveFeedbackModal />
       {showOnboarding && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Employee onboarding">
           <div className="flex min-h-full items-center justify-center">

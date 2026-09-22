@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react'
-import { AlertTriangle, Ban, CheckCircle2, FileUp, Loader2, Pencil, Plus, RefreshCw, Save, Settings2, Trash2, Upload, X } from 'lucide-react'
+import { AlertTriangle, ArrowDown, ArrowUp, Ban, CheckCircle2, FileUp, Loader2, Pencil, Plus, RefreshCw, Save, Settings2, Trash2, Upload, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState } from '../components/PageStates'
 import { leaveRulesService, LEAVE_TYPE_LABELS, EMPLOYEE_CATEGORIES } from '../services/leaveRulesService'
+import { getApprovalWorkflow, saveApprovalWorkflow, WORKFLOW_ROLES } from '../services/leaveApprovalsService'
 import PlatformSettings from './PlatformSettings'
 import { performanceService } from '../services/performanceService'
+import { supabase } from '../supabaseClient'
+import PeoplePicker from '../components/messages/PeoplePicker'
 import {
   bankoneImportService,
   BANKONE_TARGET_FIELDS,
@@ -111,7 +114,9 @@ function LeaveRulesTab({ canManage }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <LeaveWorkflowBuilder canManage={canManage} />
+
+      <div className="flex items-center justify-between mb-4 mt-8">
         <p className="text-sm text-slate-500">Leave entitlements by employee category. These replace hardcoded values — HR can update without code changes.</p>
         {canManage && (
           <button onClick={() => { setShowAdd(true); setEditId(null); setForm({ leave_type: 'annual', employee_category: 'normal_staff', entitled_days: '', description: '' }) }} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
@@ -804,6 +809,247 @@ function TransportAllowanceTab({ canManage }) {
                 {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
               </button>
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---- Leave Approval Workflow Builder (Leave Rules tab) ----
+const DEFAULT_LEVEL = { type: 'role', role: 'head_of_human_resources', user_id: null, label: '', sla_hours: 48, auto_escalate: true }
+
+function LeaveWorkflowBuilder({ canManage }) {
+  const [workflow, setWorkflow] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [reason, setReason] = useState('')
+  const [pickerIndex, setPickerIndex] = useState(null)
+  const [people, setPeople] = useState([])
+
+  const load = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const wf = await getApprovalWorkflow()
+      setWorkflow(Array.isArray(wf) ? wf : [])
+    } catch (e) {
+      setError(e?.message || 'Failed to load approval workflow.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const openPicker = async (idx) => {
+    setPickerIndex(idx)
+    if (people.length === 0) {
+      const { data, error } = await supabase.rpc('get_messaging_directory', { p_search: null })
+      if (error) { setError(error.message); return }
+      setPeople((data || []).map((p) => ({ id: p.id, full_name: p.full_name || p.name, email: p.email, department: p.department, hasAccount: true })))
+    }
+  }
+
+  const setLevel = (idx, patch) => setWorkflow((w) => w.map((lvl, i) => (i === idx ? { ...lvl, ...patch } : lvl)))
+
+  const addLevel = (type = 'role') => setWorkflow((w) => [...w, { ...DEFAULT_LEVEL, type, role: type === 'role' ? 'head_of_human_resources' : null }])
+  const removeLevel = (idx) => setWorkflow((w) => w.filter((_, i) => i !== idx))
+  const moveLevel = (idx, dir) => {
+    setWorkflow((w) => {
+      const target = idx + dir
+      if (target < 0 || target >= w.length) return w
+      const copy = [...w]
+      const tmp = copy[target]
+      copy[target] = copy[idx]
+      copy[idx] = tmp
+      return copy
+    })
+  }
+
+  const userName = (id) => {
+    const p = people.find((x) => x.id === id)
+    return p?.full_name || p?.email || id
+  }
+
+  const validate = () => {
+    if (workflow.length === 0) return 'Add at least one approval level.'
+    for (const lvl of workflow) {
+      if (!lvl.label || lvl.label.trim() === '') return 'Every level needs a label.'
+      if (lvl.type === 'role') {
+        if (!lvl.role) return 'Role levels must specify a role.'
+      } else {
+        if (!lvl.user_id) return 'User levels must select a specific user.'
+      }
+      if (!Number.isInteger(lvl.sla_hours) || lvl.sla_hours < 1) return 'SLA hours must be a positive whole number.'
+    }
+    if (!reason.trim() || reason.trim().length < 5) return 'A reason (5+ characters) is required for audit.'
+    return null
+  }
+
+  const save = async () => {
+    const err = validate()
+    if (err) { setError(err); return }
+    setSaving(true)
+    setError('')
+    setSaved(false)
+    try {
+      const payload = workflow.map((lvl) => ({
+        type: lvl.type,
+        role: lvl.type === 'role' ? lvl.role : null,
+        user_id: lvl.type === 'user' ? lvl.user_id : null,
+        label: lvl.label.trim(),
+        sla_hours: Number(lvl.sla_hours),
+        auto_escalate: !!lvl.auto_escalate,
+      }))
+      await saveApprovalWorkflow(payload, reason.trim())
+      setSaved(true)
+      setReason('')
+      setTimeout(() => setSaved(false), 3000)
+    } catch (e) {
+      setError(e?.message || 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 mb-6">
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div>
+          <h3 className="font-semibold text-slate-900">Leave Approval Workflow</h3>
+          <p className="text-sm text-slate-500">
+            {workflow.length === 0
+              ? 'Using the legacy approval-chain template (line manager → branch manager → area manager → Head of HR). Add levels to switch to the builder-driven workflow.'
+              : 'Leave requests route through these levels in order. The workflow takes priority over the legacy template once it has at least one level.'}
+          </p>
+        </div>
+        {canManage && (
+          <div className="flex gap-2 shrink-0">
+            <button onClick={() => addLevel('role')} className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-slate-300 text-xs font-medium text-slate-600 hover:bg-slate-50">
+              <Plus className="w-3.5 h-3.5" /> Add Role Level
+            </button>
+            <button onClick={() => addLevel('user')} className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-slate-300 text-xs font-medium text-slate-600 hover:bg-slate-50">
+              <Plus className="w-3.5 h-3.5" /> Add User Level
+            </button>
+          </div>
+        )}
+      </div>
+
+      {loading && <div className="text-sm text-slate-500 py-2">Loading workflow…</div>}
+      {!loading && workflow.length === 0 && (
+        <div className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 text-center">
+          No custom workflow configured. The legacy chain is active.
+        </div>
+      )}
+
+      <div className="space-y-3 mt-3">
+        {workflow.map((lvl, i) => (
+          <div key={`${lvl.type}-${i}`} className="border border-slate-200 rounded-lg p-3 bg-slate-50/50">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="w-24">
+                <label className="text-[10px] font-semibold uppercase text-slate-400">Level {i + 1}</label>
+                <select
+                  className={inputCls}
+                  value={lvl.type}
+                  disabled={!canManage}
+                  onChange={(e) => setLevel(i, { type: e.target.value, role: e.target.value === 'role' ? 'head_of_human_resources' : null, user_id: null })}
+                >
+                  <option value="role">Role / Position</option>
+                  <option value="user">Specific User</option>
+                </select>
+              </div>
+
+              {lvl.type === 'role' ? (
+                <div className="w-48">
+                  <label className="text-[10px] font-semibold uppercase text-slate-400">Role</label>
+                  <select className={inputCls} value={lvl.role || ''} disabled={!canManage} onChange={(e) => setLevel(i, { role: e.target.value, label: lvl.label || e.target.options[e.target.selectedIndex].text })}>
+                    <option value="">Select role…</option>
+                    {WORKFLOW_ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                  </select>
+                </div>
+              ) : (
+                <div className="flex-1 min-w-[180px]">
+                  <label className="text-[10px] font-semibold uppercase text-slate-400">Approver</label>
+                  <div className="flex items-center gap-2">
+                    {lvl.user_id ? (
+                      <span className="text-sm text-slate-800">{userName(lvl.user_id)}</span>
+                    ) : (
+                      <span className="text-sm text-slate-400">No user selected</span>
+                    )}
+                    {canManage && (
+                      <button onClick={() => openPicker(i)} className="text-xs text-[#009944] hover:underline">
+                        {lvl.user_id ? 'Change' : 'Pick user'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="w-40">
+                <label className="text-[10px] font-semibold uppercase text-slate-400">Label</label>
+                <input className={inputCls} value={lvl.label || ''} disabled={!canManage} onChange={(e) => setLevel(i, { label: e.target.value })} placeholder="e.g. Branch Manager" />
+              </div>
+
+              <div className="w-24">
+                <label className="text-[10px] font-semibold uppercase text-slate-400">SLA (h)</label>
+                <input type="number" className={inputCls} value={lvl.sla_hours} disabled={!canManage} min={1} onChange={(e) => setLevel(i, { sla_hours: parseInt(e.target.value || '1', 10) })} />
+              </div>
+
+              <label className="flex items-center gap-1.5 text-xs text-slate-600 pb-2">
+                <input type="checkbox" checked={!!lvl.auto_escalate} disabled={!canManage} onChange={(e) => setLevel(i, { auto_escalate: e.target.checked })} className="w-4 h-4 text-[#009944]" />
+                Escalate
+              </label>
+
+              {canManage && (
+                <div className="flex items-center gap-1 ml-auto pb-2">
+                  <button onClick={() => moveLevel(i, -1)} disabled={i === 0} className="p-1 rounded text-slate-500 hover:bg-white disabled:opacity-30"><ArrowUp className="w-3.5 h-3.5" /></button>
+                  <button onClick={() => moveLevel(i, 1)} disabled={i === workflow.length - 1} className="p-1 rounded text-slate-500 hover:bg-white disabled:opacity-30"><ArrowDown className="w-3.5 h-3.5" /></button>
+                  <button onClick={() => removeLevel(i)} disabled={workflow.length <= 1} className="p-1 rounded text-rose-500 hover:bg-rose-50 disabled:opacity-30"><Trash2 className="w-3.5 h-3.5" /></button>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {canManage && workflow.length > 0 && (
+        <div className="mt-4 pt-4 border-t border-slate-100">
+          <label className="text-sm font-medium text-slate-700">Reason for change (audited) *</label>
+          <input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Added Head of Business as pre-HR approver" />
+          <div className="flex items-center gap-3 mt-3">
+            <button onClick={save} disabled={saving} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save Workflow
+            </button>
+            {saved && <span className="text-sm text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-4 h-4" /> Saved</span>}
+          </div>
+        </div>
+      )}
+
+      {error && <div className="mt-3 text-sm text-rose-600">{error}</div>}
+
+      {pickerIndex !== null && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-md p-5 shadow-xl">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-semibold text-slate-900">Select approver</h4>
+              <button onClick={() => setPickerIndex(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <PeoplePicker
+              title="Users"
+              people={people}
+              mode="single"
+              onClose={() => setPickerIndex(null)}
+              onPick={(ids) => {
+                const id = ids?.[0]
+                if (id) {
+                  setLevel(pickerIndex, { user_id: id, label: workflow[pickerIndex]?.label || userName(id) })
+                }
+                setPickerIndex(null)
+              }}
+            />
           </div>
         </div>
       )}
