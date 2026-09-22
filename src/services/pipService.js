@@ -115,7 +115,7 @@ export const pipService = {
 
   async getTrendData({ pip, metricIds = null } = {}) {
     if (!pip) return []
-    const ids = metricIds || pip.metrics?.map((m) => m.metric_id) || []
+    const ids = (metricIds || pip.metrics?.map((m) => m.metric_id) || []).filter(Boolean)
     if (ids.length === 0) return []
 
     const { data, error } = await supabase
@@ -142,7 +142,7 @@ export const pipService = {
     const allMetricIds = new Set()
     for (const p of pipsData) {
       for (const m of p.metrics || []) {
-        if (metricIds == null || metricIds.includes(m.metric_id)) allMetricIds.add(m.metric_id)
+        if ((metricIds == null || metricIds.includes(m.metric_id)) && m.metric_id) allMetricIds.add(m.metric_id)
       }
     }
     if (employeeIds.length === 0 || allMetricIds.size === 0) return []

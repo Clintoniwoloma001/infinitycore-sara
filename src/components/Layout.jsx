@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Menu, X, LogOut } from 'lucide-react'
+import { Menu, X, LogOut, Moon, Sun } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
+import { useTheme } from '../context/ThemeContext'
 import Logo from './Logo'
 import { canAccessRoute, routeConfig } from '../config/navigation'
 import NotificationBell from './NotificationBell'
@@ -30,6 +31,7 @@ export default function Layout({ children }) {
   const location = useLocation()
   const navigate = useNavigate()
   const auth = useAuth()
+  const { theme, toggle: toggleTheme } = useTheme()
   const { user, profile, role, roleMetadata, name, email, signOut } = auth
   const { actualRole } = auth
   const groups = routeConfig
@@ -122,7 +124,7 @@ export default function Layout({ children }) {
     && (onboardingStatus.employeeId || !['super_admin', 'admin'].includes(actualRole))
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden">
       {open && <div className="fixed inset-0 bg-black/40 z-30 lg:hidden" onClick={() => setOpen(false)} />}
       <aside className={`fixed lg:static inset-y-0 left-0 z-40 w-72 bg-[#0a0b0d] text-white flex flex-col transition-transform duration-300 ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
         <div className="flex items-center gap-3 px-6 h-20 border-b border-white/10">
@@ -161,13 +163,22 @@ export default function Layout({ children }) {
         </div>
       </aside>
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-slate-200 h-16 flex items-center px-4 lg:px-8">
-          <button onClick={() => setOpen(true)} className="lg:hidden text-slate-600 mr-3"><Menu className="w-6 h-6" /></button>
+        <header className="sticky top-0 z-20 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 h-16 flex items-center px-4 lg:px-8">
+          <button onClick={() => setOpen(true)} className="lg:hidden text-slate-600 dark:text-slate-300 mr-3"><Menu className="w-6 h-6" /></button>
           <div>
-            <h1 className="font-semibold text-slate-800">InfinityCore Operations</h1>
-            <p className="text-xs text-slate-400">AUTH STATUS: {email ? 'Authenticated' : 'Not authenticated'}</p>
+            <h1 className="font-semibold text-slate-800 dark:text-slate-100">InfinityCore Operations</h1>
+            <p className="text-xs text-slate-400 dark:text-slate-500">AUTH STATUS: {email ? 'Authenticated' : 'Not authenticated'}</p>
           </div>
           <div className="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label="Toggle dark mode"
+              onClick={toggleTheme}
+              className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-300"
+            >
+              {theme === 'dark' ? <Sun className="w-[18px] h-[18px]" /> : <Moon className="w-[18px] h-[18px]" />}
+            </button>
             <NotificationBell />
           </div>
         </header>

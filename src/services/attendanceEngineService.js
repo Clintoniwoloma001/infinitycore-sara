@@ -125,10 +125,14 @@ export const attendanceEngineService = {
   },
 
   // ---- DEVICES ----
+  // NOTE: attendance_devices now has BOTH location_id and geofence_id FKs into
+  // attendance_geofences, so the old bare attendance_geofences() embed would be
+  // ambiguous. Raw columns are returned and the caller resolves display names
+  // against listGeofences().
   async listDevices() {
     const { data, error } = await supabase
       .from('attendance_devices')
-      .select('id, device_name, device_type, manufacturer, model, serial_number, branch_id, location_id, api_endpoint, integration_type, status, last_seen_at, active, created_by, created_at, updated_at, attendance_geofences(name, location_name)')
+      .select('id, device_name, device_type, manufacturer, model, serial_number, branch_id, location_id, geofence_id, custom_lat, custom_lng, radius_meters, api_endpoint, integration_type, status, last_seen_at, active, created_by, created_at, updated_at')
       .order('created_at', { ascending: false })
     if (error) throw error
     return data || []

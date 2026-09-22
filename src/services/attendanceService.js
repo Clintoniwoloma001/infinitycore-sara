@@ -265,6 +265,7 @@ export function getPosition() {
  */
 export function normalizeAttendanceError(message) {
   const msg = message || 'Attendance action failed. Please try again.'
+  if (msg.startsWith('OUT_OF_BOUNDS:')) return msg.replace('OUT_OF_BOUNDS:', '')
   if (msg.startsWith('OUTSIDE_GEOFENCE:')) return msg.replace('OUTSIDE_GEOFENCE:', '')
   if (msg.startsWith('GEOFENCE_NOT_CONFIGURED:')) return msg.replace('GEOFENCE_NOT_CONFIGURED:', '')
   if (msg.startsWith('LOCATION_REQUIRED:')) return msg.replace('LOCATION_REQUIRED:', '')
@@ -485,7 +486,7 @@ export const attendanceService = {
   async listTerminalDevices() {
     const { data, error } = await supabase
       .from('attendance_devices')
-      .select('id, device_name, device_type, status, active, branch_id, last_seen_at, created_at, updated_at, token_generated_at')
+      .select('id, device_name, device_type, status, active, branch_id, geofence_id, location_id, custom_lat, custom_lng, radius_meters, last_seen_at, created_at, updated_at, token_generated_at')
       .eq('device_type', 'attendance_terminal')
       .order('created_at', { ascending: true })
     if (error) throw error
@@ -551,6 +552,42 @@ export const attendanceService = {
 
   async deleteTerminal(deviceId) {
     const { data, error } = await supabase.rpc('delete_attendance_terminal', { p_device_id: deviceId })
+    if (error) throw error
+    return data
+  },
+
+  // ---- Cross-branch clock-in HR review ----
+  // Terminal clock-ins from a branch different from the employee's assigned
+  // branch are flagged PENDING_REVIEW server-side. HR can list them, approve,
+  // or raise an employee query (which creates an employee_queries row + in-app
+  // notification for the target employee).
+  async listHrReviewRecords(status = 'PENDING_REVIEW') {
+    const { data, error } = await supabase.rpc('list_attendance_hr_reviews', {
+      p_status: status || 'PENDING_REVIEW',
+    })
+    if (error) throw error
+    return data || []
+  },
+
+  async approveHrReview(recordId, comment = null) {
+    const { data, error } = await supabase.rpc('review_attendance_hr_record', {
+      p_record_id: recordId,
+      p_action: 'approved',
+      p_comment: comment || null,
+    })
+    if (error) throw error
+    return data
+  },
+
+  async flagHrReview(recordId, note) {
+    if (!note || String(note).trim().length < 5) {
+      throw new Error('A query note of at least 5 characters is required.')
+    }
+    const { data, error } = await supabase.rpc('review_attendance_hr_record', {
+      p_record_id: recordId,
+      p_action: 'flag_query',
+      p_comment: note,
+    })
     if (error) throw error
     return data
   },

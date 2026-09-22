@@ -47,7 +47,10 @@
     "test:name-enquiry": "node tests/bankoneNameEnquiry.test.mjs",
     "test:messages-identity": "node tests/messagesIdentity.test.mjs",
     "test:leave-entitlements": "node tests/leaveEntitlements.test.mjs",
-    "test:area-offer-leave": "node tests/areaManagerOfferLeave.test.mjs"
+    "test:area-offer-leave": "node tests/areaManagerOfferLeave.test.mjs",
+    "test:terminal-geofence-review": "node tests/terminalGeofenceHrReview.test.mjs",
+    "test:theme": "node tests/themeDarkMode.test.mjs",
+    "test:leave-approval-chain": "node tests/leaveApprovalChain.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

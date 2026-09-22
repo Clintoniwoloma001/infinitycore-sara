@@ -33,6 +33,7 @@ export default function AttendanceTerminal() {
   const [error, setError] = useState('')
   const [geo, setGeo] = useState(null)
   const [geoStatus, setGeoStatus] = useState('idle')
+  const [geoMessage, setGeoMessage] = useState('')
   const [locationCheck, setLocationCheck] = useState(null)
   const [timeZone, setTimeZone] = useState(DEFAULT_ATTENDANCE_TIMEZONE)
   const { now: currentTime, synced: networkTimeSynced } = useNetworkTime()
@@ -103,6 +104,7 @@ export default function AttendanceTerminal() {
       setConfirmed(identity)
       if (publicMode) {
         setGeoStatus('fetching')
+        setGeoMessage('')
         setLocationCheck(null)
         const position = await getPosition()
         setGeo(position)
@@ -116,7 +118,16 @@ export default function AttendanceTerminal() {
         setGeoStatus('ok')
       }
     } catch (e) {
-      if (publicMode) setGeoStatus('denied')
+      if (publicMode) {
+        const m = e?.message || ''
+        if (/bounds|geofence|within range/i.test(m)) {
+          setGeoStatus('rejected')
+          setGeoMessage(normalizeAttendanceError(m))
+        } else {
+          setGeoStatus('denied')
+          setGeoMessage('')
+        }
+      }
       setError(e?.message || 'Employee lookup failed')
     } finally {
       setBusy(false)
@@ -169,10 +180,12 @@ export default function AttendanceTerminal() {
           location: data.actual_location_name,
           assignedBranch: data.assigned_branch_name,
           workHours: data.work_hours,
+          reviewNotice: data.terminal_review_message || null,
         })
+        if (data.terminal_review_message) speakText(data.terminal_review_message.replace('REVIEW:', ''))
         setConfirmed(null)
         setPin('')
-        setTimeout(() => setResult(null), 5000)
+        setTimeout(() => setResult(null), 8000)
       } else if (data?.device_binding_blocked) {
         const message = data?.error || 'This device has already been used to clock in a different employee today. Contact your supervisor or HR if this is an error.'
         setIntegrityMessage({
@@ -185,6 +198,10 @@ export default function AttendanceTerminal() {
         setError(data?.error || 'Clock operation failed')
       }
     } catch (e) {
+      if (publicMode && /bounds|geofence|within range/i.test(e?.message || '')) {
+        setGeoStatus('rejected')
+        setGeoMessage(normalizeAttendanceError(e?.message))
+      }
       setError(normalizeAttendanceError(e?.message) || 'Terminal error')
     } finally {
       setBusy(false)
@@ -235,6 +252,7 @@ export default function AttendanceTerminal() {
     setError('')
     setPin('')
     setGeo(null)
+    setGeoMessage('')
     setLocationCheck(null)
     setGeoStatus('idle')
   }
@@ -297,6 +315,12 @@ export default function AttendanceTerminal() {
               <p className="text-white/80 text-xs mt-1">Assigned branch: {result.assignedBranch}</p>
             )}
             {result.workHours != null && <p className="text-white/80 text-xs mt-1">Hours: {result.workHours}</p>}
+            {result.reviewNotice && (
+              <div className="mt-4 rounded-xl bg-amber-400/20 border border-amber-300/40 px-4 py-3 text-left">
+                <p className="text-amber-100 text-xs font-semibold uppercase tracking-wide mb-1">Sent for HR review</p>
+                <p className="text-white/90 text-sm leading-relaxed">{result.reviewNotice}</p>
+              </div>
+            )}
           </div>
         )}
 
@@ -350,12 +374,16 @@ export default function AttendanceTerminal() {
                   <MapPin className="w-4 h-4 text-slate-500" />
                   {geoStatus === 'fetching' && <span className="text-slate-600">Checking location…</span>}
                   {geoStatus === 'denied' && <span className="text-rose-600">Location is required to clock in or out.</span>}
+                  {geoStatus === 'rejected' && <span className="text-rose-600">Location rejected — outside permitted area.</span>}
                   {geoStatus === 'ok' && locationCheck?.valid && (
                     <span className="text-emerald-700">
                       Location verified — {locationCheck.actual_location_name || 'approved attendance location'}
                     </span>
                   )}
                 </div>
+                {geoStatus === 'rejected' && geoMessage && (
+                  <p className="text-xs text-rose-600 mt-1 ml-6">{geoMessage}</p>
+                )}
                 {geoStatus === 'ok' && locationCheck?.valid && (
                   <p className="text-xs text-slate-500 mt-1 ml-6">
                     {locationCheck.location_difference

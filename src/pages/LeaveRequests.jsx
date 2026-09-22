@@ -191,7 +191,7 @@ export default function LeaveRequests() {
     if (r.status === 'approved') {
       // Already fully approved (balance deducted) — cancellation must go
       // back through the same chain before it actually takes effect.
-      if (!window.confirm('This leave is already approved. Submitting a cancellation will route back through Branch Manager → Area Manager → Head of Business → HR before it takes effect. Continue?')) return
+      if (!window.confirm('This leave is already approved. Submitting a cancellation will route it back through your configured approval chain before it takes effect. Continue?')) return
       try {
         await svc.update(r.id, { status: 'pending', is_cancellation: true, approval_level: 1, approval_chain: null })
         await logAction({ action: 'leave_cancellation_requested', entityType: 'LeaveRequest', entityId: r.id, details: `${r.employee_name} requested cancellation of an approved leave — routed for re-approval`, userName })
@@ -225,7 +225,7 @@ export default function LeaveRequests() {
       <div className="flex justify-between items-end mb-6">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">Leave Requests</h2>
-          <p className="text-sm text-slate-500 mt-1">Branch Manager → Area Manager → Head of Business → HR sign-off, with automated balance tracking</p>
+          <p className="text-sm text-slate-500 mt-1">Multi-stage approval chain with automated balance tracking</p>
         </div>
         <button onClick={() => { setOpen(true); setFormError(null) }} className="bg-[#009944] hover:bg-[#007a35] text-white px-4 py-2 rounded-lg text-sm flex items-center gap-1.5"><Plus className="w-4 h-4" /> Request Leave</button>
       </div>
@@ -373,7 +373,7 @@ export default function LeaveRequests() {
                 <div><label className="text-sm font-medium text-slate-700">Start *</label><input type="date" value={form.start_date} onChange={set('start_date')} className="mt-1 w-full h-10 rounded-md border border-slate-300 px-3" /></div>
                 <div><label className="text-sm font-medium text-slate-700">End *</label><input type="date" value={form.end_date} onChange={set('end_date')} className="mt-1 w-full h-10 rounded-md border border-slate-300 px-3" /></div>
               </div>
-              {form.start_date && form.end_date && <p className="text-sm text-slate-500">{days} day(s) — routes through Branch Manager → Area Manager → Head of Business → HR</p>}
+              {form.start_date && form.end_date && <p className="text-sm text-slate-500">{days} day(s) — routes through your configured approval chain</p>}
               <div><label className="text-sm font-medium text-slate-700">Reason</label><textarea value={form.reason} onChange={set('reason')} rows={3} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" /></div>
               {formError && <p className="text-sm text-rose-600">{formError}</p>}
             </div>

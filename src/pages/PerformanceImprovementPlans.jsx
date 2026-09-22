@@ -59,6 +59,8 @@ export default function PerformanceImprovementPlans() {
   const [selectedPipId, setSelectedPipId] = useState(null)
   const [trendData, setTrendData] = useState([])
   const [loadingTrend, setLoadingTrend] = useState(false)
+  const [overviewData, setOverviewData] = useState([])
+  const [loadingOverview, setLoadingOverview] = useState(false)
 
   const [form, setForm] = useState({
     employeeId: '',
@@ -87,7 +89,6 @@ export default function PerformanceImprovementPlans() {
         supabase
           .from('employees')
           .select('id, full_name, employee_code, position, department, branch, user_id')
-          .not('user_id', 'is', null)
           .order('full_name', { ascending: true })
           .then((r) => {
             if (r.error) throw r.error
@@ -106,6 +107,58 @@ export default function PerformanceImprovementPlans() {
   }
 
   useEffect(() => { load() }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const active = pips.filter((p) => p.status === 'active')
+    if (active.length === 0) {
+      setOverviewData([])
+      return
+    }
+    const fetchOverview = async () => {
+      setLoadingOverview(true)
+      try {
+        const rows = await pipService.getOverviewTrendData({ pipIds: active.map((p) => p.id) })
+        if (cancelled) return
+        const buckets = {}
+        for (const r of rows) {
+          const key = r.period_label || String(r.period_start || '').slice(0, 7)
+          if (!key) continue
+          if (!buckets[key]) buckets[key] = { period: key, __values: {} }
+          const byMetric = buckets[key].__values
+          const name = r.metric_name || 'Metric'
+          if (!byMetric[name]) byMetric[name] = []
+          const ach = Number(r.achievement_pct)
+          if (!Number.isNaN(ach)) byMetric[name].push(ach)
+        }
+        const series = Object.values(buckets).map(({ period, __values }) => {
+          const point = { period }
+          for (const [name, vals] of Object.entries(__values)) {
+            if (vals.length === 0) continue
+            point[name] = Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100
+          }
+          return point
+        })
+        series.sort((a, b) => a.period.localeCompare(b.period))
+        setOverviewData(series)
+      } catch {
+        if (!cancelled) setOverviewData([])
+      } finally {
+        if (!cancelled) setLoadingOverview(false)
+      }
+    }
+    fetchOverview()
+    return () => { cancelled = true }
+  }, [pips])
+
+  const overviewSeries = useMemo(() => {
+    if (!overviewData.length) return []
+    const names = new Set()
+    for (const point of overviewData) {
+      for (const k of Object.keys(point)) if (k !== 'period') names.add(k)
+    }
+    return [...names]
+  }, [overviewData])
 
   const selectedPip = useMemo(() => pips.find((p) => p.id === selectedPipId), [pips, selectedPipId])
 
@@ -293,6 +346,35 @@ export default function PerformanceImprovementPlans() {
         <div className="rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-sm p-4 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
           <div>{error}</div>
+        </div>
+      )}
+
+      {!loading && pips.some((p) => p.status === 'active') && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-6">
+          <div className="mb-4">
+            <h4 className="text-sm font-semibold text-slate-900">Overview — All Active PIPs</h4>
+            <p className="text-xs text-slate-500 mt-0.5">Average metric achievement % across active plans, by reporting period (real historical data).</p>
+          </div>
+          {loadingOverview ? (
+            <div className="h-64 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-[#009944]" /></div>
+          ) : overviewData.length === 0 || overviewSeries.length === 0 ? (
+            <div className="h-64 flex items-center justify-center text-slate-400 text-sm">No historical metric data across active plans yet.</div>
+          ) : (
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={overviewData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="period" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 12 }} unit="%" />
+                  <Tooltip formatter={(v) => [`${v}%`, 'Achievement']} />
+                  <Legend />
+                  {overviewSeries.map((name, i) => (
+                    <Line key={name} type="monotone" dataKey={name} name={name} stroke={COLORS[i % COLORS.length]} strokeWidth={2} dot={false} />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
       )}
 

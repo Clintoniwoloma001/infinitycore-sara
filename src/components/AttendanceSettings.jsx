@@ -209,19 +209,35 @@ export function GeofencingTab({ canManage }) {
 // ============================================================
 // DEVICES & TERMINALS TAB
 // ============================================================
+const EMPTY_DEVICE_FORM = {
+  device_name: '', device_type: 'fingerprint', manufacturer: '', model: '',
+  serial_number: '', branch_id: '', integration_type: 'api', api_endpoint: '',
+  geofenceMode: 'none', geofence_id: '', custom_lat: '', custom_lng: '', radius_meters: 150,
+}
+
 export function DevicesTab({ canManage }) {
   const [devices, setDevices] = useState([])
+  const [geofences, setGeofences] = useState([])
+  const [branches, setBranches] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ device_name: '', device_type: 'fingerprint', manufacturer: '', model: '', serial_number: '', branch_id: '', integration_type: 'api', api_endpoint: '' })
+  const [editId, setEditId] = useState(null)
+  const [form, setForm] = useState(EMPTY_DEVICE_FORM)
   const [busy, setBusy] = useState(false)
 
   const load = async () => {
     setLoading(true)
     setError('')
     try {
-      setDevices(await attendanceEngineService.listDevices())
+      const [devs, geos, branchRows] = await Promise.all([
+        attendanceEngineService.listDevices(),
+        attendanceEngineService.listGeofences(),
+        supabase.from('branches').select('id, branch_name, branch_code').order('branch_name', { ascending: true }).then(({ data }) => data || []),
+      ])
+      setDevices(devs)
+      setGeofences(geos)
+      setBranches(branchRows)
     } catch (e) {
       setError(e?.message || 'Failed to load devices. Run the Phase 11 migration first.')
     } finally {
@@ -231,11 +247,63 @@ export function DevicesTab({ canManage }) {
 
   useEffect(() => { load() }, [])
 
+  const branchName = (id) => branches.find((b) => b.id === id)?.branch_name || (id && id.includes('-') ? null : id) || null
+  const geofenceName = (id) => geofences.find((g) => g.id === id)?.name || geofences.find((g) => g.id === id)?.location_name || null
+
+  const openAdd = () => {
+    setEditId(null)
+    setForm(EMPTY_DEVICE_FORM)
+    setShowForm(true)
+  }
+
+  const openEdit = (d) => {
+    const linked = d.geofence_id || d.location_id
+    setEditId(d.id)
+    setForm({
+      device_name: d.device_name,
+      device_type: d.device_type,
+      manufacturer: d.manufacturer || '',
+      model: d.model || '',
+      serial_number: d.serial_number || '',
+      branch_id: d.branch_id || '',
+      integration_type: d.integration_type,
+      api_endpoint: d.api_endpoint || '',
+      geofenceMode: linked ? 'link' : (d.custom_lat ? 'custom' : 'none'),
+      geofence_id: linked || '',
+      custom_lat: d.custom_lat != null ? String(d.custom_lat) : '',
+      custom_lng: d.custom_lng != null ? String(d.custom_lng) : '',
+      radius_meters: d.radius_meters ?? 150,
+    })
+    setShowForm(true)
+  }
+
+  const buildGeofencePayload = () => {
+    if (form.geofenceMode === 'link' && form.geofence_id) {
+      return {
+        geofence_id: form.geofence_id,
+        location_id: form.geofence_id,
+        custom_lat: null,
+        custom_lng: null,
+        radius_meters: null,
+      }
+    }
+    if (form.geofenceMode === 'custom' && form.custom_lat && form.custom_lng) {
+      return {
+        geofence_id: null,
+        location_id: null,
+        custom_lat: Number(form.custom_lat),
+        custom_lng: Number(form.custom_lng),
+        radius_meters: Number(form.radius_meters) || 150,
+      }
+    }
+    return { geofence_id: null, location_id: null, custom_lat: null, custom_lng: null, radius_meters: null }
+  }
+
   const save = async () => {
     setBusy(true)
     setError('')
     try {
-      await attendanceEngineService.createDevice({
+      const payload = {
         device_name: form.device_name,
         device_type: form.device_type,
         manufacturer: form.manufacturer || null,
@@ -244,11 +312,16 @@ export function DevicesTab({ canManage }) {
         branch_id: form.branch_id || null,
         integration_type: form.integration_type,
         api_endpoint: form.api_endpoint || null,
-        status: 'active',
-        active: true,
-      })
+        ...buildGeofencePayload(),
+      }
+      if (editId) {
+        await attendanceEngineService.updateDevice(editId, payload)
+      } else {
+        await attendanceEngineService.createDevice({ ...payload, status: 'active', active: true })
+      }
       setShowForm(false)
-      setForm({ device_name: '', device_type: 'fingerprint', manufacturer: '', model: '', serial_number: '', branch_id: '', integration_type: 'api', api_endpoint: '' })
+      setEditId(null)
+      setForm(EMPTY_DEVICE_FORM)
       await load()
     } catch (e) {
       setError(e?.message || 'Save failed')
@@ -270,9 +343,9 @@ export function DevicesTab({ canManage }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-slate-500">Register fingerprint scanners, biometric devices, and attendance terminals. Each device feeds the central attendance engine.</p>
+        <p className="text-sm text-slate-500">Register fingerprint scanners, biometric devices, and attendance terminals. Pin a geofence (or custom location) and an assigned branch so terminal scans are verified server-side.</p>
         {canManage && (
-          <button onClick={() => setShowForm(true)} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+          <button onClick={openAdd} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
             <Plus className="w-4 h-4" /> Add Device
           </button>
         )}
@@ -284,6 +357,9 @@ export function DevicesTab({ canManage }) {
         <div className="space-y-3">
           {devices.map((d) => {
             const Icon = DEVICE_ICONS[d.device_type] || Monitor
+            const geo = geofenceName(d.geofence_id || d.location_id)
+            const customGeo = d.custom_lat != null && d.custom_lng != null
+            const br = branchName(d.branch_id)
             return (
               <div key={d.id} className="bg-white rounded-xl border border-slate-200 p-4">
                 <div className="flex items-start justify-between">
@@ -294,10 +370,19 @@ export function DevicesTab({ canManage }) {
                     <div>
                       <h4 className="font-medium text-slate-900">{d.device_name}</h4>
                       <p className="text-xs text-slate-500 capitalize">{d.device_type.replace(/_/g, ' ')} · {d.manufacturer || 'Unknown manufacturer'}</p>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
+                      <div className="flex flex-wrap items-center gap-3 mt-1 text-xs text-slate-400">
                         {d.serial_number && <span>S/N: {d.serial_number}</span>}
-                        {d.branch_id && <span>Branch: {d.branch_id}</span>}
+                        {br && <span className="inline-flex items-center gap-1"><MapPin className="w-3 h-3" /> {br}</span>}
                         <span>Integration: {d.integration_type}</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                        {geo && <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">Geofence: {geo}</span>}
+                        {customGeo && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-sky-50 text-sky-700" title={`${d.custom_lat}, ${d.custom_lng} · ${d.radius_meters}m`}>
+                            Custom location · {d.radius_meters || 150}m
+                          </span>
+                        )}
+                        {!geo && !customGeo && <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">No geofence</span>}
                       </div>
                     </div>
                   </div>
@@ -307,8 +392,13 @@ export function DevicesTab({ canManage }) {
                       {d.status}
                     </span>
                     {d.last_seen_at && <span className="text-xs text-slate-400">Last seen: {new Date(d.last_seen_at).toLocaleDateString()}</span>}
-                    {canManage && d.status === 'active' && (
-                      <button onClick={() => revoke(d)} className="text-slate-400 hover:text-rose-500" title="Revoke"><Ban className="w-4 h-4" /></button>
+                    {canManage && (
+                      <>
+                        <button onClick={() => openEdit(d)} className="text-slate-400 hover:text-[#009944]" title="Edit"><Edit className="w-4 h-4" /></button>
+                        {d.status === 'active' && (
+                          <button onClick={() => revoke(d)} className="text-slate-400 hover:text-rose-500" title="Revoke"><Ban className="w-4 h-4" /></button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -320,9 +410,9 @@ export function DevicesTab({ canManage }) {
 
       {showForm && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl w-full max-w-lg shadow-xl">
+          <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-xl">
             <div className="border-b border-slate-200 px-6 py-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-900">Register Device</h3>
+              <h3 className="text-lg font-semibold text-slate-900">{editId ? 'Edit Device' : 'Register Device'}</h3>
               <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-6 space-y-4">
@@ -366,17 +456,65 @@ export function DevicesTab({ canManage }) {
                 <input className={inputCls} value={form.serial_number} onChange={(e) => setForm({ ...form, serial_number: e.target.value })} />
               </div>
               <div>
-                <label className={labelCls}>Branch ID (optional)</label>
-                <input className={inputCls} value={form.branch_id} onChange={(e) => setForm({ ...form, branch_id: e.target.value })} />
+                <label className={labelCls}>Assigned Branch</label>
+                <select className={inputCls} value={form.branch_id} onChange={(e) => setForm({ ...form, branch_id: e.target.value })}>
+                  <option value="">Select branch...</option>
+                  {branches.map((b) => <option key={b.id} value={b.id}>{b.branch_name} ({b.branch_code || '—'})</option>)}
+                </select>
+                <p className="text-xs text-slate-400 mt-1">The physical branch this terminal belongs to. Cross-branch terminal clock-ins are sent to HR review.</p>
               </div>
               <div>
                 <label className={labelCls}>API Endpoint (optional)</label>
                 <input className={inputCls} value={form.api_endpoint} onChange={(e) => setForm({ ...form, api_endpoint: e.target.value })} placeholder="https://..." />
               </div>
+
+              <div className="border-t border-slate-100 pt-4">
+                <h3 className="text-sm font-semibold text-slate-700 mb-1">Geofence / Clock-in Range</h3>
+                <p className="text-xs text-slate-400 mb-3">Server-side range check for terminal scans. Scans outside the range are rejected (OUT_OF_BOUNDS) with no attendance record.</p>
+                <div className="flex gap-3 text-sm">
+                  {[{ v: 'none', l: 'No geofence' }, { v: 'link', l: 'Link existing geofence' }, { v: 'custom', l: 'Custom location' }].map((m) => (
+                    <label key={m.v} className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="radio" name="geofenceMode" checked={form.geofenceMode === m.v} onChange={() => setForm({ ...form, geofenceMode: m.v })} className="accent-[#009944]" />
+                      {m.l}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {form.geofenceMode === 'link' && (
+                <div>
+                  <label className={labelCls}>Attendance Geofence</label>
+                  <select className={inputCls} value={form.geofence_id} onChange={(e) => setForm({ ...form, geofence_id: e.target.value })}>
+                    <option value="">Select geofence...</option>
+                    {geofences.filter((g) => g.source === 'attendance').map((g) => (
+                      <option key={g.id} value={g.id}>{g.name || g.location_name} ({g.radius_meters}m)</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-400 mt-1">Uses the geofence centre and radius. Branch-managed locations are edited in Platform Settings → Geofence.</p>
+                </div>
+              )}
+
+              {form.geofenceMode === 'custom' && (
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className={labelCls}>Latitude</label>
+                    <input className={inputCls} value={form.custom_lat} onChange={(e) => setForm({ ...form, custom_lat: e.target.value })} placeholder="6.5244" />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Longitude</label>
+                    <input className={inputCls} value={form.custom_lng} onChange={(e) => setForm({ ...form, custom_lng: e.target.value })} placeholder="3.3792" />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Radius (m)</label>
+                    <input type="number" min="1" className={inputCls} value={form.radius_meters} onChange={(e) => setForm({ ...form, radius_meters: Number(e.target.value) })} />
+                  </div>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
                 <button onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
-                <button onClick={save} disabled={busy || !form.device_name} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
-                  {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} Register
+                <button onClick={save} disabled={busy || !form.device_name || (form.geofenceMode === 'custom' && (!form.custom_lat || !form.custom_lng))} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-50">
+                  {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} {editId ? 'Save Changes' : 'Register'}
                 </button>
               </div>
             </div>

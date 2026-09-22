@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   AlertTriangle, Bookmark, CheckCheck, ChevronRight, CloudDownload, FileText, Image as ImageIcon,
   Landmark, Loader2, MailCheck, Pin, Reply, ShieldAlert, Volume2, X,
@@ -12,6 +13,60 @@ const PRIORITY_STYLES = {
   urgent: 'border-amber-400 shadow-[0_0_0_1px_#fbbf24]',
   high: 'border-orange-300',
   normal: '',
+}
+
+// Viewport-aware popover: portals to <body>, flips/clamps so the menu
+// never clips inside the transcripts' overflow containers or off-screen.
+function useMenu({ mine, anchorRef, open, setOpen }) {
+  const popRef = useRef(null)
+  const [pos, setPos] = useState(null)
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null)
+      return
+    }
+    const anchor = anchorRef.current
+    const el = popRef.current
+    if (!anchor || !el) return
+    const rect = anchor.getBoundingClientRect()
+    const pw = el.offsetWidth
+    const ph = el.offsetHeight
+    if (!pw || !ph || (rect.width === 0 && rect.height === 0)) return
+
+    const spaceBelow = window.innerHeight - rect.bottom - 8
+    const spaceAbove = rect.top - 8
+    const below = spaceBelow >= ph || spaceAbove < ph
+    const left = Math.max(8, Math.min(mine ? rect.right - pw : rect.left, window.innerWidth - pw - 8))
+    setPos({
+      top: below ? rect.bottom + 4 : undefined,
+      bottom: below ? undefined : window.innerHeight - rect.top + 4,
+      left,
+    })
+  }, [open, mine, anchorRef])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = (e) => {
+      if (anchorRef.current?.contains(e.target) || popRef.current?.contains(e.target)) return
+      setOpen(false)
+    }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    const onScroll = () => setOpen(false)
+    const onResize = () => setOpen(false)
+    window.addEventListener('scroll', onScroll, true)
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('scroll', onScroll, true)
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [open, anchorRef, setOpen])
+
+  return { popRef, pos }
 }
 
 export default function MessageBubble({
@@ -42,6 +97,15 @@ export default function MessageBubble({
   const [reportOpen, setReportOpen] = useState(false)
   const [reporting, setReporting] = useState(false)
   const [error, setError] = useState('')
+  const moreBtnRef = useRef(null)
+
+  const closeMenu = () => { setMenuOpen(false); setReportOpen(false) }
+  const popover = useMenu({
+    mine,
+    anchorRef: moreBtnRef,
+    open: menuOpen || reportOpen,
+    setOpen: (v) => { if (!v) closeMenu() },
+  })
 
   const restricted = msg.restricted_status && msg.restricted_status !== 'active'
   const hiddenBody = restricted || msg.is_deleted
@@ -68,8 +132,6 @@ export default function MessageBubble({
       setReporting(false)
     }
   }
-
-  const closeMenu = () => setMenuOpen(false)
 
   return (
     <div className={`flex items-start ${mine ? 'justify-end' : 'justify-start'} group`}>
@@ -184,11 +246,11 @@ export default function MessageBubble({
           <button title="Save" onClick={() => onBookmark?.(msg)} className="p-1.5 rounded-full hover:bg-slate-100 text-slate-500">
             <Bookmark className={`w-3.5 h-3.5 ${isBookmarked ? 'fill-[#009944] text-[#009944]' : ''}`} />
           </button>
-          <button title="More" onClick={() => setMenuOpen((v) => !v)} className="p-1.5 rounded-full hover:bg-slate-100 text-slate-500"><MoreDots /></button>
+          <button ref={moreBtnRef} title="More" onClick={() => { setReportOpen(false); setMenuOpen((v) => !v) }} className="p-1.5 rounded-full hover:bg-slate-100 text-slate-500"><MoreDots /></button>
         </div>
 
-        {menuOpen && (
-          <div className={`absolute z-30 mt-1 w-56 rounded-xl border border-slate-200 bg-white shadow-lg py-1 text-sm ${mine ? 'left-0' : 'right-0'}`}>
+        {menuOpen && createPortal(
+          <div ref={popover.popRef} style={{ position: 'fixed', zIndex: 1000, top: popover.pos?.top, bottom: popover.pos?.bottom, left: popover.pos?.left }} className="w-56 rounded-xl border border-slate-200 bg-white shadow-lg py-1 text-sm">
             {onReply && (
               <button onClick={() => { closeMenu(); onReply(msg) }} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700">
                 <Reply className="w-4 h-4" /> Reply in thread
@@ -229,11 +291,12 @@ export default function MessageBubble({
                 <FlagIcon /> Report to moderation
               </button>
             )}
-          </div>
+          </div>,
+          document.body
         )}
 
-        {reportOpen && (
-          <div className="absolute z-40 right-0 mt-1 w-64 rounded-xl border border-slate-200 bg-white shadow-lg p-3 text-sm">
+        {reportOpen && createPortal(
+          <div ref={popover.popRef} style={{ position: 'fixed', zIndex: 1000, top: popover.pos?.top, bottom: popover.pos?.bottom, left: popover.pos?.left }} className="w-64 rounded-xl border border-slate-200 bg-white shadow-lg p-3 text-sm">
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs font-semibold text-slate-700">Report this message</p>
               <button onClick={() => setReportOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
@@ -244,7 +307,8 @@ export default function MessageBubble({
               </button>
             ))}
             {error && <p className="text-xs text-rose-600 mt-1">{error}</p>}
-          </div>
+          </div>,
+          document.body
         )}
 
         {reactionSummary.length > 0 && (

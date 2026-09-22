@@ -57,7 +57,8 @@
  alter table public.pip_allowance_adjustments enable row level security;
 
 -- Read: HR roles + admin + super_admin + the employee themselves
- create policy if not exists "pips_read_authorized"
+ drop policy if exists "pips_read_authorized" on public.performance_improvement_plans;
+ create policy "pips_read_authorized"
    on public.performance_improvement_plans for select
    using (
      public.current_role() in ('super_admin', 'admin', 'head_of_human_resources', 'hr_officer')
@@ -66,7 +67,8 @@
      )
    );
 
- create policy if not exists "pip_metrics_read_authorized"
+ drop policy if exists "pip_metrics_read_authorized" on public.pip_metrics;
+ create policy "pip_metrics_read_authorized"
    on public.pip_metrics for select
    using (
      public.current_role() in ('super_admin', 'admin', 'head_of_human_resources', 'hr_officer')
@@ -77,7 +79,8 @@
      )
    );
 
- create policy if not exists "pip_adjustments_read_authorized"
+ drop policy if exists "pip_adjustments_read_authorized" on public.pip_allowance_adjustments;
+ create policy "pip_adjustments_read_authorized"
    on public.pip_allowance_adjustments for select
    using (
      public.current_role() in ('super_admin', 'admin', 'head_of_human_resources', 'hr_officer')
@@ -89,17 +92,20 @@
    );
 
 -- Write: HR roles + admin + super_admin only
- create policy if not exists "pips_write_hr"
+ drop policy if exists "pips_write_hr" on public.performance_improvement_plans;
+ create policy "pips_write_hr"
    on public.performance_improvement_plans for all
    using (public.current_role() in ('super_admin', 'admin', 'head_of_human_resources', 'hr_officer'))
    with check (public.current_role() in ('super_admin', 'admin', 'head_of_human_resources', 'hr_officer'));
 
- create policy if not exists "pip_metrics_write_hr"
+ drop policy if exists "pip_metrics_write_hr" on public.pip_metrics;
+ create policy "pip_metrics_write_hr"
    on public.pip_metrics for all
    using (public.current_role() in ('super_admin', 'admin', 'head_of_human_resources', 'hr_officer'))
    with check (public.current_role() in ('super_admin', 'admin', 'head_of_human_resources', 'hr_officer'));
 
- create policy if not exists "pip_adjustments_write_hr"
+ drop policy if exists "pip_adjustments_write_hr" on public.pip_allowance_adjustments;
+ create policy "pip_adjustments_write_hr"
    on public.pip_allowance_adjustments for all
    using (public.current_role() in ('super_admin', 'admin', 'head_of_human_resources', 'hr_officer'))
    with check (public.current_role() in ('super_admin', 'admin', 'head_of_human_resources', 'hr_officer'));

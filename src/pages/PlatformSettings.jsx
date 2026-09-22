@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Settings, Clock, Calendar, MapPin, Shield, Loader2, CheckCircle2, History, Coins, Save, PenLine, X } from 'lucide-react'
+import { Settings, Clock, Calendar, MapPin, Shield, Loader2, CheckCircle2, History, Coins, Save, PenLine, X, ArrowDown, ArrowUp, Trash2, Plus } from 'lucide-react'
 import { platformSettingsService } from '../services/platformSettingsService'
 import signatureService, { uploadSignature } from '../services/signatureService'
 import { geofenceService } from '../services/geofenceService'
@@ -12,6 +12,17 @@ const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm fo
 const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5'
 const toggleCls = 'w-4 h-4 accent-[#009944]'
 const DEFAULT_CURRENCY = { currency_code: 'NGN', currency_symbol: '₦', currency_position: 'prefix', currency_decimal_places: 2 }
+const DEFAULT_APPROVAL_CHAIN = ['line_manager', 'branch_manager', 'area_manager', 'head_of_human_resources']
+const APPROVAL_STAGES = {
+  line_manager: 'Line Manager',
+  branch_manager: 'Branch Manager',
+  area_manager: 'Area Manager',
+  head_of_human_resources: 'Head of Human Resources',
+}
+const normalizeChain = (chain) => {
+  const list = Array.isArray(chain) ? chain.filter((s) => typeof s === 'string') : []
+  return list.length ? list : DEFAULT_APPROVAL_CHAIN
+}
 
 function normalizeCurrency(settings = {}) {
   const decimals = settings.currency_decimal_places == null || settings.currency_decimal_places === ''
@@ -87,6 +98,33 @@ export default function PlatformSettings() {
   useEffect(() => { load() }, [])
 
   const update = (k, v) => setForm((p) => ({ ...p, [k]: v }))
+
+  const moveChainStage = (from, to) => {
+    setForm((p) => {
+      const chain = [...normalizeChain(p.leave_approval_chain)]
+      if (from < 0 || to < 0 || from >= chain.length || to >= chain.length) return p
+      const [moved] = chain.splice(from, 1)
+      chain.splice(to, 0, moved)
+      return { ...p, leave_approval_chain: chain }
+    })
+  }
+
+  const removeChainStage = (idx) => {
+    setForm((p) => {
+      const chain = [...normalizeChain(p.leave_approval_chain)]
+      if (idx < 0 || idx >= chain.length || chain.length <= 1) return p
+      chain.splice(idx, 1)
+      return { ...p, leave_approval_chain: chain }
+    })
+  }
+
+  const addChainStage = (stage) => {
+    setForm((p) => {
+      const chain = [...normalizeChain(p.leave_approval_chain)]
+      if (!stage || chain.includes(stage)) return p
+      return { ...p, leave_approval_chain: [...chain, stage] }
+    })
+  }
 
   const updateCurrency = (k, v) => setCurrencyForm((p) => ({ ...p, [k]: v }))
 
@@ -269,6 +307,46 @@ export default function PlatformSettings() {
             <Toggle label="Approval required for leave requests" checked={form.leave_approval_required} onChange={(v) => update('leave_approval_required', v)} />
             <Toggle label="Attachment required for leave requests" checked={form.leave_attachment_required} onChange={(v) => update('leave_attachment_required', v)} />
             <Toggle label="Allow unused days to carry forward" checked={form.leave_carry_forward} onChange={(v) => update('leave_carry_forward', v)} />
+          </div>
+          <div className="pt-4 border-t border-slate-100">
+            <h3 className="text-sm font-semibold text-slate-800 mb-1">Approval Chain</h3>
+            <p className="text-xs text-slate-500 mb-3">Order of sign-off for leave requests. Stages that cannot be resolved for an employee are skipped automatically. Changes apply to new requests.</p>
+            <div className="space-y-2">
+              {normalizeChain(form.leave_approval_chain).map((stage, i) => (
+                <div key={stage} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <span className="w-6 text-xs font-medium text-slate-400">{i + 1}.</span>
+                  <span className="flex-1 text-sm text-slate-700">{APPROVAL_STAGES[stage] || stage}</span>
+                  <div className="flex items-center gap-1">
+                    <button type="button" onClick={() => moveChainStage(i, i - 1)} disabled={i === 0} className="p-1.5 rounded-md text-slate-500 hover:bg-white disabled:opacity-30" title="Move up">
+                      <ArrowUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button type="button" onClick={() => moveChainStage(i, i + 1)} disabled={i === normalizeChain(form.leave_approval_chain).length - 1} className="p-1.5 rounded-md text-slate-500 hover:bg-white disabled:opacity-30" title="Move down">
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
+                    <button type="button" onClick={() => removeChainStage(i)} disabled={normalizeChain(form.leave_approval_chain).length <= 1} className="p-1.5 rounded-md text-rose-500 hover:bg-rose-50 disabled:opacity-30" title="Remove stage">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {Object.keys(APPROVAL_STAGES).some((s) => !normalizeChain(form.leave_approval_chain).includes(s)) && (
+              <div className="mt-2 flex items-center gap-2">
+                <select
+                  className={inputCls}
+                  value=""
+                  onChange={(e) => { if (e.target.value) { addChainStage(e.target.value); e.target.value = '' } }}
+                >
+                  <option value="">Add a stage…</option>
+                  {Object.entries(APPROVAL_STAGES)
+                    .filter(([key]) => !normalizeChain(form.leave_approval_chain).includes(key))
+                    .map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                </select>
+                <button type="button" onClick={() => addChainStage(Object.keys(APPROVAL_STAGES).find((s) => !normalizeChain(form.leave_approval_chain).includes(s)))} className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs font-medium hover:bg-slate-50">
+                  <Plus className="w-3.5 h-3.5" /> Add
+                </button>
+              </div>
+            )}
           </div>
           <SaveButton onClick={saveSettings} saving={saving} />
         </div>

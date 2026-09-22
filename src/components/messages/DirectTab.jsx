@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Trash2, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react'
+import { AlertTriangle, Loader2, MailCheck, MessageSquare, MoreVertical, Pin, Plus, Search, Trash2, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react'
 import { supabase } from '../../supabaseClient'
 import { useAuth } from '../../hooks/useAuth'
 import {
-  conversationPins, directChat, listAttachments, messageActions, resolveDirectory, unreadMessageTotal, uploadChatAttachment,
+  conversationPins, directChat, listAttachments, listMessageAcks, messageActions, resolveDirectory, unreadMessageTotal, uploadChatAttachment,
 } from '../../services/corporateChatService'
 import { readOutbox, syncOutbox } from '../../services/chatService'
 import MessageBubble from './MessageBubble'
@@ -57,6 +57,8 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
   const [attachments, setAttachments] = useState({})
   const [unreadByThread, setUnreadByThread] = useState({})
   const [reactions, setReactions] = useState({})
+  const [acks, setAcks] = useState({})
+  const [ackBusy, setAckBusy] = useState(false)
   const [text, setText] = useState('')
   const [online, setOnline] = useState(navigator.onLine)
   const [pendingCount, setPendingCount] = useState(0)
@@ -165,6 +167,7 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
     if (!activeThread) { setMessages([]); return }
     setMessages([])
     setAttachments({})
+    setAcks({})
     messageIdsRef.current = new Set()
     const threadId = activeThread.id
     directChat.listMessages(threadId).then(async (msgs) => {
@@ -203,18 +206,67 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
     if (!ids.length) return
     try {
       const rows = await listAttachments(ids)
-      if (!rows?.length) return
-      setAttachments((prev) => {
-        const next = { ...prev }
-        for (const attachment of rows) {
-          const existing = next[attachment.message_id] || []
-          if (!existing.some((item) => item.id === attachment.id)) {
-            next[attachment.message_id] = [...existing, attachment]
+      if (rows?.length) {
+        setAttachments((prev) => {
+          const next = { ...prev }
+          for (const attachment of rows) {
+            const existing = next[attachment.message_id] || []
+            if (!existing.some((item) => item.id === attachment.id)) {
+              next[attachment.message_id] = [...existing, attachment]
+            }
           }
-        }
-        return next
-      })
+          return next
+        })
+      }
     } catch (_) {}
+    try {
+      const ackRows = await listMessageAcks(ids)
+      if (ackRows?.length) {
+        setAcks((prev) => {
+          const next = { ...prev }
+          for (const r of ackRows) { next[r.message_id] = next[r.message_id] || []; next[r.message_id].push(r) }
+          return next
+        })
+      }
+    } catch (_) {}
+  }
+
+  const myAckOf = (msg) => {
+    if (!msg?.requires_ack || !me) return null
+    return (acks[msg.id] || []).find((r) => r.user_id === me) || null
+  }
+
+  const myAckRequired = (msg) => {
+    if (!msg?.requires_ack || !me) return false
+    const rows = acks[msg.id] || []
+    return !rows.some((r) => r.user_id === me && r.status === 'acknowledged')
+  }
+
+  const pendingAckMsgs = useMemo(
+    () => messages.filter((m) => myAckRequired(m)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [messages, acks, me],
+  )
+
+  const gateMsg = pendingAckMsgs[0] || null
+
+  const handleAcknowledge = async (msg) => {
+    if (!msg || ackBusy) return
+    setAckBusy(true)
+    try {
+      await messageActions.acknowledgeMessage(msg.id)
+      setAcks((prev) => {
+        const rows = [...(prev[msg.id] || [])]
+        const idx = rows.findIndex((r) => r.user_id === me)
+        if (idx >= 0) rows[idx] = { ...rows[idx], status: 'acknowledged', acknowledged_at: new Date().toISOString() }
+        else rows.push({ id: `mine-${Date.now()}`, message_id: msg.id, user_id: me, status: 'acknowledged', acknowledged_at: new Date().toISOString() })
+        return { ...prev, [msg.id]: rows }
+      })
+    } catch (e) {
+      setError(e?.message || 'Could not acknowledge the message')
+    } finally {
+      setAckBusy(false)
+    }
   }
 
   useEffect(() => {
@@ -384,7 +436,7 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
         const fresh = await directChat.sendRich(activeThread.id, {
           body,
           priority: opts.priority,
-          requiresAck: false,
+          requiresAck: !!opts.requiresAck,
           files: uploaded,
           mentionIds,
         })
@@ -587,6 +639,36 @@ return (
 
             {error && <div className="px-4 py-2 text-xs text-rose-600 bg-rose-50 border-b border-rose-100">{error}</div>}
 
+            {gateMsg && (
+              <div className="mx-3 mt-2 rounded-xl border-2 border-amber-300 bg-amber-50 p-3">
+                <div className="flex items-start gap-3">
+                  <span className="w-9 h-9 rounded-full bg-amber-500 text-white flex items-center justify-center shrink-0">
+                    <MailCheck className="w-4 h-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-amber-800 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4" /> Urgent message awaiting your acknowledgment
+                    </p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      <span className="font-medium">{personName(gateMsg.sender_id)}:</span>{' '}
+                      {gateMsg.body}
+                    </p>
+                    <p className="text-[11px] text-amber-600/80 mt-1">
+                      You cannot send new messages here until you acknowledge receipt of the urgent message above.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleAcknowledge(gateMsg)}
+                    disabled={ackBusy}
+                    className="inline-flex items-center gap-1.5 shrink-0 rounded-lg bg-amber-500 text-white px-3 py-2 text-xs font-semibold hover:bg-amber-600 disabled:opacity-50"
+                  >
+                    {ackBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MailCheck className="w-3.5 h-3.5" />}
+                    I acknowledge receipt
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 max-h-[52vh] min-h-[52vh] bg-slate-50/50">
               {messages.length === 0 && <div className="h-full flex items-center justify-center text-sm text-slate-400">No messages yet — say hi!</div>}
               {messages.map((m) => {
@@ -622,6 +704,8 @@ return (
                     } : null}
                     onReport={doReport}
                     onBookmark={doBookmark}
+                    myAck={myAckOf(m)}
+                    onAcknowledge={handleAcknowledge}
                     allowed={{ edit: true, delete: true, report: true }}
                   />
                 )
@@ -635,8 +719,9 @@ return (
               onSend={send}
               sending={sending}
               people={people}
-              allowRequireAck={false}
-              placeholder="Type a message…"
+              disabled={!!gateMsg}
+              allowRequireAck
+              placeholder={gateMsg ? `Acknowledge the urgent message to continue…` : 'Type a message…'}
             />
           </>
         )}

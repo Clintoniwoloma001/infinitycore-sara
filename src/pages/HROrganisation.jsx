@@ -1051,7 +1051,14 @@ function SupervisorRow({ mapping, employees, globalSupervisorIds, canManage, bus
   }, [employees, dept, employeeId, globalSupervisorIds])
 
   const derivedTitle = supervisorId ? (employees.find((e) => e.id === supervisorId)?.position || '') : ''
-  const effectiveTitle = supervisorTitle || derivedTitle || mapping.supervisor_title || ''
+  // A bad import wrote the supervisor's PERSON NAME into the title field on
+  // 136 rows. If the stored title is literally the linked supervisor's name,
+  // prefer the designation derived from their position instead (see migration
+  // 20260922000004). Genuine custom titles are never touched.
+  const storedTitleLooksLikeSupervisorName = supervisorId
+    ? (employees.find((e) => e.id === supervisorId)?.full_name || '').toLowerCase() === (supervisorTitle || '').trim().toLowerCase()
+    : false
+  const effectiveTitle = (storedTitleLooksLikeSupervisorName ? '' : supervisorTitle) || derivedTitle || mapping.supervisor_title || ''
 
   const hasChanged = employeeId !== (mapping.employee_id || '') || supervisorId !== (mapping.supervisor_employee_id || '') || level !== (mapping.level || 1) || effectiveTitle !== (mapping.supervisor_title || '')
 
@@ -1696,7 +1703,10 @@ function SupervisorModal({ mapping, employees, globalSupervisorIds, busy, onClos
   }, [employees, dept, employeeId, globalSupervisorIds])
 
   const derivedTitle = supervisorId ? (employees.find((e) => e.id === supervisorId)?.position || '') : ''
-  const effectiveTitle = supervisorTitle || derivedTitle
+  const storedTitleLooksLikeSupervisorName = supervisorId
+    ? (employees.find((e) => e.id === supervisorId)?.full_name || '').toLowerCase() === (supervisorTitle || '').trim().toLowerCase()
+    : false
+  const effectiveTitle = (storedTitleLooksLikeSupervisorName ? '' : supervisorTitle) || derivedTitle
 
   const submit = () => {
     setFormError('')

@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import { envMissing } from './supabaseClient'
+import { ThemeProvider } from './context/ThemeContext'
 import './index.css'
 
 function ConfigError() {
@@ -20,5 +21,9 @@ function ConfigError() {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>{envMissing ? <ConfigError /> : <App />}</React.StrictMode>
+  <React.StrictMode>
+    <ThemeProvider>
+      {envMissing ? <ConfigError /> : <App />}
+    </ThemeProvider>
+  </React.StrictMode>
 )

@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
-import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw, Eye, Trash2, Pause, Play, Fingerprint, ShieldAlert, History } from 'lucide-react'
+import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw, Eye, Trash2, Pause, Play, Fingerprint, ShieldAlert, History, MessageSquare, ShieldCheck } from 'lucide-react'
 import { attendanceService, platformDateKey, formatWorkedHours } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { platformSettingsService } from '../services/platformSettingsService'
+import { supabase } from '../supabaseClient'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
 import SaraBriefing from '../components/attendance/SaraBriefing'
@@ -798,13 +799,43 @@ function QrTerminalTab({ setNotice }) {
   const [historyFilter, setHistoryFilter] = useState('all')
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
+  const [branchNames, setBranchNames] = useState({})
+  const [reviews, setReviews] = useState([])
+  const [reviewStatus, setReviewStatus] = useState('PENDING_REVIEW')
+  const [reviewLoading, setReviewLoading] = useState(false)
+  const [reviewBusyId, setReviewBusyId] = useState('')
+  const [reviewModal, setReviewModal] = useState(null)
+
+  const branchLabel = (id) => {
+    if (!id) return '—'
+    if (branchNames[id]) return branchNames[id]
+    return /^[0-9a-fA-F-]{36}$/.test(String(id)) ? '—' : id
+  }
+
+  const loadReviews = async (status = reviewStatus) => {
+    setReviewLoading(true)
+    try {
+      const rows = await attendanceService.listHrReviewRecords(status || 'PENDING_REVIEW')
+      setReviews(rows || [])
+    } catch (e) {
+      setReviews([])
+      setNotice({ kind: 'error', text: e?.message || 'Failed to load HR review records' })
+    } finally {
+      setReviewLoading(false)
+    }
+  }
 
   const load = async () => {
     setLoading(true)
     try {
-      const rows = await attendanceService.listTerminalDevices()
+      const [rows, branchRows] = await Promise.all([
+        attendanceService.listTerminalDevices(),
+        supabase.from('branches').select('id, branch_name').then(({ data }) => data || []),
+      ])
       setDevices(rows)
+      setBranchNames(Object.fromEntries(branchRows.map((b) => [b.id, b.branch_name])))
       setSelectedId((current) => current || rows[0]?.id || '')
+      await loadReviews('PENDING_REVIEW')
     } catch (e) {
       setNotice({ kind: 'error', text: e?.message || 'Failed to load attendance terminals' })
     } finally {
@@ -813,6 +844,37 @@ function QrTerminalTab({ setNotice }) {
   }
 
   useEffect(() => { load() }, [])
+
+  const approveReview = async (record) => {
+    setReviewBusyId(record.record_id)
+    try {
+      await attendanceService.approveHrReview(record.record_id)
+      setNotice({ kind: 'ok', text: `Attendance approved for ${record.employee_name || 'the employee'}.` })
+      await loadReviews(reviewStatus)
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Could not approve attendance' })
+    } finally {
+      setReviewBusyId('')
+    }
+  }
+
+  const flagReview = async () => {
+    if (!reviewModal?.record_id || !reviewModal?.note?.trim() || reviewModal.note.trim().length < 5) {
+      setNotice({ kind: 'error', text: 'Enter a query note of at least 5 characters.' })
+      return
+    }
+    setReviewBusyId(reviewModal.record_id)
+    try {
+      await attendanceService.flagHrReview(reviewModal.record_id, reviewModal.note.trim())
+      setReviewModal(null)
+      setNotice({ kind: 'ok', text: 'Attendance flagged. A query and notification were raised for the employee.' })
+      await loadReviews(reviewStatus)
+    } catch (e) {
+      setNotice({ kind: 'error', text: e?.message || 'Could not flag attendance' })
+    } finally {
+      setReviewBusyId('')
+    }
+  }
 
   const generate = async () => {
     setBusy(true)
@@ -1202,6 +1264,7 @@ function QrTerminalTab({ setNotice }) {
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
                   <th className="py-2 pr-3 font-medium">Terminal</th>
+                  <th className="py-2 pr-3 font-medium">Branch</th>
                   <th className="py-2 pr-3 font-medium">Status</th>
                   <th className="py-2 pr-3 font-medium">Generated</th>
                   <th className="py-2 pr-3 font-medium">Last seen</th>
@@ -1214,7 +1277,15 @@ function QrTerminalTab({ setNotice }) {
                     <td className="py-3 pr-3">
                       <p className="font-medium text-slate-800">{device.device_name}</p>
                       <p className="text-xs text-slate-400">QR terminal · {device.active === false ? 'disabled' : 'enabled'}</p>
+                      {(device.custom_lat != null || device.geofence_id || device.location_id) && (
+                        <p className="text-xs mt-0.5">
+                          {device.geofence_id || device.location_id
+                            ? <span className="text-emerald-600 font-medium">Geofence-linked</span>
+                            : <span className="text-sky-600 font-medium">Custom location · {device.radius_meters || 150}m</span>}
+                        </p>
+                      )}
                     </td>
+                    <td className="py-3 pr-3 text-xs text-slate-600">{branchLabel(device.branch_id)}</td>
                     <td className="py-3 pr-3">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${statusMeta(device).cls}`}>{statusMeta(device).label}</span>
                     </td>
@@ -1233,6 +1304,136 @@ function QrTerminalTab({ setNotice }) {
 
       {qrModal}
       {historyModal}
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-slate-900 flex items-center gap-2"><ShieldCheck className="w-5 h-5 text-[#009944]" /> HR Review — cross-branch clock-ins</h3>
+            <p className="text-sm text-slate-500 mt-1">Terminal clock-ins where the terminal's branch differs from the employee's assigned branch are auto-flagged and sent here. Approve legitimate entries, or raise a query for the employee to clarify (an in-app query + notification is created).</p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {[['PENDING_REVIEW', 'Pending'], ['FLAGGED_QUERY_ISSUED', 'Queried'], ['APPROVED', 'Approved'], ['ALL', 'All']].map(([value, label]) => (
+              <button key={value} onClick={() => { setReviewStatus(value); loadReviews(value) }}
+                className={`px-3 py-1 rounded-full text-xs font-medium border ${reviewStatus === value ? 'bg-[#009944] text-white border-[#009944]' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {reviewLoading ? (
+          <div className="py-8 text-center">
+            <Loader2 className="w-5 h-5 mx-auto animate-spin text-[#009944]" />
+            <p className="text-sm text-slate-500 mt-2">Loading HR review records…</p>
+          </div>
+        ) : reviews.length === 0 ? (
+          <EmptyState
+            title="No records to review"
+            description={reviewStatus === 'PENDING_REVIEW'
+              ? 'No cross-branch clock-ins awaiting review. They appear here automatically when an employee clocks in at a terminal outside their assigned branch.'
+              : `No ${reviewStatus?.replace(/_/g, ' ').toLowerCase() || ''} records.`}
+          />
+        ) : (
+          <div className="overflow-x-auto -mx-6 px-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                  <th className="py-2 pr-3 font-medium">Employee</th>
+                  <th className="py-2 pr-3 font-medium">Original branch → Terminal</th>
+                  <th className="py-2 pr-3 font-medium">Clock-in</th>
+                  <th className="py-2 pr-3 font-medium">Status</th>
+                  <th className="py-2 pr-3 font-medium">Note / comment</th>
+                  {reviewStatus === 'PENDING_REVIEW' || reviewStatus === 'FLAGGED_QUERY_ISSUED' ? <th className="py-2 font-medium">Actions</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {reviews.map((record) => (
+                  <tr key={record.record_id} className="border-b border-slate-50 last:border-0">
+                    <td className="py-3 pr-3">
+                      <p className="font-medium text-slate-800">{record.employee_name || '—'}</p>
+                      <p className="text-xs text-slate-400">{record.employee_number || ''}</p>
+                    </td>
+                    <td className="py-3 pr-3 text-xs text-slate-600">
+                      <p>{record.original_branch_name || '—'} <span className="text-slate-400">→</span> <span className="font-medium text-slate-800">{record.clocked_in_branch_name || '—'}</span></p>
+                      <p className="text-slate-400 mt-0.5">{record.terminal_name}</p>
+                    </td>
+                    <td className="py-3 pr-3 text-xs text-slate-500">
+                      {record.clock_in_at ? new Date(record.clock_in_at).toLocaleString() : '—'}
+                      {record.terminal_geofence_distance != null && (
+                        <p className="text-slate-400 mt-0.5">{Math.round(record.terminal_geofence_distance)}m from terminal</p>
+                      )}
+                    </td>
+                    <td className="py-3 pr-3">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                        record.hr_review_status === 'PENDING_REVIEW' ? 'bg-amber-100 text-amber-700'
+                          : record.hr_review_status === 'FLAGGED_QUERY_ISSUED' ? 'bg-rose-100 text-rose-700'
+                          : 'bg-emerald-100 text-emerald-700'
+                      }`}>
+                        {record.hr_review_status?.replace(/_/g, ' ') || '—'}
+                      </span>
+                      {record.hr_reviewed_at && <p className="text-xs text-slate-400 mt-0.5">{new Date(record.hr_reviewed_at).toLocaleString()}</p>}
+                    </td>
+                    <td className="py-3 pr-3">
+                      {record.hr_query_note && (
+                        <p className="text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded-lg p-2">{record.hr_query_note}</p>
+                      )}
+                      {record.hr_review_comment && (
+                        <p className="text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded-lg p-2 mt-1">{record.hr_review_comment}</p>
+                      )}
+                      {!record.hr_query_note && !record.hr_review_comment && <span className="text-xs text-slate-400">—</span>}
+                    </td>
+                    {(reviewStatus === 'PENDING_REVIEW' || reviewStatus === 'FLAGGED_QUERY_ISSUED') && (
+                      <td className="py-3">
+                        {reviewBusyId === record.record_id ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-[#009944]" />
+                        ) : (
+                          <div className="flex flex-wrap gap-1.5">
+                            <button onClick={() => approveReview(record)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 text-emerald-700 text-xs font-medium hover:bg-emerald-50">
+                              <Check className="w-3.5 h-3.5" /> Approve
+                            </button>
+                            <button onClick={() => setReviewModal({ record_id: record.record_id, name: record.employee_name || 'employee', note: '' })} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 text-rose-700 text-xs font-medium hover:bg-rose-50">
+                              <MessageSquare className="w-3.5 h-3.5" /> Flag query
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {reviewModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4" onClick={() => setReviewModal(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-semibold text-slate-900">Flag attendance for {reviewModal.name}</h3>
+                <p className="text-xs text-slate-500 mt-1">Raises an employee query (category: attendance) and notifies the employee to respond.</p>
+              </div>
+              <button onClick={() => setReviewModal(null)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div>
+              <label className={labelCls}>Query note (minimum 5 characters)</label>
+              <textarea
+                className={`${inputCls} h-28 py-2`}
+                value={reviewModal.note}
+                onChange={(e) => setReviewModal({ ...reviewModal, note: e.target.value })}
+                placeholder="Why is this clock-in being questioned?"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setReviewModal(null)} className="px-4 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+              <button onClick={flagReview} disabled={reviewBusyId === reviewModal.record_id || !reviewModal.note?.trim() || reviewModal.note.trim().length < 5} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 disabled:opacity-50">
+                {reviewBusyId === reviewModal.record_id ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageSquare className="w-4 h-4" />} Raise Query
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

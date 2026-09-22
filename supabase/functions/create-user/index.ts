@@ -77,8 +77,11 @@ Deno.serve(async (req) => {
       const { data, error: employeeError } = await admin.from('employees').select('*').eq('id', employeeId).single()
       if (employeeError || !data) return json({ error: 'employee_not_found', message: 'Employee record not found.' }, 200)
       employee = data
-      if (text(employee.email).toLowerCase() !== email.toLowerCase()) {
-        return json({ error: 'email_mismatch', message: 'The account email must exactly match the employee email.' }, 200)
+      const empEmails = [employee.email, employee.personal_email, employee.work_email]
+        .filter((v) => typeof v === 'string' && v.trim())
+        .map((v) => v.trim().toLowerCase())
+      if (!empEmails.includes(email.trim().toLowerCase())) {
+        return json({ error: 'email_mismatch', message: 'The account email must match one of the employee login/personal/work emails.' }, 200)
       }
       if (!validEmail(employee.email)) {
         return json({ error: 'invalid_employee_email', message: 'This employee does not have a valid email address. Update the employee record before creating the user account.' }, 200)
@@ -90,7 +93,7 @@ Deno.serve(async (req) => {
 
     const redirectTo = getAuthRedirectUrl()
     const { data: authData, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
-      data: { full_name: fullName },
+      data: { full_name: fullName, ...(employeeId ? { employee_id: employeeId } : {}) },
       redirectTo,
     })
     if (inviteError || !authData?.user?.id) throw inviteError || new Error('Supabase did not return the invited auth user')

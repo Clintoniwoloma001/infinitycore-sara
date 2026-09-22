@@ -390,9 +390,38 @@ function CreateUserModal({ onClose, onCreated, actorRole, showToast }) {
   const [form, setForm] = useState({ role: 'staff', user_type: 'staff' })
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+  const [employees, setEmployees] = useState([])
   const myRoles = assignableRoles(actorRole)
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+
+  useEffect(() => {
+    let active = true
+    supabase
+      .from('employees')
+      .select('id, full_name, email, employee_number, department, branch')
+      .is('user_id', null)
+      .not('email', 'is', null)
+      .order('full_name', { ascending: true })
+      .limit(200)
+      .then(({ data, error }) => {
+        if (active && !error) setEmployees(data || [])
+      })
+      .catch(() => {})
+    return () => { active = false }
+  }, [])
+
+  const linkEmployee = (employeeId) => {
+    const emp = employees.find((e) => e.id === employeeId)
+    setForm((f) => ({
+      ...f,
+      employeeId: employeeId || null,
+      full_name: emp ? emp.full_name : f.full_name,
+      email: emp ? emp.email : f.email,
+      department: emp ? emp.department || f.department : f.department,
+      branch: emp ? emp.branch || f.branch : f.branch,
+    }))
+  }
 
   const create = async () => {
     if (!form.email) { setError('Email is required.'); return }
@@ -409,6 +438,7 @@ function CreateUserModal({ onClose, onCreated, actorRole, showToast }) {
           department: form.department || null,
           branch: form.branch || null,
           userType: form.user_type || 'staff',
+          employeeId: form.employeeId || null,
         },
       })
       if (error) throw error
@@ -432,6 +462,16 @@ function CreateUserModal({ onClose, onCreated, actorRole, showToast }) {
         </div>
         {error && <p className="text-sm text-rose-600 mb-3">{error}</p>}
         <div className="space-y-4">
+          <div>
+            <label className={labelCls}>Link to employee (optional)</label>
+            <select className={inputCls} value={form.employeeId || ''} onChange={(e) => linkEmployee(e.target.value)} disabled={creating}>
+              <option value="">— None (standalone account) —</option>
+              {employees.map((e) => (
+                <option key={e.id} value={e.id}>{e.full_name}{e.employee_number ? ` (${e.employee_number})` : ''} — {e.email}</option>
+              ))}
+            </select>
+            <p className="text-xs text-slate-400 mt-1">When chosen, the account email must match the employee email — the employee record stays authoritative.</p>
+          </div>
           <div><label className={labelCls}>Full Name *</label><input className={inputCls} value={form.full_name || ''} onChange={set('full_name')} placeholder="John Doe" disabled={creating} /></div>
           <div><label className={labelCls}>Email *</label><input className={inputCls} value={form.email || ''} onChange={set('email')} placeholder="john@company.com" disabled={creating} /></div>
           <div><label className={labelCls}>Phone</label><input className={inputCls} value={form.phone || ''} onChange={set('phone')} placeholder="+1234567890" disabled={creating} /></div>

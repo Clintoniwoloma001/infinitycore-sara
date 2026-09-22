@@ -429,8 +429,10 @@ export default function EmployeeProfile() {
         spouse_email: draft.spouse_email,
         emergency_contact_name: draft.emergency_contact_name,
         emergency_contact_phone: draft.emergency_contact_phone,
+        number_of_children: draft.number_of_children,
+        children_age_range: draft.children_age_range,
       }
-      await employeeService.updatePersonalInfo(personalFields)
+      await employeeService.updateHrFields(id, personalFields)
       setMessage('Saved.')
       await load()
     } catch (e) {
