@@ -57,3 +57,18 @@ export function personMatches(person, query) {
     (person.branch || '').toLowerCase(),
   ].some((field) => field.includes(q))
 }
+
+/**
+ * Can this person be messaged?
+ * True for platform admins, and for accounts whose app profile exists
+ * (`hasAccount`) AND is `active`. Members whose profile row is missing,
+ * still pending, suspended or rejected get "No account yet" / status labels
+ * in the member panel and their "Message" action is disabled.
+ */
+export function isActiveAccount(person) {
+  if (!person) return false
+  if (['super_admin', 'admin'].includes(person.role)) return true
+  if (person.hasAccount === false) return false
+  const status = String(person.profileStatus || person.profile_status || '').toLowerCase()
+  return status === 'active' || status === ''
+}

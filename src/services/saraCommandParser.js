@@ -110,6 +110,77 @@ function extractTrainingArea(text) {
 }
 
 // ------------------------------------------------------------------
+// Personal attendance / leave questions (Phase 3)
+// ------------------------------------------------------------------
+function extractDateScope(text) {
+  const t = text.toLowerCase()
+  const today = new Date()
+  const toIso = (d) => d.toISOString().split('T')[0]
+  const startOfWeek = (d) => {
+    const day = d.getDay()
+    const diff = d.getDate() - day
+    return new Date(d.setDate(diff))
+  }
+  const endOfWeek = (d) => {
+    const start = startOfWeek(new Date(d))
+    return new Date(start.setDate(start.getDate() + 6))
+  }
+
+  if (/\btoday\b/.test(t)) return { scope: 'today', start: toIso(today), end: toIso(today), needsClarification: false }
+  if (/\byesterday\b/.test(t)) {
+    const y = new Date(); y.setDate(y.getDate() - 1)
+    return { scope: 'yesterday', start: toIso(y), end: toIso(y), needsClarification: false }
+  }
+  if (/\blast\s+week\b/.test(t)) {
+    const start = startOfWeek(new Date()); start.setDate(start.getDate() - 7)
+    const end = new Date(start); end.setDate(end.getDate() + 6)
+    return { scope: 'last_week', start: toIso(start), end: toIso(end), needsClarification: false }
+  }
+  if (/\bthis\s+week\b/.test(t)) {
+    return { scope: 'this_week', start: toIso(startOfWeek(new Date())), end: toIso(endOfWeek(new Date())), needsClarification: false }
+  }
+  if (/\blast\s+month\b/.test(t)) {
+    const start = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+    const end = new Date(today.getFullYear(), today.getMonth(), 0)
+    return { scope: 'last_month', start: toIso(start), end: toIso(end), needsClarification: false }
+  }
+  if (/\bthis\s+month\b/.test(t)) {
+    const start = new Date(today.getFullYear(), today.getMonth(), 1)
+    const end = new Date(today.getFullYear(), today.getMonth() + 1, 0)
+    return { scope: 'this_month', start: toIso(start), end: toIso(end), needsClarification: false }
+  }
+  if (/\bthis\s+year\b|\byear\s+to\s+date\b|\bytd\b/.test(t)) {
+    const start = new Date(today.getFullYear(), 0, 1)
+    return { scope: 'this_year', start: toIso(start), end: toIso(today), needsClarification: false }
+  }
+
+  // If the user mentioned a date-like range but we can't parse it, ask.
+  if (/\bweek\b|\bmonth\b|\bdate\b|\bperiod\b/.test(t)) return { scope: null, needsClarification: true }
+  return { scope: null, needsClarification: true }
+}
+
+function isMyAttendanceQuestion(text) {
+  const t = text.toLowerCase()
+  return /\b(my|did i|have i)\b.*\b(attendance|clock\s*in|clock\s*out|check\s*in|present|absent)\b/.test(t) ||
+    /\b(attendance\s+rate|attendance\s+status|attendance\s+this|attendance\s+last|attendance\s+for)\b/.test(t)
+}
+
+function isMyLeaveBalanceQuestion(text) {
+  const t = text.toLowerCase()
+  return /\b(my|how\s+much)\b.*\b(leave\s+balance|annual\s+leave|leave\s+days|leave\s+remaining|leave\s+left)\b/.test(t)
+}
+
+function isMyLeaveRequestsQuestion(text) {
+  const t = text.toLowerCase()
+  return /\b(my|show\s+my|list\s+my)\b.*\b(leave\s+requests?|leave\s+applications?)\b/.test(t)
+}
+
+function isOutOfScopeQuestion(text) {
+  const t = text.toLowerCase()
+  return /\b(someone\s+else'?s?|another\s+employee'?s?|other\s+people'?s?)\b.*\b(payroll|salary|compensation|allowance)\b/.test(t)
+}
+
+// ------------------------------------------------------------------
 // Communication (phase 40) intents — read-only and RLS-scoped. They are
 // checked before the generic navigation fallback so "show announcements"
 // is not swallowed as a navigation attempt.
@@ -245,6 +316,27 @@ export function parseSaraCommand(raw) {
         status: 'pending',
       },
     }
+  }
+
+  // Personal attendance / leave assistant (Phase 3)
+  if (isOutOfScopeQuestion(text)) {
+    return { intent: 'OUT_OF_SCOPE', filters: {} }
+  }
+
+  if (isMyLeaveBalanceQuestion(text)) {
+    return { intent: 'MY_LEAVE_BALANCE', filters: {} }
+  }
+
+  if (isMyLeaveRequestsQuestion(text)) {
+    return { intent: 'MY_LEAVE_REQUESTS', filters: {} }
+  }
+
+  if (isMyAttendanceQuestion(text)) {
+    const scope = extractDateScope(text)
+    if (scope.needsClarification) {
+      return { intent: 'MY_ATTENDANCE_CLARIFY', filters: {} }
+    }
+    return { intent: 'MY_ATTENDANCE', filters: scope }
   }
 
   return { intent: 'UNKNOWN', filters: {} }

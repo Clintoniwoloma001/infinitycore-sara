@@ -7,6 +7,13 @@ import { rpcWithRetry } from './rpcHelper'
 // Writes: SECURITY DEFINER RPCs only; the frontend is never trusted.
 // ------------------------------------------------------------------
 
+function checkOk(data, name) {
+  if (data && typeof data === 'object' && 'ok' in data && data.ok === false) {
+    throw new Error(data.error || data.message || `${name} failed`)
+  }
+  return data
+}
+
 async function orgRpc(name, args) {
   try {
     const data = await rpcWithRetry(() => supabase.rpc(name, args))
@@ -20,6 +27,11 @@ async function orgRpc(name, args) {
     }
     throw err
   }
+}
+
+async function orgRpcOk(name, args) {
+  const data = await orgRpc(name, args)
+  return checkOk(data, name)
 }
 
 export const hrOrganisationService = {
@@ -80,15 +92,33 @@ export const hrOrganisationService = {
   },
 
   async assignAreaManager(areaCode, employeeId, reason) {
-    return orgRpc('assign_area_manager', { p_area_code: areaCode, p_employee_id: employeeId, p_reason: reason || null })
+    return orgRpcOk('assign_area_manager', { p_area_code: areaCode, p_employee_id: employeeId, p_reason: reason || null })
   },
 
   async assignBranchManager(branchId, employeeId, reason) {
-    return orgRpc('assign_branch_manager', { p_branch_id: branchId, p_employee_id: employeeId, p_reason: reason || null })
+    return orgRpcOk('assign_branch_manager', { p_branch_id: branchId, p_employee_id: employeeId, p_reason: reason || null })
+  },
+
+  async getAreaBranches(areaId) {
+    const { data, error } = await supabase
+      .from('branch_area_assignments')
+      .select('branch_id')
+      .eq('area_id', areaId)
+      .eq('is_current', true)
+    if (error) throw error
+    return (data || []).map((r) => r.branch_id)
+  },
+
+  async setAreaBranches(areaId, branchIds, reason) {
+    return orgRpcOk('set_area_branches', { p_area_id: areaId, p_branch_ids: branchIds, p_reason: reason || null })
+  },
+
+  async getAreaManagerKpi(employeeId, weekStart = null) {
+    return orgRpc('get_area_manager_location_kpi', { p_employee_id: employeeId, p_week_start: weekStart || null })
   },
 
   async recordImportBatch(batchKey, counts = {}) {
-    return orgRpc('record_staff_import_batch', {
+    return orgRpcOk('record_staff_import_batch', {
       p_batch_key: batchKey,
       p_total_rows: counts.totalRows || 0,
       p_imported_rows: counts.importedRows || 0,
@@ -108,7 +138,7 @@ export const hrOrganisationService = {
   },
 
   async upsertEmployeeSupervisor({ employeeId, supervisorEmployeeId, level = 1, supervisorTitle, source = 'hr_organisation' }) {
-    return orgRpc('upsert_employee_supervisor', {
+    return orgRpcOk('upsert_employee_supervisor', {
       p_employee_id: employeeId,
       p_supervisor_employee_id: supervisorEmployeeId,
       p_level: level,
@@ -118,11 +148,11 @@ export const hrOrganisationService = {
   },
 
   async deleteEmployeeSupervisor(id) {
-    return orgRpc('delete_employee_supervisor', { p_id: id })
+    return orgRpcOk('delete_employee_supervisor', { p_id: id })
   },
 
   async resolveHierarchyException(exceptionId, resolution = 'resolved', supervisorEmployeeId = null) {
-    return orgRpc('resolve_hierarchy_exception', {
+    return orgRpcOk('resolve_hierarchy_exception', {
       p_exception_id: exceptionId,
       p_resolution: resolution,
       p_supervisor_employee_id: supervisorEmployeeId,
@@ -130,11 +160,26 @@ export const hrOrganisationService = {
   },
 
   async resolveDataQualityException(exceptionId, resolution = 'resolved') {
-    return orgRpc('resolve_data_quality_exception', { p_exception_id: exceptionId, p_resolution: resolution })
+    return orgRpcOk('resolve_data_quality_exception', { p_exception_id: exceptionId, p_resolution: resolution })
+  },
+
+  // Correct a branch-based data-quality exception and auto-resolve it.
+  // action: 'correct_single' | 'split'.
+  async correctDataQualityException({ exceptionId, action, newValue, newValues, staffAssignments, reason }) {
+    return orgRpcOk('correct_data_quality_exception', {
+      p_exception_id: exceptionId,
+      p_action: action,
+      p_new_value: newValue || null,
+      p_new_values: Array.isArray(newValues) && newValues.length ? newValues : null,
+      p_staff_assignments: Array.isArray(staffAssignments) && staffAssignments.length
+        ? staffAssignments
+        : null,
+      p_reason: reason || null,
+    })
   },
 
   async upsertDepartment({ code, name, sortOrder = 0, id }) {
-    return orgRpc('upsert_department', {
+    return orgRpcOk('upsert_department', {
       p_code: code,
       p_name: name,
       p_sort_order: sortOrder,
@@ -143,11 +188,11 @@ export const hrOrganisationService = {
   },
 
   async deleteDepartment(id) {
-    return orgRpc('delete_department', { p_id: id })
+    return orgRpcOk('delete_department', { p_id: id })
   },
 
   async assignEmployeeDepartment(employeeId, departmentName, reason) {
-    return orgRpc('assign_employee_department', {
+    return orgRpcOk('assign_employee_department', {
       p_employee_id: employeeId,
       p_department_name: departmentName,
       p_reason: reason || null,

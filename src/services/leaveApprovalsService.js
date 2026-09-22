@@ -1,34 +1,74 @@
 import { supabase } from '../supabaseClient'
-import { leaveRequests as svc, logAction, sendDecisionEmail } from './supabaseService'
-import { deductBalance, restoreBalance, currentYear } from './leaveBalanceService'
+import { logAction, sendDecisionEmail } from './supabaseService'
+import { rpcWithRetry } from './rpcHelper'
 
 // ------------------------------------------------------------------
-// Single source of truth for the approval chain. LeaveRequests.jsx,
-// the notification bell, the dashboard widget, and SARA all import
-// this instead of each re-declaring their own copy.
-// Originator → Branch Manager → Area Manager → Head of Business → HR (final)
+// Configurable leave approval chain.
+// Default: employee → Line Manager → Branch Manager → Area Manager → Head of Human Resources.
+// Missing stages are skipped per employee (resolved server-side).
 // ------------------------------------------------------------------
-export const APPROVAL_CHAIN = [
-  { role: 'branch_manager', label: 'Branch Manager' },
-  { role: 'area_manager', label: 'Area Manager' },
-  { role: 'head_of_business', label: 'Head of Business' },
-  { role: 'head_of_human_resources', label: 'HR (Final)' },
+export const DEFAULT_APPROVAL_CHAIN = [
+  { stage_key: 'line_manager', label: 'Line Manager', role: 'line_manager' },
+  { stage_key: 'branch_manager', label: 'Branch Manager', role: 'branch_manager' },
+  { stage_key: 'area_manager', label: 'Area Manager', role: 'area_manager' },
+  { stage_key: 'head_of_human_resources', label: 'Head of Human Resources', role: 'head_of_human_resources' },
 ]
 
-export const APPROVER_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'head_of_human_resources', 'hr_officer']
+export const APPROVAL_CHAIN = DEFAULT_APPROVAL_CHAIN // backwards-compat alias
+export const APPROVER_ROLES = ['admin', 'super_admin', 'branch_manager', 'area_manager', 'head_of_business', 'head_of_human_resources', 'hr_officer', 'line_manager']
 
-export const currentStage = (r) => APPROVAL_CHAIN[(r.approval_level || 1) - 1]
-export const isFinalStage = (r) => (r.approval_level || 1) >= APPROVAL_CHAIN.length
+export async function getApprovalChainForRequest(request) {
+  if (request?.approval_chain && Array.isArray(request.approval_chain)) {
+    return request.approval_chain
+  }
+  if (!request?.id) return DEFAULT_APPROVAL_CHAIN
+  const { data, error } = await supabase.rpc('get_leave_approval_chain_for_request', { p_request_id: request.id })
+  if (error) throw error
+  return data || DEFAULT_APPROVAL_CHAIN
+}
+
+export async function loadApprovalChainsForRequests(requests) {
+  const out = {}
+  await Promise.all(
+    (requests || []).map(async (r) => {
+      try {
+        out[r.id] = await getApprovalChainForRequest(r)
+      } catch {
+        out[r.id] = DEFAULT_APPROVAL_CHAIN
+      }
+    })
+  )
+  return out
+}
+
+export const currentStage = (r, chain) => {
+  const c = chain && chain.length ? chain : DEFAULT_APPROVAL_CHAIN
+  return c[(r.approval_level || 1) - 1]
+}
+export const isFinalStage = (r, chain) => {
+  const c = chain && chain.length ? chain : DEFAULT_APPROVAL_CHAIN
+  return (r.approval_level || 1) >= c.length
+}
 export const pendingAgeHours = (r) => (Date.now() - new Date(r.created_at).getTime()) / 3600000
 
 // Can this authenticated user act on this specific request right now?
-export function canActOnRequest(r, { userId, role, isAdmin }) {
-  return r.status === 'pending' && r.created_by !== userId && (isAdmin || currentStage(r)?.role === role)
+export function canActOnRequest(r, { userId, role, isAdmin }, chain) {
+  if (r.status !== 'pending' || r.created_by === userId) return false
+  if (isAdmin) return true
+  const stage = currentStage(r, chain)
+  if (!stage) return false
+  // Directly resolved approver (e.g. line manager employee user).
+  if (stage.approver_id && stage.approver_id === userId) return true
+  // Role-based match.
+  if (stage.stage_key === role) return true
+  // HR roles can act at any stage.
+  if (role === 'head_of_human_resources' || role === 'hr_officer' || role === 'admin' || role === 'super_admin') return true
+  return false
 }
 
 // Requests currently sitting in this user's queue.
-export function myQueue(items, ctx) {
-  return items.filter((r) => canActOnRequest(r, ctx))
+export function myQueue(items, ctx, chainsByRequest = {}) {
+  return items.filter((r) => canActOnRequest(r, ctx, chainsByRequest[r.id]))
 }
 
 export async function listApprovalsFor(leaveRequestIds) {
@@ -54,72 +94,47 @@ export async function recordApproval(record) {
 }
 
 // ------------------------------------------------------------------
-// Single entry point for actually deciding on a request — approve or
-// reject at whatever stage it currently sits at, cancellation-aware.
-// This is the SAME logic LeaveRequests.jsx uses when a human clicks
-// Approve/Reject in the UI, and it's what SARA calls after a user
-// confirms a voice/text command. There is exactly one place that
-// writes an approval decision to the database.
-//
-// `source` / `command` are for the audit trail only (e.g. source:
-// 'sara_voice', command: 'approve annual leave from Lagos <=5 days').
-// The actor recorded in the database is ALWAYS the authenticated
-// user (approverId/approverName) — SARA is never the actor.
+// Single entry point for actually deciding on a request.
+// Calls the backend process_leave_decision RPC so the configurable
+// chain, approver resolution, balance updates, and notifications are
+// all handled in one SECURITY DEFINER function.
 // ------------------------------------------------------------------
 export async function executeLeaveDecision({ request, decision, comment = '', signature = null, approverId, approverName, source = 'web', command = null }) {
   if (!request || !approverId) throw new Error('Missing request or approver')
-  if (request.status !== 'pending') throw new Error('This request is no longer pending.')
-  if (request.created_by === approverId) throw new Error('You cannot approve your own leave request.')
-  // Real gating is server-side (RLS) — this is a client-side sanity check
-  // so SARA (or a stale UI) can't even attempt an obviously invalid write.
 
-  const stage = currentStage(request)
-  const finalStage = isFinalStage(request)
-  const cancelling = !!request.is_cancellation
+  const result = await rpcWithRetry(() => supabase.rpc('process_leave_decision', {
+    p_request_id: request.id,
+    p_decision: decision,
+    p_comment: comment || null,
+    p_signature: signature || null,
+  }))
+  if (!result?.ok) throw new Error('Failed to process leave decision')
 
-  await recordApproval({
-    leave_request_id: request.id,
-    stage: request.approval_level || 1,
-    stage_role: stage?.role,
-    stage_label: stage?.label,
-    decision,
-    approver_id: approverId,
-    approver_name: approverName,
-    comment,
-    signature,
-    is_cancellation: cancelling,
-  })
+  const stageLabel = result.stage_label || currentStage(request)?.label || 'Approver'
+  const finalStage = result.final
+  const cancelling = result.cancellation
 
-  if (decision === 'rejected') {
-    await svc.update(request.id, cancelling ? { status: 'approved', is_cancellation: false } : { status: 'rejected' })
-  } else if (finalStage) {
-    if (cancelling) {
-      await svc.update(request.id, { status: 'cancelled', is_cancellation: false })
-      if (request.leave_type !== 'unpaid') await restoreBalance(request.created_by, request.leave_type, request.days, currentYear())
-    } else {
-      await svc.update(request.id, { status: 'approved' })
-      if (request.leave_type !== 'unpaid') await deductBalance(request.created_by, request.leave_type, request.days, currentYear())
-    }
-  } else {
-    await svc.update(request.id, { approval_level: (request.approval_level || 1) + 1 })
-  }
+  const actionBase = decision === 'rejected'
+    ? (cancelling ? 'leave_cancellation_rejected' : 'leave_rejected')
+    : finalStage
+      ? (cancelling ? 'leave_cancelled' : 'leave_approved')
+      : 'leave_stage_advanced'
 
-  const actionBase = decision === 'rejected' ? (cancelling ? 'leave_cancellation_rejected' : 'leave_rejected') : finalStage ? (cancelling ? 'leave_cancelled' : 'leave_approved') : 'leave_stage_advanced'
   await logAction({
     action: source === 'web' ? actionBase : `sara_${actionBase}`,
     entityType: 'LeaveRequest',
     entityId: request.id,
-    details: `${request.employee_name} — ${stage?.label} ${decision}${cancelling ? ' (cancellation)' : ''}${source !== 'web' ? ` · via SARA (${source}) by ${approverName}${command ? ` · command: "${command}"` : ''}` : ''}`,
+    details: `${request.employee_name} — ${stageLabel} ${decision}${cancelling ? ' (cancellation)' : ''}${source !== 'web' ? ` · via SARA (${source}) by ${approverName}${command ? ` · command: "${command}"` : ''}` : ''}`,
     userName: approverName,
     severity: source !== 'web' ? 'warning' : 'info',
   })
 
   try {
     const statusText = decision === 'rejected'
-      ? (cancelling ? 'your cancellation request was declined — the original leave remains approved' : `rejected by ${stage?.label}`)
+      ? (cancelling ? 'your cancellation request was declined — the original leave remains approved' : `rejected by ${stageLabel}`)
       : finalStage
         ? (cancelling ? 'your cancellation was approved — leave balance restored' : 'fully approved (final sign-off by HR)')
-        : `approved by ${stage?.label}, now awaiting ${APPROVAL_CHAIN[request.approval_level]?.label}`
+        : `approved by ${stageLabel}, now awaiting the next approver`
     await sendDecisionEmail({
       recipientId: request.created_by,
       subject: 'Leave request update',

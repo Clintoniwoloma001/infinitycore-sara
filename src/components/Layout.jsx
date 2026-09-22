@@ -5,6 +5,8 @@ import { useAuth } from '../hooks/useAuth'
 import Logo from './Logo'
 import { canAccessRoute, routeConfig } from '../config/navigation'
 import NotificationBell from './NotificationBell'
+import PersonAvatar from './messages/PersonAvatar'
+import { resolveDirectory } from '../services/corporateChatService'
 import Sara from './sara/Sara'
 import OnboardingFlow from './OnboardingFlow'
 import OnboardingStatusBanner from './OnboardingStatusBanner'
@@ -24,6 +26,7 @@ export default function Layout({ children }) {
   const [onboardingLoading, setOnboardingLoading] = useState(true)
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const [onboardingRefreshKey, setOnboardingRefreshKey] = useState(0)
+  const [identityMap, setIdentityMap] = useState(null)
   const location = useLocation()
   const navigate = useNavigate()
   const auth = useAuth()
@@ -42,6 +45,16 @@ export default function Layout({ children }) {
     if (path === '/') return location.pathname === '/'
     return location.pathname === path || location.pathname.startsWith(`${path}/`)
   }
+
+  // Self identity for the sidebar avatar (real name + profile photo when set).
+  useEffect(() => {
+    if (!user?.id) { setIdentityMap(null); return }
+    let active = true
+    resolveDirectory([user.id])
+      .then((map) => { if (active) setIdentityMap(map) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [user?.id])
 
   // Onboarding is read once per authenticated user, not once per pathname.
   // The server-backed status decides whether a wizard is appropriate; local
@@ -136,7 +149,7 @@ export default function Layout({ children }) {
         </nav>
         <div className="px-4 py-4 border-t border-white/10">
           <Link to="/profile" onClick={() => setOpen(false)} className="flex items-center gap-3 mb-3 hover:bg-white/5 rounded-lg p-1 -m-1 transition-colors">
-            <div className="w-9 h-9 rounded-full bg-[#FF8C00] flex items-center justify-center text-black font-semibold text-sm">{name?.charAt(0)?.toUpperCase()}</div>
+            <PersonAvatar person={identityMap?.[user?.id] || { full_name: name, email }} sizeClass="w-9 h-9" textClass="text-sm" />
             <div className="min-w-0">
               <div className="text-sm font-medium truncate">{name}</div>
               <div className="text-[11px] text-white/50 truncate">{roleMetadata?.label || role}</div>

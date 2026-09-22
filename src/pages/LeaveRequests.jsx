@@ -10,6 +10,7 @@ import {
   canActOnRequest,
   pendingAgeHours,
   executeLeaveDecision,
+  loadApprovalChainsForRequests,
 } from '../services/leaveApprovalsService'
 import { formatDate, StatusBadge } from '../lib/utils'
 import { useAuth } from '../hooks/useAuth'
@@ -44,6 +45,7 @@ const TABS = [
 export default function LeaveRequests() {
   const [items, setItems] = useState([])
   const [approvalsByRequest, setApprovalsByRequest] = useState({})
+  const [chainsByRequest, setChainsByRequest] = useState({})
   const [expandedTrail, setExpandedTrail] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -70,6 +72,9 @@ export default function LeaveRequests() {
       try {
         setApprovalsByRequest(await listApprovalsFor(data.map((r) => r.id)))
       } catch { /* trail is supplementary, don't block the page on it */ }
+      try {
+        setChainsByRequest(await loadApprovalChainsForRequests(data))
+      } catch { /* chains are supplementary */ }
       await escalateStaleRequests(data)
     } catch (e) {
       setError(e?.message || 'Failed to load leave requests')
@@ -87,7 +92,7 @@ export default function LeaveRequests() {
     for (const r of stale) {
       escalationLoggedRef.current.add(r.id)
       try {
-        await logAction({ action: 'leave_stage_stuck', entityType: 'LeaveRequest', entityId: r.id, details: `${r.employee_name} — stuck at ${currentStage(r)?.label} for ${ESCALATE_HOURS}h+`, userName })
+        await logAction({ action: 'leave_stage_stuck', entityType: 'LeaveRequest', entityId: r.id, details: `${r.employee_name} — stuck at ${currentStage(r, chainsByRequest[r.id])?.label} for ${ESCALATE_HOURS}h+`, userName })
       } catch { /* best-effort */ }
     }
   }
@@ -188,14 +193,14 @@ export default function LeaveRequests() {
       // back through the same chain before it actually takes effect.
       if (!window.confirm('This leave is already approved. Submitting a cancellation will route back through Branch Manager → Area Manager → Head of Business → HR before it takes effect. Continue?')) return
       try {
-        await svc.update(r.id, { status: 'pending', is_cancellation: true, approval_level: 1 })
+        await svc.update(r.id, { status: 'pending', is_cancellation: true, approval_level: 1, approval_chain: null })
         await logAction({ action: 'leave_cancellation_requested', entityType: 'LeaveRequest', entityId: r.id, details: `${r.employee_name} requested cancellation of an approved leave — routed for re-approval`, userName })
         load()
       } catch (e) { alert(e?.message || 'Failed to request cancellation.') }
     }
   }
 
-  const canAct = (r) => canActOnRequest(r, { userId: user?.id, role, isAdmin })
+  const canAct = (r) => canActOnRequest(r, { userId: user?.id, role, isAdmin }, chainsByRequest[r.id])
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value })
   const sc = (s) => s === 'approved' ? 'emerald' : s === 'rejected' ? 'rose' : s === 'cancelled' ? 'slate' : 'amber'
 
@@ -296,12 +301,12 @@ export default function LeaveRequests() {
 
                     {r.status === 'pending' && (
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                        {APPROVAL_CHAIN.map((stage, i) => {
+                        {(chainsByRequest[r.id] || APPROVAL_CHAIN).map((stage, i) => {
                           const idx = i + 1
                           const active = idx === r.approval_level
                           const done = idx < r.approval_level
                           return (
-                            <React.Fragment key={stage.role}>
+                            <React.Fragment key={stage.stage_key || stage.role}>
                               {i > 0 && <span className="text-slate-300 text-xs">›</span>}
                               <span className={`text-xs px-2 py-0.5 rounded-full ${active ? 'bg-amber-100 text-amber-700 font-medium' : done ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-400'}`}>
                                 {stage.label}
@@ -386,13 +391,13 @@ export default function LeaveRequests() {
           <div className="absolute inset-0 bg-black/50" onClick={() => !submitting && setDeciding(null)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
             <h3 className="font-semibold text-slate-900 mb-1">
-              {deciding.decision === 'approved' ? (isFinalStage(deciding.request) ? (deciding.request.is_cancellation ? 'Confirm Cancellation' : 'Give Final Approval') : `Approve — ${currentStage(deciding.request)?.label}`) : (deciding.request.is_cancellation ? 'Deny Cancellation' : 'Reject')}
+              {deciding.decision === 'approved' ? (isFinalStage(deciding.request, chainsByRequest[deciding.request.id]) ? (deciding.request.is_cancellation ? 'Confirm Cancellation' : 'Give Final Approval') : `Approve — ${currentStage(deciding.request, chainsByRequest[deciding.request.id])?.label}`) : (deciding.request.is_cancellation ? 'Deny Cancellation' : 'Reject')}
             </h3>
             <p className="text-sm text-slate-500 mb-4">
               {deciding.request.employee_name} · {LEAVE_TYPE_LABELS[deciding.request.leave_type]}
               {deciding.request.is_cancellation && <span className="text-amber-600"> · cancellation request</span>}
-              {deciding.decision === 'approved' && !isFinalStage(deciding.request) && (
-                <> · will forward to <b>{APPROVAL_CHAIN[deciding.request.approval_level]?.label}</b> next</>
+              {deciding.decision === 'approved' && !isFinalStage(deciding.request, chainsByRequest[deciding.request.id]) && (
+                <> · will forward to <b>{(chainsByRequest[deciding.request.id] || APPROVAL_CHAIN)[deciding.request.approval_level]?.label}</b> next</>
               )}
             </p>
 
@@ -421,7 +426,7 @@ export default function LeaveRequests() {
                 disabled={submitting || !signature || (deciding.decision === 'rejected' && !comment.trim())}
                 className={`px-4 py-2 rounded-lg text-white disabled:opacity-40 ${deciding.decision === 'approved' ? 'bg-[#009944] hover:bg-[#007a35]' : 'bg-rose-600 hover:bg-rose-700'}`}
               >
-                {submitting ? 'Saving…' : deciding.decision === 'rejected' ? 'Confirm' : isFinalStage(deciding.request) ? 'Confirm Final Approval' : 'Approve & Forward'}
+                {submitting ? 'Saving…' : deciding.decision === 'rejected' ? 'Confirm' : isFinalStage(deciding.request, chainsByRequest[deciding.request.id]) ? 'Confirm Final Approval' : 'Approve & Forward'}
               </button>
             </div>
           </div>

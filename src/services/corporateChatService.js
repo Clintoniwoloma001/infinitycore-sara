@@ -43,13 +43,19 @@ function indexIdentityById(records) {
   const map = {}
   for (const r of records || []) {
     if (!r?.user_id) continue
-    const fullName = r.full_name && (!r.email || String(r.full_name).toLowerCase() !== String(r.email).toLowerCase())
+    // Never label a real person "Unknown User" just because their name
+    // matches their email (employee name blank, profile blank). Surface the
+    // email (or null) and let the UI decide — "Unknown User" now only remains
+    // for an identity that has no user_id at all. has_account (profile row
+    // exists) is carried so the member panel can label members without an
+    // active account and disable their "Message" action instead.
+    const fullName = r.full_name && String(r.full_name).toLowerCase() !== String(r.email || '').toLowerCase()
       ? r.full_name
-      : 'Unknown User'
+      : null
     map[r.user_id] = {
       userId: r.user_id,
       employeeId: r.employee_id,
-      name: fullName,
+      name: fullName || r.email || null,
       email: r.email,
       role: r.role,
       department: r.department,
@@ -60,6 +66,7 @@ function indexIdentityById(records) {
       isFormerEmployee: r.is_former_employee,
       profilePicturePath: r.profile_picture_path,
       profileStatus: r.profile_status,
+      hasAccount: !!r.has_account,
     }
   }
   return map

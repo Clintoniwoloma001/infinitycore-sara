@@ -112,7 +112,7 @@ begin
 
   insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
   values ('EMPLOYEE_SUPERVISOR_UPDATED', 'EmployeeSupervisor', p_employee_id::text, v_actor::text,
-          jsonb_build_object('supervisor_employee_id', p_supervisor_employee_id, 'level', p_level, 'title', v_title), 'info');
+          format('Supervisor (id=%s, title=%s) mapped at level %s', p_supervisor_employee_id, coalesce(v_title, '?'), p_level), 'info');
 
   return jsonb_build_object('ok', true);
 end;
@@ -146,7 +146,7 @@ begin
 
   insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
   values ('EMPLOYEE_SUPERVISOR_DELETED', 'EmployeeSupervisor', v_emp::text, v_actor::text,
-          jsonb_build_object('supervisor_employee_id', v_sup, 'level', v_level), 'info');
+          format('Supervisor (id=%s) at level %s removed', v_sup, v_level), 'info');
 
   return jsonb_build_object('ok', true);
 end;
@@ -208,7 +208,7 @@ begin
 
   insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
   values ('HIERARCHY_EXCEPTION_RESOLVED', 'HierarchyException', p_exception_id::text, v_actor::text,
-          jsonb_build_object('resolution', p_resolution, 'employee_id', v_exc.employee_id), 'info');
+          format('Exception %s for employee %s (supervisor %s)', p_resolution, coalesce(v_exc.employee_id::text, '?'), coalesce(p_supervisor_employee_id::text, 'none')), 'info');
 
   return jsonb_build_object('ok', true);
 end;
@@ -243,7 +243,7 @@ begin
 
   insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
   values ('DATA_QUALITY_EXCEPTION_RESOLVED', 'DataQualityException', p_exception_id::text, v_actor::text,
-          jsonb_build_object('resolution', p_resolution), 'info');
+          format('Exception %s', p_resolution), 'info');
 
   return jsonb_build_object('ok', true);
 end;
@@ -298,7 +298,7 @@ begin
 
   insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
   values ('DEPARTMENT_UPSERTED', 'Department', v_id::text, v_actor::text,
-          jsonb_build_object('code', v_code, 'name', v_name, 'sort_order', p_sort_order), 'info');
+          format('Department %s (%s) — sort %s', v_name, v_code, p_sort_order), 'info');
 
   return jsonb_build_object('ok', true, 'id', v_id);
 end;
@@ -329,7 +329,7 @@ begin
   end if;
 
   insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
-  values ('DEPARTMENT_DELETED', 'Department', p_id::text, v_actor::text, '{}', 'info');
+  values ('DEPARTMENT_DELETED', 'Department', p_id::text, v_actor::text, 'Department deleted', 'info');
 
   return jsonb_build_object('ok', true);
 end;
@@ -372,7 +372,7 @@ begin
 
   insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
   values ('EMPLOYEE_DEPARTMENT_ASSIGNED', 'Employee', p_employee_id::text, v_actor::text,
-          jsonb_build_object('old_department', v_old, 'new_department', v_dept, 'reason', p_reason), 'info');
+          format('Department changed %s -> %s%s', coalesce(v_old, 'none'), v_dept, coalesce(', reason: ' || p_reason, '')), 'info');
 
   return jsonb_build_object('ok', true);
 end;

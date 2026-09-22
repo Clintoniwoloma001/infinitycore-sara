@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
-  AlertTriangle, Building2, CheckCircle2, ChevronDown, ChevronRight, Database, Edit3,
-  Loader2, Mail, MapPin, Network, Plus, RefreshCw, Save, ShieldAlert, Trash2, UserCog, X,
+  AlertTriangle, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, Database, Edit3,
+  GripVertical, Loader2, Mail, MapPin, Network, Pencil, Plus, RefreshCw, Save, Scissors, ShieldAlert,
+  Trash2, UserCog, Users, X,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState } from '../components/PageStates'
@@ -79,6 +80,7 @@ export default function HROrganisation() {
   const [employees, setEmployees] = useState([])
   const [roleMappings, setRoleMappings] = useState([])
   const [supervisors, setSupervisors] = useState([])
+  const [branchAreaAssignments, setBranchAreaAssignments] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [tab, setTab] = useState('structure')
@@ -95,6 +97,8 @@ export default function HROrganisation() {
   // Hierarchy tab state
   const [supervisorFilter, setSupervisorFilter] = useState('')
   const [exceptionStatusFilter, setExceptionStatusFilter] = useState('all')
+  const [supervisorModal, setSupervisorModal] = useState(null) // { mapping } for edit/add
+  const [resolveModal, setResolveModal] = useState(null) // { exception }
 
   // Structure tab state
   const [expandedDepts, setExpandedDepts] = useState(new Set())
@@ -107,7 +111,7 @@ export default function HROrganisation() {
     setLoading(true)
     setError('')
     try {
-      const [s, depts, desig, brs, ars, exc, di, batches] = await Promise.all([
+      const [s, depts, desig, brs, ars, exc, di, batches, baa] = await Promise.all([
         hrOrganisationService.getSummary(),
         hrOrganisationService.listDepartments(),
         hrOrganisationService.listDesignations(),
@@ -116,6 +120,7 @@ export default function HROrganisation() {
         hrOrganisationService.listHierarchyExceptions(),
         hrOrganisationService.listDataQualityExceptions(),
         hrOrganisationService.listImportedBatches(),
+        hrOrganisationService.listBranchAreaAssignments(),
       ])
       setSummary(s)
       setDepartments(depts)
@@ -125,6 +130,7 @@ export default function HROrganisation() {
       setExceptions(exc)
       setDataIssues(di)
       setBatches(batches)
+      setBranchAreaAssignments(baa)
       setRoleMappings(await hrOrganisationService.listRoleMappings())
       try {
         const [empList, supList] = await Promise.all([
@@ -293,7 +299,9 @@ export default function HROrganisation() {
   }, [activeEmployees])
 
   const filteredExceptions = useMemo(() => {
-    let list = exceptions
+    // No-employee rows are import artifacts that cannot be resolved into a real
+    // supervisor mapping; keep them out of the active UI (they remain in DB).
+    let list = exceptions.filter((x) => !!x.employee_id)
     if (exceptionStatusFilter !== 'all') list = list.filter((x) => x.status === exceptionStatusFilter)
     return list
   }, [exceptions, exceptionStatusFilter])
@@ -502,12 +510,26 @@ export default function HROrganisation() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {areas.map((a) => (
-                    <AreaRow key={a.id} area={a} employees={employees} canManage={canManage} busy={busy}
-                      onAssign={(empId) => exec(() => hrOrganisationService.assignAreaManager(a.area_code, empId, 'Assigned from HR Organisation'), `Area ${a.area_code} manager updated`)} />
+                    <AreaRow key={a.id} area={a} employees={employees} branches={branches} canManage={canManage} busy={busy}
+                      onAssign={(empId) => exec(() => hrOrganisationService.assignAreaManager(a.area_code, empId, 'Assigned from HR Organisation'), `Area ${a.area_code} manager updated`)}
+                      onSetBranches={(branchIds) => exec(() => hrOrganisationService.setAreaBranches(a.id, branchIds, 'Assigned from HR Organisation'), `Area ${a.area_code} branches updated`)} />
                   ))}
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 p-5">
+            <h3 className="font-semibold text-slate-900 mb-1">Area ↔ Branch Assignment</h3>
+            <p className="text-xs text-slate-400 mb-4">Drag a branch card into an area column to assign it. Head Office is excluded from the area structure. Unassigned branches stay in their own column.</p>
+            <AreaBranchKanban
+              areas={areas}
+              branches={branches}
+              assignments={branchAreaAssignments}
+              canManage={canManage}
+              busy={busy}
+              onUpdate={(areaId, branchIds) => exec(() => hrOrganisationService.setAreaBranches(areaId, branchIds, 'Assigned from HR Organisation kanban'), 'Area branches updated')}
+            />
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 p-5">
@@ -561,10 +583,7 @@ export default function HROrganisation() {
               </div>
               {canManage && (
                 <button
-                  onClick={() => setSupervisors((cur) => [{
-                    id: `new-${Date.now()}`, employee_id: '', supervisor_employee_id: '', level: 1,
-                    employee: null, supervisor: null, isNew: true,
-                  }, ...cur])}
+                  onClick={() => setSupervisorModal({ mapping: { id: `new-${Date.now()}`, employee_id: '', supervisor_employee_id: '', level: 1, supervisor_title: '', employee: null, supervisor: null, isNew: true } })}
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]"
                 >
                   <Plus className="w-4 h-4" /> Add Row
@@ -601,16 +620,24 @@ export default function HROrganisation() {
                         globalSupervisorIds={globalSupervisorIds}
                         canManage={canManage}
                         busy={busy}
-                        onSave={async (payload) => {
-                          await execReturn(
-                            () => hrOrganisationService.upsertEmployeeSupervisor(payload),
-                            'Supervisor mapping saved'
+                                onSave={async (payload) => {
+                          const { id, employeeId, supervisorEmployeeId, level, supervisorTitle, original } = payload
+                          const isServerRow = id && !String(id).startsWith('new-')
+                          const keyChanged = isServerRow && (
+                            employeeId !== (original?.employee_id || '') ||
+                            supervisorEmployeeId !== (original?.supervisor_employee_id || '') ||
+                            level !== (original?.level || 1)
                           )
+                          await execReturn(async () => {
+                            if (keyChanged) await hrOrganisationService.deleteEmployeeSupervisor(id)
+                            await hrOrganisationService.upsertEmployeeSupervisor({ employeeId, supervisorEmployeeId, level, supervisorTitle })
+                          }, 'Supervisor mapping saved')
                         }}
                         onDelete={async (id) => {
                           if (!window.confirm('Delete this supervisor mapping?')) return
                           await exec(() => hrOrganisationService.deleteEmployeeSupervisor(id), 'Supervisor mapping deleted')
                         }}
+                        onEdit={(mapping) => setSupervisorModal({ mapping })}
                       />
                     ))}
                   </tbody>
@@ -656,7 +683,7 @@ export default function HROrganisation() {
                             {x.status === 'open' ? (
                               <div className="flex items-center gap-2">
                                 <button
-                                  onClick={() => exec(() => hrOrganisationService.resolveHierarchyException(x.id, 'resolved'), 'Exception resolved')}
+                                  onClick={() => setResolveModal(x)}
                                   disabled={busy}
                                   className="px-2.5 py-1.5 rounded-lg bg-[#009944] text-white text-xs font-medium hover:bg-[#007a36] disabled:opacity-40"
                                 >
@@ -798,6 +825,7 @@ export default function HROrganisation() {
 
       {qualityModal && (
         <QualityIssueModal
+          key={qualityModal.id}
           issue={qualityModal}
           busy={busy}
           employees={employees}
@@ -808,6 +836,62 @@ export default function HROrganisation() {
               `Issue marked ${resolution}`
             )
             setQualityModal(null)
+          }}
+          onCorrect={async (action, payload) => {
+            const msg = action === 'split'
+              ? `Location split into ${payload.newValues.length} entries — ${payload.staffAssignments.length} staff reassigned`
+              : `Location corrected to ${payload.newValue} — all linked records updated`
+            await exec(
+              () => hrOrganisationService.correctDataQualityException({
+                exceptionId: qualityModal.id,
+                action,
+                ...payload,
+              }),
+              msg
+            )
+            setQualityModal(null)
+          }}
+        />
+      )}
+
+      {supervisorModal && (
+        <SupervisorModal
+          key={supervisorModal.mapping?.id || 'new'}
+          mapping={supervisorModal.mapping}
+          employees={activeEmployees}
+          globalSupervisorIds={globalSupervisorIds}
+          busy={busy}
+          onClose={() => setSupervisorModal(null)}
+          onSave={async (payload) => {
+            const { id, employeeId, supervisorEmployeeId, level, supervisorTitle, original } = payload
+            const isServerRow = id && !String(id).startsWith('new-')
+            const keyChanged = isServerRow && (
+              employeeId !== (original?.employee_id || '') ||
+              supervisorEmployeeId !== (original?.supervisor_employee_id || '') ||
+              level !== (original?.level || 1)
+            )
+            await execReturn(async () => {
+              if (keyChanged) await hrOrganisationService.deleteEmployeeSupervisor(id)
+              await hrOrganisationService.upsertEmployeeSupervisor({ employeeId, supervisorEmployeeId, level, supervisorTitle })
+            }, 'Supervisor mapping saved')
+            setSupervisorModal(null)
+          }}
+        />
+      )}
+
+      {resolveModal && (
+        <ResolveExceptionModal
+          key={resolveModal.id}
+          exception={resolveModal}
+          employees={activeEmployees}
+          busy={busy}
+          onClose={() => setResolveModal(null)}
+          onResolve={async (exceptionId, supervisorId) => {
+            await exec(
+              () => hrOrganisationService.resolveHierarchyException(exceptionId, 'resolved', supervisorId),
+              'Exception resolved and supervisor linked'
+            )
+            setResolveModal(null)
           }}
         />
       )}
@@ -951,11 +1035,12 @@ function DrawerRow({ row, cardKey, isEmployee, selectable, checked, onToggle }) 
   )
 }
 
-function SupervisorRow({ mapping, employees, globalSupervisorIds, canManage, busy, onSave, onDelete }) {
+function SupervisorRow({ mapping, employees, globalSupervisorIds, canManage, busy, onSave, onDelete, onEdit }) {
   const isNew = mapping.isNew
   const [employeeId, setEmployeeId] = useState(mapping.employee_id || '')
   const [supervisorId, setSupervisorId] = useState(mapping.supervisor_employee_id || '')
   const [level, setLevel] = useState(mapping.level || 1)
+  const [supervisorTitle, setSupervisorTitle] = useState(mapping.supervisor_title || '')
 
   const selectedEmployee = employees.find((e) => e.id === employeeId)
   const dept = selectedEmployee?.department
@@ -965,7 +1050,10 @@ function SupervisorRow({ mapping, employees, globalSupervisorIds, canManage, bus
     return employees.filter((e) => e.id === employeeId || e.department === dept || globalSupervisorIds.has(e.id))
   }, [employees, dept, employeeId, globalSupervisorIds])
 
-  const hasChanged = employeeId !== (mapping.employee_id || '') || supervisorId !== (mapping.supervisor_employee_id || '') || level !== (mapping.level || 1)
+  const derivedTitle = supervisorId ? (employees.find((e) => e.id === supervisorId)?.position || '') : ''
+  const effectiveTitle = supervisorTitle || derivedTitle || mapping.supervisor_title || ''
+
+  const hasChanged = employeeId !== (mapping.employee_id || '') || supervisorId !== (mapping.supervisor_employee_id || '') || level !== (mapping.level || 1) || effectiveTitle !== (mapping.supervisor_title || '')
 
   return (
     <tr className={classNames('align-top', !supervisorId ? 'bg-amber-50/40' : 'hover:bg-slate-50')}>
@@ -1007,7 +1095,10 @@ function SupervisorRow({ mapping, employees, globalSupervisorIds, canManage, bus
         {canManage ? (
           <select
             value={supervisorId}
-            onChange={(e) => setSupervisorId(e.target.value)}
+            onChange={(e) => {
+              setSupervisorId(e.target.value)
+              setSupervisorTitle('')
+            }}
             className="h-9 w-full max-w-[260px] rounded-lg border border-slate-300 px-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#009944]"
           >
             <option value="">— No supervisor —</option>
@@ -1020,15 +1111,25 @@ function SupervisorRow({ mapping, employees, globalSupervisorIds, canManage, bus
         )}
         {!supervisorId && canManage && <div className="text-[11px] text-amber-600 mt-1">Select a supervisor for this employee.</div>}
       </td>
-      <td className="px-4 py-3 text-xs text-slate-500">
-        {supervisorId ? (employees.find((e) => e.id === supervisorId)?.position || mapping.supervisor_title || '—') : '—'}
+      <td className="px-4 py-3">
+        {canManage ? (
+          <input
+            type="text"
+            value={effectiveTitle}
+            onChange={(e) => setSupervisorTitle(e.target.value)}
+            placeholder={derivedTitle || 'Custom title'}
+            className="h-9 w-full max-w-[180px] rounded-lg border border-slate-300 px-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#009944]"
+          />
+        ) : (
+          <div className="text-xs text-slate-500">{mapping.supervisor_title || '—'}</div>
+        )}
       </td>
       {canManage && (
         <td className="px-4 py-3">
           <div className="flex items-center gap-2">
             {(isNew || hasChanged) && (
               <button
-                onClick={() => onSave({ employeeId, supervisorEmployeeId: supervisorId, level })}
+                onClick={() => onSave({ id: mapping.id, employeeId, supervisorEmployeeId: supervisorId, level, supervisorTitle: effectiveTitle, original: mapping })}
                 disabled={busy || !employeeId}
                 className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#009944] text-white text-xs font-medium hover:bg-[#007a36] disabled:opacity-40"
               >
@@ -1036,13 +1137,23 @@ function SupervisorRow({ mapping, employees, globalSupervisorIds, canManage, bus
               </button>
             )}
             {!isNew && (
-              <button
-                onClick={() => onDelete(mapping.id)}
-                disabled={busy}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-rose-200 text-rose-600 text-xs font-medium hover:bg-rose-50 disabled:opacity-40"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              <>
+                <button
+                  onClick={() => onEdit(mapping)}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:bg-slate-50 disabled:opacity-40"
+                  title="Edit row"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => onDelete(mapping.id)}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-rose-200 text-rose-600 text-xs font-medium hover:bg-rose-50 disabled:opacity-40"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </>
             )}
           </div>
         </td>
@@ -1187,7 +1298,24 @@ function DepartmentModal({ department, isCreate, busy, onClose, onSave }) {
   )
 }
 
-function QualityIssueModal({ issue, busy, employees, onClose, onResolve }) {
+function suggestSplitNames(value) {
+  const parts = String(value || '').split('/').filter(Boolean)
+  if (parts.length >= 2) return parts.map((p) => p.trim())
+  const amp = String(value || '').split('&').filter(Boolean)
+  if (amp.length >= 2) return amp.map((p) => p.trim())
+  return [String(value || '').trim()]
+}
+
+function QualityIssueModal({ issue, busy, employees, onClose, onResolve, onCorrect }) {
+  const isBranch = issue.entity_type === 'branch'
+  const [view, setView] = useState('overview') // 'overview' | 'correct'
+  const [mode, setMode] = useState('single') // 'single' | 'split'
+  const [newValue, setNewValue] = useState('')
+  const [splitNames, setSplitNames] = useState([])
+  const [assignments, setAssignments] = useState({})
+  const [reason, setReason] = useState('')
+  const [formError, setFormError] = useState('')
+
   const employee = useMemo(() => {
     if (issue.entity_type !== 'employee' || !issue.entity_ref) return null
     return employees.find((e) =>
@@ -1197,98 +1325,725 @@ function QualityIssueModal({ issue, busy, employees, onClose, onResolve }) {
     )
   }, [issue, employees])
 
+  const linkedStaff = useMemo(() => {
+    if (!isBranch || !issue.entity_ref) return []
+    const needle = issue.entity_ref.toLowerCase()
+    return employees.filter((e) => (e.branch || '').toLowerCase() === needle)
+  }, [isBranch, issue.entity_ref, employees])
+
+  const unassignedCount = linkedStaff.filter((e) => !assignments[e.id]).length
+
+  const startCorrect = () => {
+    const suggested = suggestSplitNames(issue.entity_ref)
+    setNewValue(issue.entity_ref || '')
+    setSplitNames(suggested.length >= 2 ? suggested.slice(0, 2) : ['', ''])
+    setAssignments({})
+    setReason('')
+    setFormError('')
+    setView('correct')
+  }
+
+  const bulkAssignAll = (target) => {
+    setAssignments((cur) => {
+      const next = { ...cur }
+      linkedStaff.forEach((e) => {
+        if (!next[e.id]) next[e.id] = target
+      })
+      return next
+    })
+    setFormError('')
+  }
+
+  const clearAssignments = () => {
+    setAssignments({})
+    setFormError('')
+  }
+
+  const saveCorrect = () => {
+    if (mode === 'single') {
+      const trimmed = newValue.trim()
+      if (!trimmed) { setFormError('Enter the corrected location name.'); return }
+      if (trimmed.toLowerCase() === (issue.entity_ref || '').toLowerCase()) {
+        setFormError('The corrected name must differ from the original.')
+        return
+      }
+      onCorrect('correct_single', { newValue: trimmed, reason: reason.trim() || null })
+      return
+    }
+
+    const names = splitNames.map((n) => n.trim()).filter(Boolean)
+    if (names.length < 2) { setFormError('Provide at least two split location names.'); return }
+    if (new Set(names.map((n) => n.toLowerCase())).size !== names.length) {
+      setFormError('Split location names must be distinct.')
+      return
+    }
+    if (unassignedCount > 0) {
+      setFormError(`${unassignedCount} staff member(s) not yet assigned — use "Assign all" for a target or pick per person.`)
+      return
+    }
+    const staffAssignments = linkedStaff.map((e) => ({ employee_id: e.id, branch_name: assignments[e.id] }))
+    onCorrect('split', { newValues: names, staffAssignments, reason: reason.trim() || null })
+  }
+
+  // ----- overview step -----
+  if (view === 'overview') {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
+        <div className="relative w-full max-w-lg bg-white rounded-xl shadow-xl p-6">
+          <div className="flex items-start justify-between gap-4 mb-4">
+            <h3 className="text-lg font-semibold text-slate-900">Data Quality Issue</h3>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"><X className="w-5 h-5" /></button>
+          </div>
+          <div className="space-y-3 text-sm">
+            <div className="grid grid-cols-3 gap-2">
+              <span className="text-slate-400">Entity</span>
+              <span className="col-span-2 font-medium text-slate-700">{issue.entity_type} {issue.entity_ref ? `· ${issue.entity_ref}` : ''}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <span className="text-slate-400">Category</span>
+              <span className="col-span-2 text-slate-700">{issue.category.replace(/_/g, ' ')}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <span className="text-slate-400">Severity</span>
+              <span className="col-span-2"><span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${SEVERITY_STYLE[issue.severity]}`}>{issue.severity}</span></span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <span className="text-slate-400">Status</span>
+              <span className="col-span-2"><span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${STATUS_STYLE[issue.status] || STATUS_STYLE.open}`}>{issue.status}</span></span>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-slate-700">
+              {issue.message}
+            </div>
+            {employee && (
+              <div className="rounded-lg border border-slate-200 p-3">
+                <div className="text-xs font-medium text-slate-500 uppercase mb-1">Linked employee</div>
+                <div className="font-medium text-slate-800">{employee.full_name}</div>
+                <div className="text-xs text-slate-500">{employee.position || '—'} · {employee.department || '—'} · {employee.email || '—'}</div>
+              </div>
+            )}
+            {isBranch && (
+              <div className="rounded-lg border border-slate-200 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-medium text-slate-500 uppercase">Staff linked to this location</div>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-xs font-medium border border-emerald-200">
+                    <Users className="w-3 h-3" /> {linkedStaff.length}
+                  </span>
+                </div>
+                {linkedStaff.length === 0
+                  ? <p className="text-xs text-slate-400 mt-1 italic">No active employee records reference this location.</p>
+                  : <p className="text-xs text-slate-500 mt-1">Correcting or splitting this location will update all {linkedStaff.length} record(s).</p>}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-end gap-3 mt-6">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">Close</button>
+            {issue.status === 'open' ? (
+              <>
+                <button
+                  onClick={() => onResolve('dismissed')}
+                  disabled={busy}
+                  className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                >
+                  Keep as it is
+                </button>
+                {isBranch ? (
+                  <button
+                    onClick={startCorrect}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-40"
+                  >
+                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />} Correct
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => onResolve('resolved')}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-40"
+                  >
+                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Mark Resolved
+                  </button>
+                )}
+              </>
+            ) : (
+              <button
+                onClick={() => onResolve('open')}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+              >
+                Reopen
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ----- correct step -----
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
-      <div className="relative w-full max-w-lg bg-white rounded-xl shadow-xl p-6">
+      <div className="relative w-full max-w-2xl bg-white rounded-xl shadow-xl p-6">
         <div className="flex items-start justify-between gap-4 mb-4">
-          <h3 className="text-lg font-semibold text-slate-900">Data Quality Issue</h3>
+          <h3 className="text-lg font-semibold text-slate-900">Correct Location</h3>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"><X className="w-5 h-5" /></button>
         </div>
-        <div className="space-y-3 text-sm">
-          <div className="grid grid-cols-3 gap-2">
-            <span className="text-slate-400">Entity</span>
-            <span className="col-span-2 font-medium text-slate-700">{issue.entity_type} {issue.entity_ref ? `· ${issue.entity_ref}` : ''}</span>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            <span className="text-slate-400">Category</span>
-            <span className="col-span-2 text-slate-700">{issue.category.replace(/_/g, ' ')}</span>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            <span className="text-slate-400">Severity</span>
-            <span className="col-span-2"><span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${SEVERITY_STYLE[issue.severity]}`}>{issue.severity}</span></span>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            <span className="text-slate-400">Status</span>
-            <span className="col-span-2"><span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${STATUS_STYLE[issue.status] || STATUS_STYLE.open}`}>{issue.status}</span></span>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-slate-700">
-            {issue.message}
-          </div>
-          {employee && (
-            <div className="rounded-lg border border-slate-200 p-3">
-              <div className="text-xs font-medium text-slate-500 uppercase mb-1">Linked employee</div>
-              <div className="font-medium text-slate-800">{employee.full_name}</div>
-              <div className="text-xs text-slate-500">{employee.position || '—'} · {employee.department || '—'} · {employee.email || '—'}</div>
-            </div>
-          )}
+        <p className="text-xs text-slate-500 mb-4">
+          <span className="font-mono text-slate-700">{issue.entity_ref}</span> — this updates every record currently using this location and marks the issue resolved.
+        </p>
+
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setMode('single')}
+            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium ${mode === 'single' ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-600 border-slate-200'}`}
+          >
+            <Pencil className="w-4 h-4" /> Correct as a single entry
+          </button>
+          <button
+            onClick={() => setMode('split')}
+            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium ${mode === 'split' ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-600 border-slate-200'}`}
+          >
+            <Scissors className="w-4 h-4" /> Split into entries
+          </button>
         </div>
+
+        {mode === 'single' && (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Corrected location name</label>
+              <input
+                value={newValue}
+                onChange={(e) => setNewValue(e.target.value)}
+                className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+                placeholder="e.g. LAGOS ISLAND 2"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                {linkedStaff.length > 0
+                  ? `Will update the branch row and ${linkedStaff.length} linked employee/profile record(s).`
+                  : 'No employee records currently reference this location — the branch row will still be renamed.'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {mode === 'split' && (
+          <div className="space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-medium text-slate-600">Split location names</label>
+                <button
+                  onClick={() => setSplitNames((cur) => [...cur, ''])}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-[#009944] hover:text-[#007a36]"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add entry
+                </button>
+              </div>
+              <div className="space-y-2">
+                {splitNames.map((n, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="w-5 text-xs text-slate-400 font-mono">{i + 1}.</span>
+                    <input
+                      value={n}
+                      onChange={(e) => setSplitNames((cur) => cur.map((x, xi) => (xi === i ? e.target.value : x)))}
+                      className="flex-1 h-9 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+                      placeholder={`Entry ${i + 1} name`}
+                    />
+                    {splitNames.length > 1 && (
+                      <button
+                        onClick={() => {
+                          setSplitNames((cur) => cur.filter((_, xi) => xi !== i))
+                          setAssignments((cur) => {
+                            const next = { ...cur }
+                            linkedStaff.forEach((e) => {
+                              if (next[e.id] === n) delete next[e.id]
+                            })
+                            return next
+                          })
+                        }}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <label className="text-xs font-medium text-slate-600">Assign {linkedStaff.length} linked staff</label>
+                <p className="text-[11px] text-slate-400">Send everyone to one entry, or pick per person below.</p>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {splitNames.map((n, i) => (
+                  n.trim() && (
+                    <button
+                      key={i}
+                      onClick={() => bulkAssignAll(n.trim())}
+                      disabled={busy || linkedStaff.length === 0}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#009944]/30 text-[#009944] text-xs font-medium hover:bg-emerald-50 disabled:opacity-40"
+                    >
+                      <Check className="w-3 h-3" /> Assign all → {n.trim()}
+                    </button>
+                  )
+                ))}
+                <button
+                  onClick={clearAssignments}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-500 text-xs font-medium hover:bg-slate-50"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              {unassignedCount === 0
+                ? <span className="text-emerald-600 font-medium">All {linkedStaff.length} staff assigned.</span>
+                : <span className="text-amber-600 font-medium">{unassignedCount} of {linkedStaff.length} staff still unassigned.</span>}
+            </p>
+
+            <div className="max-h-64 overflow-y-auto rounded-lg border border-slate-200">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-left sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Staff member</th>
+                    <th className="px-3 py-2 font-medium">Role · Dept</th>
+                    <th className="px-3 py-2 font-medium">Assign to</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {linkedStaff.length === 0 && (
+                    <tr><td colSpan={3} className="px-3 py-4 text-center text-xs text-slate-400 italic">No linked staff to reassign.</td></tr>
+                  )}
+                  {linkedStaff.map((e) => (
+                    <tr key={e.id} className={assignments[e.id] ? 'hover:bg-slate-50' : 'bg-amber-50/40'}>
+                      <td className="px-3 py-2">
+                        <div className="font-medium text-slate-800">{e.full_name}</div>
+                        <div className="text-[11px] text-slate-400">{e.staff_id || '—'}</div>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{e.position || '—'} · {e.department || '—'}</td>
+                      <td className="px-3 py-2">
+                        <select
+                          value={assignments[e.id] || ''}
+                          onChange={(ev) => setAssignments((cur) => ({ ...cur, [e.id]: ev.target.value }))}
+                          className="h-8 max-w-[200px] rounded-lg border border-slate-300 px-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#009944]"
+                        >
+                          <option value="">— assign —</option>
+                          {splitNames.map((n, i) => n.trim() ? <option key={i} value={n.trim()}>{n.trim()}</option> : null)}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4">
+          <label className="block text-xs font-medium text-slate-600 mb-1">Reason (optional)</label>
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            className="w-full h-9 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+            placeholder="e.g. Verified with HR — official branch list"
+          />
+        </div>
+
+        {formError && (
+          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-sm p-3 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" /> {formError}
+          </div>
+        )}
+
         <div className="flex items-center justify-end gap-3 mt-6">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">Close</button>
-          {issue.status === 'open' ? (
-            <>
-              <button
-                onClick={() => onResolve('dismissed')}
-                disabled={busy}
-                className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-40"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={() => onResolve('resolved')}
-                disabled={busy}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-40"
-              >
-                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Mark Resolved
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={() => onResolve('open')}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-40"
-            >
-              Reopen
-            </button>
-          )}
+          <button
+            onClick={() => setView('overview')}
+            className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50"
+          >
+            Back
+          </button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+          <button
+            onClick={saveCorrect}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-40"
+          >
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} {mode === 'split' ? 'Split & Save' : 'Correct & Save'}
+          </button>
         </div>
       </div>
     </div>
   )
 }
 
-function AreaRow({ area, employees, canManage, busy, onAssign }) {
+function SupervisorModal({ mapping, employees, globalSupervisorIds, busy, onClose, onSave }) {
+  const isEdit = !!mapping?.id && !String(mapping.id).startsWith('new-')
+  const [employeeId, setEmployeeId] = useState(mapping?.employee_id || '')
+  const [supervisorId, setSupervisorId] = useState(mapping?.supervisor_employee_id || '')
+  const [level, setLevel] = useState(mapping?.level || 1)
+  const [supervisorTitle, setSupervisorTitle] = useState(mapping?.supervisor_title || '')
+  const [formError, setFormError] = useState('')
+
+  const selectedEmployee = employees.find((e) => e.id === employeeId)
+  const dept = selectedEmployee?.department
+
+  const supervisorCandidates = useMemo(() => {
+    if (!dept) return employees
+    return employees.filter((e) => e.id === employeeId || e.department === dept || globalSupervisorIds.has(e.id))
+  }, [employees, dept, employeeId, globalSupervisorIds])
+
+  const derivedTitle = supervisorId ? (employees.find((e) => e.id === supervisorId)?.position || '') : ''
+  const effectiveTitle = supervisorTitle || derivedTitle
+
+  const submit = () => {
+    setFormError('')
+    if (!employeeId) { setFormError('Select an employee.'); return }
+    if (employeeId === supervisorId) { setFormError('An employee cannot supervise themselves.'); return }
+    onSave({
+      id: mapping?.id,
+      employeeId,
+      supervisorEmployeeId: supervisorId,
+      level,
+      supervisorTitle: effectiveTitle,
+      original: mapping,
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
+      <div className="relative w-full max-w-md bg-white rounded-xl shadow-xl p-6">
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <h3 className="text-lg font-semibold text-slate-900">{isEdit ? 'Edit Supervisor Mapping' : 'Add Supervisor Mapping'}</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Employee</label>
+            <select
+              value={employeeId}
+              onChange={(e) => { setEmployeeId(e.target.value); setSupervisorId(''); setSupervisorTitle('') }}
+              className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+            >
+              <option value="">— Select employee —</option>
+              {employees.map((e) => <option key={e.id} value={e.id}>{e.full_name} · {e.staff_id || '—'} · {e.department || '—'}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Supervisor</label>
+            <select
+              value={supervisorId}
+              onChange={(e) => { setSupervisorId(e.target.value); setSupervisorTitle('') }}
+              className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+            >
+              <option value="">— No supervisor —</option>
+              {supervisorCandidates.map((e) => <option key={e.id} value={e.id}>{e.full_name} · {e.position || '—'} · {e.department || '—'}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Level</label>
+              <select
+                value={level}
+                onChange={(e) => setLevel(parseInt(e.target.value, 10))}
+                className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+              >
+                <option value={1}>1</option>
+                <option value={2}>2</option>
+                <option value={3}>3</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Title</label>
+              <input
+                type="text"
+                value={supervisorTitle}
+                onChange={(e) => setSupervisorTitle(e.target.value)}
+                placeholder={derivedTitle || 'Custom title'}
+                className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+              />
+            </div>
+          </div>
+          {formError && <div className="rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-sm p-3 flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> {formError}</div>}
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+            <button onClick={submit} disabled={busy} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-40">
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ResolveExceptionModal({ exception, employees, busy, onClose, onResolve }) {
+  const [supervisorId, setSupervisorId] = useState('')
+  const [formError, setFormError] = useState('')
+
+  const submit = () => {
+    setFormError('')
+    if (!supervisorId) { setFormError('Select the real supervisor for this employee.'); return }
+    onResolve(exception.id, supervisorId)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
+      <div className="relative w-full max-w-md bg-white rounded-xl shadow-xl p-6">
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <h3 className="text-lg font-semibold text-slate-900">Resolve Hierarchy Exception</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+            <p><span className="text-slate-500">Employee:</span> <span className="font-medium text-slate-800">{exception.employee?.full_name || exception.employee_id}</span></p>
+            <p><span className="text-slate-500">Unresolved source:</span> <span className="font-mono text-xs">{exception.source_supervisor_name}</span></p>
+            <p><span className="text-slate-500">Reason:</span> <span className="text-xs">{exception.reason}</span></p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Select real supervisor</label>
+            <select
+              value={supervisorId}
+              onChange={(e) => setSupervisorId(e.target.value)}
+              className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+            >
+              <option value="">— Select supervisor —</option>
+              {employees.map((e) => <option key={e.id} value={e.id}>{e.full_name} · {e.position || '—'} · {e.department || '—'}</option>)}
+            </select>
+          </div>
+          {formError && <div className="rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-sm p-3 flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> {formError}</div>}
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+            <button onClick={submit} disabled={busy} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36] disabled:opacity-40">
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} Resolve & Link
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AreaRow({ area, employees, branches, canManage, busy, onAssign, onSetBranches }) {
   const candidates = employees.filter((e) => (e.position || '').startsWith('AREA MANAGER'))
   const [empId, setEmpId] = useState(area.manager_employee_id || '')
+  const [selectedBranches, setSelectedBranches] = useState([])
+  const [kpi, setKpi] = useState(null)
+  const [loadingKpi, setLoadingKpi] = useState(false)
+
   useEffect(() => { setEmpId(area.manager_employee_id || '') }, [area.manager_employee_id])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const ids = await hrOrganisationService.getAreaBranches(area.id)
+        if (!cancelled) setSelectedBranches(ids)
+      } catch { /* ignore */ }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [area.id])
+
+  useEffect(() => {
+    if (!area.manager_employee_id) return
+    let cancelled = false
+    const load = async () => {
+      setLoadingKpi(true)
+      try {
+        const data = await hrOrganisationService.getAreaManagerKpi(area.manager_employee_id)
+        if (!cancelled) setKpi(data)
+      } catch { /* ignore */ }
+      finally { if (!cancelled) setLoadingKpi(false) }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [area.manager_employee_id])
+
+  const toggleBranch = (branchId) => {
+    setSelectedBranches((prev) =>
+      prev.includes(branchId) ? prev.filter((id) => id !== branchId) : [...prev, branchId]
+    )
+  }
+
   return (
     <tr className="hover:bg-slate-50 align-top">
       <td className="px-4 py-3 text-slate-700 font-medium">{area.area_code}<div className="text-xs text-slate-400">{area.area_name}</div></td>
-      <td className="px-4 py-3 text-slate-600">{area.manager_employee?.full_name || '—'}</td>
+      <td className="px-4 py-3 text-slate-600">
+        {area.manager_employee?.full_name || '—'}
+        {kpi && (
+          <div className={`text-[10px] mt-1 font-medium ${kpi.target_met ? 'text-emerald-600' : 'text-amber-600'}`}>
+            {kpi.visited_branches}/{kpi.total_assigned_branches} branches visited this week {kpi.target_met ? '✓ target met' : ''}
+          </div>
+        )}
+      </td>
       {canManage && (
         <td className="px-4 py-3">
-          <div className="flex items-center gap-2">
-            <select className="h-9 rounded-md border border-slate-300 px-2 text-xs max-w-[220px]" value={empId || ''} onChange={(e) => setEmpId(e.target.value)}>
-              <option value="">— Select area manager —</option>
-              {candidates.map((e) => <option key={e.id} value={e.id}>{e.full_name} · {e.staff_id} </option>)}
-            </select>
-            <button onClick={() => empId && onAssign(empId)} disabled={busy || !empId} className="px-3 py-1.5 rounded-lg bg-[#009944] text-white text-xs font-medium hover:bg-[#007a36] disabled:opacity-40">
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserCog className="w-3.5 h-3.5" />} Save
-            </button>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <select className="h-9 rounded-md border border-slate-300 px-2 text-xs max-w-[220px]" value={empId || ''} onChange={(e) => setEmpId(e.target.value)}>
+                <option value="">— Select area manager —</option>
+                {candidates.map((e) => <option key={e.id} value={e.id}>{e.full_name} · {e.staff_id} </option>)}
+              </select>
+              <button onClick={() => empId && onAssign(empId)} disabled={busy || !empId} className="px-3 py-1.5 rounded-lg bg-[#009944] text-white text-xs font-medium hover:bg-[#007a36] disabled:opacity-40">
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserCog className="w-3.5 h-3.5" />} Save
+              </button>
+            </div>
+            <div>
+              <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Assigned branches</p>
+              <div className="flex flex-wrap gap-2">
+                {branches.map((b) => {
+                  const selected = selectedBranches.includes(b.id)
+                  return (
+                    <label key={b.id} className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs cursor-pointer ${selected ? 'bg-[#009944]/10 border-[#009944]/30 text-[#009944]' : 'bg-white border-slate-200 text-slate-600'}`}>
+                      <input
+                        type="checkbox"
+                        className="w-3 h-3 text-[#009944] rounded border-slate-300"
+                        checked={selected}
+                        onChange={() => toggleBranch(b.id)}
+                      />
+                      {b.branch_name}
+                    </label>
+                  )
+                })}
+              </div>
+              <button
+                onClick={() => onSetBranches(selectedBranches)}
+                disabled={busy}
+                className="mt-2 px-3 py-1.5 rounded-lg bg-slate-800 text-white text-xs font-medium hover:bg-slate-700 disabled:opacity-40"
+              >
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MapPin className="w-3.5 h-3.5 inline mr-1" />} Update branches
+              </button>
+            </div>
           </div>
         </td>
       )}
     </tr>
+  )
+}
+
+function AreaBranchKanban({ areas, branches, assignments, canManage, busy, onUpdate }) {
+  // Head Office is not part of the area structure.
+  const isHeadOffice = (name) => /\bhead\s*office\b/i.test(name || '')
+  const boardBranches = useMemo(
+    () => branches.filter((b) => !isHeadOffice(b.branch_name)).sort((a, b) => a.branch_name.localeCompare(b.branch_name)),
+    [branches]
+  )
+
+  // area_id -> Set(branch_id) for current assignments. Null key = unassigned.
+  const currentMap = useMemo(() => {
+    const map = new Map()
+    map.set(null, new Set(boardBranches.map((b) => b.id)))
+    assignments
+      .filter((a) => a.is_current)
+      .forEach((a) => {
+        if (!map.has(a.area_id)) map.set(a.area_id, new Set())
+        map.get(a.area_id).add(a.branch_id)
+        map.get(null).delete(a.branch_id)
+      })
+    return map
+  }, [assignments, boardBranches])
+
+  const [localMap, setLocalMap] = useState(currentMap)
+  useEffect(() => { setLocalMap(currentMap) }, [currentMap])
+
+  const columns = useMemo(() => {
+    const cols = areas.map((a) => ({ id: a.id, type: 'area', area: a, branchIds: [...(localMap.get(a.id) || new Set())] }))
+    cols.push({ id: 'unassigned', type: 'unassigned', area: null, branchIds: [...(localMap.get(null) || new Set())] })
+    return cols
+  }, [areas, localMap])
+
+  const branchById = useMemo(() => {
+    const map = new Map()
+    boardBranches.forEach((b) => map.set(b.id, b))
+    return map
+  }, [boardBranches])
+
+  const moveBranch = (branchId, targetColumnId) => {
+    if (!canManage || busy) return
+    const targetAreaId = targetColumnId === 'unassigned' ? null : targetColumnId
+
+    // Find source area.
+    let sourceAreaId = null
+    for (const [areaId, set] of localMap.entries()) {
+      if (set.has(branchId)) { sourceAreaId = areaId; break }
+    }
+    if (sourceAreaId === targetAreaId) return
+
+    const next = new Map(localMap)
+    const removeFrom = (id) => {
+      const s = new Set(next.get(id) || new Set())
+      s.delete(branchId)
+      next.set(id, s)
+    }
+    const addTo = (id) => {
+      const s = new Set(next.get(id) || new Set())
+      s.add(branchId)
+      next.set(id, s)
+    }
+
+    removeFrom(sourceAreaId)
+    addTo(targetAreaId)
+    setLocalMap(next)
+
+    // Persist affected area(s). Unassigned has no area row to update.
+    if (sourceAreaId != null) {
+      onUpdate(sourceAreaId, [...next.get(sourceAreaId)])
+    }
+    if (targetAreaId != null) {
+      onUpdate(targetAreaId, [...next.get(targetAreaId)])
+    }
+  }
+
+  return (
+    <div className="flex gap-4 overflow-x-auto pb-3">
+      {columns.map((col) => (
+        <div
+          key={col.id}
+          className="flex-shrink-0 w-64 bg-slate-50 rounded-xl border border-slate-200 p-3 min-h-[180px]"
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault()
+            const branchId = e.dataTransfer.getData('text/branch-id')
+            if (branchId) moveBranch(branchId, col.id)
+          }}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">
+              {col.type === 'area' ? `${col.area.area_code}${col.area.area_name ? ` · ${col.area.area_name}` : ''}` : 'Unassigned'}
+            </h4>
+            <span className="text-[10px] font-medium text-slate-400 bg-white border border-slate-200 px-1.5 py-0.5 rounded-full">{col.branchIds.length}</span>
+          </div>
+          <div className="space-y-2">
+            {col.branchIds.length === 0 && (
+              <div className="text-xs text-slate-400 italic text-center py-4">Drop branches here</div>
+            )}
+            {col.branchIds.map((branchId) => {
+              const b = branchById.get(branchId)
+              if (!b) return null
+              return (
+                <div
+                  key={branchId}
+                  draggable={canManage && !busy}
+                  onDragStart={(e) => { e.dataTransfer.setData('text/branch-id', branchId); e.dataTransfer.effectAllowed = 'move' }}
+                  className={`group flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm ${canManage && !busy ? 'cursor-move hover:border-[#009944] hover:shadow' : 'cursor-default opacity-60'}`}
+                >
+                  {canManage && !busy && <GripVertical className="w-3.5 h-3.5 text-slate-300" />}
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-slate-700 truncate">{b.branch_name}</div>
+                    <div className="text-[10px] text-slate-400 truncate">{b.branch_code || '—'}</div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
   )
 }
 

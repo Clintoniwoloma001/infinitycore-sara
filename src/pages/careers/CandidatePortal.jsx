@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, CalendarDays, CheckCircle2, ClipboardCheck, FileText, Loader2, Mail, Phone, XCircle } from 'lucide-react'
+import { ArrowLeft, CalendarDays, CheckCircle2, ClipboardCheck, Eye, FileText, Loader2, Mail, Phone, X, XCircle } from 'lucide-react'
 import CareersShell from './CareersShell'
 import { careerService } from '../../services/careerService'
 import { ErrorState } from '../../components/PageStates'
@@ -44,6 +44,9 @@ export default function CandidatePortal() {
   const [portal, setPortal] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [acceptedOffer, setAcceptedOffer] = useState(null)
+  const [offerLoading, setOfferLoading] = useState(false)
+  const [offerError, setOfferError] = useState('')
 
   useEffect(() => {
     let active = true
@@ -80,6 +83,20 @@ export default function CandidatePortal() {
 
   const { candidate, job, status_history = [], assessments = [], offers = [] } = portal
   const attempts = assessments.flatMap((a) => (a.attempts || []).map((t) => ({ ...t, test_name: a.template_title || a.test_name, hasRetake: a.status === 'completed' || a.status === 'flagged' })))
+  const acceptedOfferSummary = offers.find((o) => o.status === 'accepted')
+
+  const previewAcceptedOffer = async () => {
+    setOfferLoading(true)
+    setOfferError('')
+    try {
+      const data = await careerService.getAcceptedOffer(token)
+      setAcceptedOffer(data?.offer || null)
+    } catch (e) {
+      setOfferError(e?.message || 'Could not load your accepted offer letter.')
+    } finally {
+      setOfferLoading(false)
+    }
+  }
 
   return (
     <CareersShell compact>
@@ -171,9 +188,39 @@ export default function CandidatePortal() {
                 </div>
               ))}
             </div>
+            {acceptedOfferSummary && (
+              <button
+                onClick={previewAcceptedOffer}
+                disabled={offerLoading}
+                className="mt-4 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#009944] text-[#009944] text-xs font-medium hover:bg-[#009944]/5 disabled:opacity-50"
+              >
+                {offerLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                Preview accepted offer letter
+              </button>
+            )}
+            {offerError && <p className="mt-2 text-xs text-rose-600">{offerError}</p>}
           </section>
         </div>
       </div>
+
+      {acceptedOffer && (
+        <AcceptedOfferPreview offer={acceptedOffer} onClose={() => setAcceptedOffer(null)} />
+      )}
     </CareersShell>
+  )
+}
+
+function AcceptedOfferPreview({ offer, onClose }) {
+  const bodyHtml = offer?.body_content || '<!doctype html><html><body><p>Offer letter not available.</p></body></html>'
+  return (
+    <div className="fixed inset-0 z-[70] bg-slate-950/70 p-4 flex items-center justify-center">
+      <div className="bg-white w-full max-w-4xl h-[94vh] rounded-xl shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
+          <p className="text-sm font-semibold text-slate-900">Accepted offer letter preview</p>
+          <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+        </div>
+        <iframe title="Accepted offer letter" srcDoc={bodyHtml} className="flex-1 w-full bg-slate-100" sandbox="allow-same-origin" />
+      </div>
+    </div>
   )
 }

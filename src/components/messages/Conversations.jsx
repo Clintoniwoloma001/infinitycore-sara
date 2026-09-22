@@ -12,7 +12,8 @@ import {
 import MessageBubble from './MessageBubble'
 import Composer from './Composer'
 import PersonAvatar from './PersonAvatar'
-import { displayPersonName, initials, hueFor, personMatches } from './personUtils'
+import PeoplePicker from './PeoplePicker'
+import { displayPersonName, initials, hueFor, isActiveAccount, personMatches } from './personUtils'
 import { directChat } from '../../services/corporateChatService'
 
 const fmtTime = (iso) => {
@@ -49,6 +50,7 @@ export default function Conversations({ kind, people, identity, onStartDirectMes
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
+  const [convSearch, setConvSearch] = useState('')
   const [taskModal, setTaskModal] = useState(null)
   const [myRole, setMyRole] = useState(null)
   const [pinnedConvs, setPinnedConvs] = useState([])
@@ -246,6 +248,13 @@ export default function Conversations({ kind, people, identity, onStartDirectMes
     const order = (c) => (conversationPins.isPinned(pinnedConvs, kind, c.id) ? 0 : 1)
     return [...(conversations || [])].sort((a, b) => order(a) - order(b) || new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
   }, [conversations, pinnedConvs, kind])
+
+  // Client-side search over the Channels/Groups list (names only).
+  const filteredConvs = useMemo(() => {
+    if (!convSearch.trim()) return sortedConvs
+    const q = convSearch.trim().toLowerCase()
+    return sortedConvs.filter((c) => ((isGroup ? c.name : c.display_name || c.name) || '').toLowerCase().includes(q))
+  }, [sortedConvs, convSearch, isGroup])
 
   const send = async (body, mentionIds, opts = null) => {
     if (!active || sending) return false
@@ -459,12 +468,26 @@ export default function Conversations({ kind, people, identity, onStartDirectMes
             <Plus className="w-3.5 h-3.5" /> New
           </button>
         </div>
+        <div className="px-4 pb-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              value={convSearch}
+              onChange={(e) => setConvSearch(e.target.value)}
+              placeholder={`Search ${isGroup ? 'groups' : 'channels'}…`}
+              className="w-full pl-9 h-9 rounded-lg border border-slate-200 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+            />
+          </div>
+        </div>
         <div className="max-h-[70vh] overflow-y-auto divide-y divide-slate-50">
           {loading && <div className="flex justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-slate-300" /></div>}
           {!loading && conversations.length === 0 && (
             <div className="px-4 py-10 text-center text-sm text-slate-400">No {kind}s yet.<br /><button onClick={() => setShowCreate(true)} className="text-[#009944] hover:underline mt-1">Create one</button></div>
           )}
-          {sortedConvs.map((c) => {
+          {!loading && filteredConvs.length === 0 && convSearch.trim() && (
+            <div className="px-4 py-10 text-center text-sm text-slate-400">No {kind}s match “{convSearch.trim()}”.</div>
+          )}
+          {filteredConvs.map((c) => {
             const isActive = active?.id === c.id
             const isPinned = conversationPins.isPinned(pinnedConvs, kind, c.id)
             return (
@@ -571,7 +594,8 @@ export default function Conversations({ kind, people, identity, onStartDirectMes
                     msg={{ ...m, my_user_id: me }}
                     mine={mine}
                     myUserId={me}
-                    name={ident?.name || 'Unknown User'}
+                    name={ident?.name || people.find((p) => p.id === m.sender_id)?.email || 'Member'}
+                    person={ident || people.find((p) => p.id === m.sender_id) || null}
                     time={fmtTime(m.created_at)}
                     reactions={reactions[m.id]}
                     onToggleReaction={toggleReaction}
@@ -764,20 +788,18 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
       q
     )
   })
-  const filteredAvailable = (people || []).filter((p) =>
-    p.id !== me &&
-    !members.some((m) => m.member_id === p.id) &&
-    personMatches(p, q)
-  )
 
   // Automatic membership is a channel concept; groups are always manual.
   const autoLabel = !isGroup && conversation?.is_auto
     ? `Automatic · ${String(conversation.auto_source || conversation.channel_type || '').replace(/_/g, ' ')}`
     : ''
 
-  const addMember = async (id) => {
+  const addMembers = async (ids) => {
     setBusy(true)
-    try { await svc.addMember(conversation.id, id); onChange(conversation) } catch { alert('Could not add member') }
+    try {
+      for (const id of ids || []) await svc.addMember(conversation.id, id)
+      onChange(conversation)
+    } catch { alert('Could not add members') }
     finally { setBusy(false); setPickerOpen(false) }
   }
   const removeMember = async (id) => {
@@ -899,14 +921,17 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
             <p className="text-[11px] text-slate-400 -mt-1">Owners (and communication administrators) can promote members to admin. Admins can oversee membership and moderation.</p>
 
             {pickerOpen && (
-              <div className="mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-50">
-                {filteredAvailable.length === 0 && <div className="px-3 py-4 text-sm text-slate-400">Everyone in the directory is already a member.</div>}
-                {filteredAvailable.map((p) => (
-                  <button key={p.id} onClick={() => addMember(p.id)} disabled={busy} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm text-slate-700 disabled:opacity-50">
-                    {displayPersonName(p)} · {p.department || p.position || ''}
-                  </button>
-                ))}
-              </div>
+              <PeoplePicker
+                title={isGroup ? 'Add People' : 'Add Channel Member'}
+                subtitle="Select one or more people to add to this conversation."
+                mode="multi"
+                people={people}
+                excludeIds={(members || []).map((m) => m.member_id)}
+                onClose={() => setPickerOpen(false)}
+                onPick={addMembers}
+                busy={busy}
+                busyLabel="Adding members…"
+              />
             )}
 
             <div className="border-t border-slate-100 pt-3">
@@ -962,14 +987,20 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
         <div className="overflow-y-auto divide-y divide-slate-50 max-h-[50vh]">
           {filteredMembers.length === 0 && <div className="px-5 py-8 text-center text-sm text-slate-400">No members match your search.</div>}
           {filteredMembers.map((m) => {
-            const ident = identity[m.member_id]
+            const ident = identity[m.member_id] || people.find((p) => p.id === m.member_id) || null
             const memberName = displayPersonName(ident)
+            const memberIsActive = isActiveAccount(ident)
+            const accountLabel = ident && ident.hasAccount === false
+              ? 'No account yet'
+              : (ident?.profileStatus && !memberIsActive)
+                ? `${ident.profileStatus.charAt(0).toUpperCase()}${ident.profileStatus.slice(1)} account`
+                : ''
             const isMe = m.member_id === me
             const isOwner = m.role === 'owner'
             const suspended = !!m.suspended_until
             const isSuspendForm = suspendFor === m.member_id
             const startDm = async () => {
-              if (!ident?.userId || isMe || !onStartDirectMessage) return
+              if (!ident?.userId || isMe || !memberIsActive || !onStartDirectMessage) return
               try {
                 const thread = await directChat.getOrCreate(ident.userId)
                 if (thread?.id) onStartDirectMessage(thread.id)
@@ -993,6 +1024,7 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
                     )}
                     {autoLabel && m.auto_added && <p className="text-[11px] font-medium text-emerald-600">Automatic · {String(conversation.auto_source || conversation.channel_type || '').replace(/_/g, ' ')}</p>}
                     {!isGroup && m.auto_added && <p className="text-[11px] text-slate-400">Managed automatically from the org chart — manual edits are preserved.</p>}
+                    {!isMe && accountLabel && <p className="text-[11px] font-medium text-amber-600">{accountLabel}</p>}
                     {isOwner && !isMe && <p className="text-[11px] font-medium text-slate-500">Owner cannot be removed or suspended.</p>}
                     {suspended && (
                       <p className="text-[11px] font-medium text-amber-600 inline-flex items-center gap-1">
@@ -1002,7 +1034,14 @@ function MemberPanel({ kind, conversation, members, identity, people, me, myRole
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {!isMe && onStartDirectMessage && (
-                      <button onClick={startDm} className="text-xs text-[#009944] hover:text-[#007a36] hover:underline">Message</button>
+                      <button
+                        onClick={startDm}
+                        disabled={!memberIsActive}
+                        title={memberIsActive ? '' : 'This person does not have an active account yet.'}
+                        className={`text-xs hover:underline disabled:opacity-40 disabled:cursor-not-allowed ${memberIsActive ? 'text-[#009944] hover:text-[#007a36]' : 'text-slate-400'}`}
+                      >
+                        Message
+                      </button>
                     )}
                     {canChangeRoles && !isMe && !isOwner ? (
                       <select

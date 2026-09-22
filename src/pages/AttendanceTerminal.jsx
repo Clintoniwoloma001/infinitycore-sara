@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Fingerprint, Loader2, Check, X, Clock, MapPin, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Fingerprint, Loader2, Check, X, Clock, MapPin, ShieldCheck, AlertOctagon } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, getPosition, normalizeAttendanceError } from '../services/attendanceService'
 import { biometricService } from '../services/biometricService'
+import { speakText } from '../services/saraVoice'
 import { normalizeEmployeeId, canonicalEmployeeId } from '../utils/employeeId'
 import { getDeviceFingerprint } from '../utils/deviceFingerprint'
 import { useNetworkTime } from '../hooks/useNetworkTime'
@@ -39,6 +40,8 @@ export default function AttendanceTerminal() {
   const [confirmed, setConfirmed] = useState(null)
   // Device-scoped fingerprint (QR mode only) — one device, one employee/day
   const [deviceFingerprint, setDeviceFingerprint] = useState('')
+  // SARA integrity message shown when device binding blocks an attempt
+  const [integrityMessage, setIntegrityMessage] = useState(null)
 
   useEffect(() => {
     const load = async () => {
@@ -79,7 +82,13 @@ export default function AttendanceTerminal() {
         return
       }
       if (publicMode && lookup?.device_binding_blocked) {
-        setError(lookup?.device_binding_error || 'This device has already been used to clock in a different employee today. Contact your supervisor or HR if this is an error.')
+        const message = lookup?.device_binding_error || 'This device has already been used to clock in a different employee today. Contact your supervisor or HR if this is an error.'
+        setIntegrityMessage({
+          text: message,
+          boundName: lookup?.bound_employee_name,
+          boundCode: lookup?.bound_employee_code,
+        })
+        speakText(message.replace('DEVICE_BINDING:', ''))
         setBusy(false)
         return
       }
@@ -164,6 +173,14 @@ export default function AttendanceTerminal() {
         setConfirmed(null)
         setPin('')
         setTimeout(() => setResult(null), 5000)
+      } else if (data?.device_binding_blocked) {
+        const message = data?.error || 'This device has already been used to clock in a different employee today. Contact your supervisor or HR if this is an error.'
+        setIntegrityMessage({
+          text: message,
+          boundName: data?.bound_employee_name,
+          boundCode: data?.bound_employee_code,
+        })
+        speakText(message.replace('DEVICE_BINDING:', ''))
       } else {
         setError(data?.error || 'Clock operation failed')
       }
@@ -288,6 +305,26 @@ export default function AttendanceTerminal() {
           <div className="bg-rose-500/20 border border-rose-500/40 rounded-xl p-4 text-center mb-6">
             <X className="w-8 h-8 text-rose-400 mx-auto mb-2" />
             <p className="text-rose-300 text-sm">{error}</p>
+          </div>
+        )}
+
+        {/* SARA integrity violation message */}
+        {integrityMessage && (
+          <div className="bg-amber-500/20 border-2 border-amber-500 rounded-2xl p-6 text-center mb-6 animate-pulse">
+            <AlertOctagon className="w-12 h-12 text-amber-400 mx-auto mb-3" />
+            <p className="text-amber-200 text-xs font-semibold uppercase tracking-wide mb-1">SARA — Integrity Alert</p>
+            <p className="text-white text-base font-medium leading-relaxed">{integrityMessage.text.replace('DEVICE_BINDING:', '')}</p>
+            {integrityMessage.boundName && (
+              <p className="text-amber-200/80 text-sm mt-2">
+                Bound to: <span className="font-semibold">{integrityMessage.boundName}</span> · Code: <span className="font-semibold">{integrityMessage.boundCode || '—'}</span>
+              </p>
+            )}
+            <button
+              onClick={() => setIntegrityMessage(null)}
+              className="mt-4 px-4 py-2 rounded-lg bg-amber-500/30 text-amber-100 text-sm hover:bg-amber-500/40"
+            >
+              Dismiss
+            </button>
           </div>
         )}
 

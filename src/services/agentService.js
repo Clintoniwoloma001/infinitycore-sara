@@ -13,6 +13,7 @@ import {
   formatOnboardingResponse, formatEmployeesResponse, formatInterviewsResponse, formatPendingUsersResponse,
   matchLeaveForApproval, executeBatchApproval, logSaraAction,
 } from './saraIntelligence'
+import { getEmployeeBalances, balanceFor } from './leaveBalanceService'
 
 // ------------------------------------------------------------------
 // AGENTIC ARCHITECTURE (conceptual):
@@ -113,6 +114,67 @@ async function dashboardSummary(ctx) {
 
 function joinCounts(label, value) {
   return value === null ? null : `${label} ${value}`
+}
+
+async function myAttendanceSummary(userId, filters) {
+  const { data: empRows, error: empError } = await supabase
+    .from('employees')
+    .select('id, full_name')
+    .eq('user_id', userId)
+    .limit(1)
+  if (empError || !empRows?.[0]) return { error: 'I could not find your employee record.' }
+  const employee = empRows[0]
+
+  let query = supabase
+    .from('attendance_records')
+    .select('*')
+    .eq('employee_id', employee.id)
+  if (filters.start && filters.end) query = query.gte('attendance_date', filters.start).lte('attendance_date', filters.end)
+  const { data, error } = await query.order('attendance_date', { ascending: false })
+  if (error) return { error: 'I could not fetch your attendance records right now.' }
+
+  const records = data || []
+  const present = records.filter((r) => r.clock_in && (r.status === 'present' || r.status === 'late')).length
+  const absent = records.filter((r) => r.status === 'absent' || (!r.clock_in && r.status !== 'leave')).length
+  const late = records.filter((r) => r.status === 'late' || Number(r.late_minutes || 0) > 0).length
+  const total = records.length
+  const rate = total > 0 ? Math.round((present / total) * 100) : 0
+
+  let periodText = filters.scope ? filters.scope.replace(/_/g, ' ') : 'the selected period'
+  if (filters.start === filters.end) periodText = filters.start
+
+  return {
+    employee,
+    records: records.slice(0, 5),
+    summary: { total, present, absent, late, rate },
+    message: `Your attendance for ${periodText}: ${present}/${total} present (${rate}% rate), ${late} late, ${absent} absent.`,
+  }
+}
+
+async function myLeaveBalance(userId) {
+  const balances = await getEmployeeBalances(userId, null)
+  const annual = balanceFor(balances, 'annual')
+  const lines = []
+  for (const [type, label] of Object.entries(LEAVE_TYPE_LABELS)) {
+    if (type === 'unpaid') continue
+    const b = balanceFor(balances, type)
+    lines.push(`${label}: ${b.remaining} of ${b.entitled_days} day(s) remaining`)
+  }
+  return { message: `Your leave balances:\n${lines.join('\n')}` }
+}
+
+async function myLeaveRequests(userId) {
+  const { data, error } = await supabase
+    .from('leave_requests')
+    .select('id, leave_type, start_date, end_date, days, status, created_at')
+    .eq('created_by', userId)
+    .order('created_at', { ascending: false })
+    .limit(10)
+  if (error) return { message: 'I could not fetch your leave requests right now.' }
+  const rows = data || []
+  if (rows.length === 0) return { message: 'You have no leave requests on record.' }
+  const lines = rows.map((r) => `• ${LEAVE_TYPE_LABELS[r.leave_type] || r.leave_type}: ${r.start_date} → ${r.end_date} (${r.days} day(s)) — ${r.status}`)
+  return { message: `Your recent leave requests:\n${lines.join('\n')}` }
 }
 
 // ------------------------------------------------------------------
@@ -365,6 +427,28 @@ export async function runSaraCommand({ command, pool, ctx }) {
         message: `I found ${emp.full_name} — ${emp.position || 'no position'}${emp.department ? ` · ${emp.department}` : ''}${emp.branch ? ` · ${emp.branch}` : ''} (${employeeLabel(emp)}).\n\nTerminate this employee? This is permanent, restricted to super_admin/Head of Human Resources, and cannot be undone. History is preserved.`,
       }
     }
+
+    case 'MY_ATTENDANCE_CLARIFY':
+      return { type: 'text', message: 'Which time period would you like? Try "this week", "this month", "today", or give a specific date range.' }
+
+    case 'MY_ATTENDANCE': {
+      const summary = await myAttendanceSummary(ctx.userId, parsed.filters || {})
+      if (summary.error) return { type: 'text', message: summary.error }
+      return { type: 'text', message: summary.message }
+    }
+
+    case 'MY_LEAVE_BALANCE': {
+      const res = await myLeaveBalance(ctx.userId)
+      return { type: 'text', message: res.message }
+    }
+
+    case 'MY_LEAVE_REQUESTS': {
+      const res = await myLeaveRequests(ctx.userId)
+      return { type: 'text', message: res.message }
+    }
+
+    case 'OUT_OF_SCOPE':
+      return { type: 'text', message: "I can only answer questions about your own attendance and leave data. I can't access payroll or other employees' private information." }
 
     case 'UNKNOWN':
       // Non-command questions use the conversational server path in SARA.

@@ -18,7 +18,7 @@ import { canTerminateEmployee } from './terminationAuthorization'
 // ------------------------------------------------------------------
 
 // Intents the deterministic parser emits.
-export const LOCAL_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE', 'CONFIRM', 'CANCEL', 'HELP', 'NAVIGATE', 'ROLE_CHANGE_DENIED', 'UNKNOWN', 'COMMS_PENDING_ACK', 'COMMS_ANNOUNCEMENTS', 'COMMS_SEARCH']
+export const LOCAL_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINATE_EMPLOYEE', 'CONFIRM', 'CANCEL', 'HELP', 'NAVIGATE', 'ROLE_CHANGE_DENIED', 'UNKNOWN', 'COMMS_PENDING_ACK', 'COMMS_ANNOUNCEMENTS', 'COMMS_SEARCH', 'MY_ATTENDANCE', 'MY_ATTENDANCE_CLARIFY', 'MY_LEAVE_BALANCE', 'MY_LEAVE_REQUESTS', 'OUT_OF_SCOPE']
 
 // Intents the Edge Function may return on top of the local set.
 export const AI_INTENTS = ['DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS', 'TERMINATE_EMPLOYEE']
@@ -30,7 +30,7 @@ export const CONSEQUENTIAL_INTENTS = ['APPROVE_LEAVE', 'REJECT_LEAVE', 'TERMINAT
 
 // Reads that are safe to run once the authenticated user can reach them —
 // record access still comes from RLS-scoped queries.
-export const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS', 'NAVIGATE', 'COMMS_PENDING_ACK', 'COMMS_ANNOUNCEMENTS', 'COMMS_SEARCH']
+export const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS', 'NAVIGATE', 'COMMS_PENDING_ACK', 'COMMS_ANNOUNCEMENTS', 'COMMS_SEARCH', 'MY_ATTENDANCE', 'MY_ATTENDANCE_CLARIFY', 'MY_LEAVE_BALANCE', 'MY_LEAVE_REQUESTS', 'OUT_OF_SCOPE']
 
 // Read intents never need extra gates — record access still comes from
 // RLS-scoped queries. Write intents require either the leave-management

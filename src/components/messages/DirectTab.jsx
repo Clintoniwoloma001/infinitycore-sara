@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Trash2, Volume2, VolumeX, Wifi, WifiOff, X } from 'lucide-react'
+import { Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Trash2, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react'
 import { supabase } from '../../supabaseClient'
 import { useAuth } from '../../hooks/useAuth'
 import {
@@ -9,9 +9,8 @@ import { readOutbox, syncOutbox } from '../../services/chatService'
 import MessageBubble from './MessageBubble'
 import Composer from './Composer'
 import PersonAvatar from './PersonAvatar'
-import { displayPersonName, personMatches } from './personUtils'
-
-const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
+import PeoplePicker from './PeoplePicker'
+import { displayPersonName } from './personUtils'
 
 function unreadCountsByThread(payload) {
   const result = {}
@@ -65,7 +64,7 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [showNew, setShowNew] = useState(false)
-  const [personSearch, setPersonSearch] = useState('')
+  const [threadSearch, setThreadSearch] = useState('')
   const [creating, setCreating] = useState(false)
   const [connected, setConnected] = useState(false)
   const [pinnedConvs, setPinnedConvs] = useState([])
@@ -268,9 +267,8 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
 
   const personName = (id) => {
     if (id === me) return myName
-    const ident = identity[id]
-    if (ident?.name) return ident.name
-    return 'Unknown User'
+    const ident = identity[id] || people.find((p) => p.id === id)
+    return displayPersonName(ident)
   }
 
   const openNewChat = async (personId) => {
@@ -353,6 +351,14 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
       || new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0)
     ))
   ), [threads, pinnedConvs])
+
+  // Client-side search over the Direct Messages thread list (names only).
+  const filteredThreads = useMemo(() => {
+    if (!threadSearch.trim()) return sortedThreads
+    const q = threadSearch.trim().toLowerCase()
+    return sortedThreads.filter((t) => personName(otherMember(t)).toLowerCase().includes(q))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortedThreads, threadSearch])
 
   const send = async (bodyValue, mentionIds, opts = {}) => {
     const body = (bodyValue || '').trim()
@@ -472,11 +478,7 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
     }
   }
 
-  const filteredPeople = personSearch
-    ? people.filter((p) => personMatches(p, personSearch))
-    : people
-
-  return (
+return (
     <div className="grid lg:grid-cols-[320px_1fr] gap-4">
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
@@ -486,6 +488,17 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
             <button onClick={() => setShowNew(true)} className="inline-flex items-center gap-1 rounded-lg bg-[#009944] text-white px-2 py-1.5 text-xs font-medium hover:bg-[#007a36]">
               <Plus className="w-3.5 h-3.5" /> New
             </button>
+          </div>
+        </div>
+        <div className="px-4 pb-3 pt-0">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              value={threadSearch}
+              onChange={(e) => setThreadSearch(e.target.value)}
+              placeholder="Search direct messages…"
+              className="w-full pl-9 h-9 rounded-lg border border-slate-200 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
+            />
           </div>
         </div>
         {pendingCount > 0 && (
@@ -498,7 +511,10 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
           {!loading && threads.length === 0 && (
             <div className="px-4 py-10 text-center text-sm text-slate-400">No conversations yet.<br /><button onClick={() => setShowNew(true)} className="text-[#009944] hover:underline mt-1">Start one</button></div>
           )}
-           {sortedThreads.map((t) => {
+           {filteredThreads.length === 0 && threadSearch.trim() && (
+             <div className="px-4 py-10 text-center text-sm text-slate-400">No conversations match “{threadSearch.trim()}”.</div>
+           )}
+           {filteredThreads.map((t) => {
              const other = otherMember(t)
              const active = activeThread?.id === t.id
              const unread = Number(t.unread_count ?? unreadByThread[t.id] ?? 0)
@@ -581,8 +597,9 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
                     msg={{ ...m, my_user_id: me }}
                     mine={mine}
                     myUserId={me}
-                     name={personName(m.sender_id)}
-                     time={fmtTime(m.created_at)}
+                    name={personName(m.sender_id)}
+                    person={identity[m.sender_id] || people.find((p) => p.id === m.sender_id)}
+                    time={fmtTime(m.created_at)}
                      reactions={reactions[m.id]}
                      attachments={attachments[m.id] || []}
                     onToggleReaction={toggleReaction}
@@ -626,35 +643,15 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
       </div>
 
       {showNew && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl w-full max-w-md max-h-[80vh] overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900">New Message</h3>
-              <button onClick={() => setShowNew(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="px-5 py-3 border-b border-slate-100">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input value={personSearch} onChange={(e) => setPersonSearch(e.target.value)} placeholder="Search people…" className={inputCls.replace('w-full', 'w-full pl-9')} />
-              </div>
-            </div>
-            <div className="max-h-[50vh] overflow-y-auto divide-y divide-slate-50">
-              {filteredPeople.length === 0 && <div className="px-5 py-10 text-center text-sm text-slate-400">No matching people.</div>}
-              {filteredPeople.map((p) => (
-                 <button key={p.id} onClick={() => openNewChat(p.id)} disabled={creating} className="w-full text-left px-5 py-3 flex items-center gap-3 hover:bg-emerald-50/50 disabled:opacity-50">
-                    <PersonAvatar person={p} sizeClass="w-9 h-9" textClass="text-xs" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-slate-800">{displayPersonName(p)}</p>
-                     <p className="text-xs text-slate-400 truncate">
-                        {[p.department, p.position, p.role, p.employee_number || p.staff_id || p.staffId, p.email].filter(Boolean).join(' · ')}
-                      </p>
-                   </div>
-                 </button>
-              ))}
-            </div>
-            {creating && <div className="px-5 py-4 text-center text-sm text-slate-500"><Loader2 className="w-4 h-4 animate-spin inline mr-1" /> Starting conversation…</div>}
-          </div>
-        </div>
+        <PeoplePicker
+          title="New Message"
+          mode="single"
+          people={people}
+          onClose={() => setShowNew(false)}
+          busy={creating}
+          busyLabel="Starting conversation…"
+          onPick={(ids) => ids[0] && openNewChat(ids[0])}
+        />
       )}
     </div>
   )

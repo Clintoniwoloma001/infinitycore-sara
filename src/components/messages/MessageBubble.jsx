@@ -4,6 +4,7 @@ import {
   Landmark, Loader2, MailCheck, Pin, Reply, ShieldAlert, Volume2, X,
 } from 'lucide-react'
 import { getAttachmentSignedUrl, scanSensitiveContent } from '../../services/corporateChatService'
+import PersonAvatar from './PersonAvatar'
 
 const attachmentUrlCache = new Map()
 
@@ -18,6 +19,7 @@ export default function MessageBubble({
   mine,
   myUserId,
   name,
+  person = null,
   contextName,
   time,
   reactions = [],
@@ -70,7 +72,8 @@ export default function MessageBubble({
   const closeMenu = () => setMenuOpen(false)
 
   return (
-    <div className={`flex ${mine ? 'justify-end' : 'justify-start'} group`}>
+    <div className={`flex items-start ${mine ? 'justify-end' : 'justify-start'} group`}>
+      {!mine && <PersonAvatar person={person} sizeClass="w-7 h-7 mr-2 mt-1" textClass="text-[10px]" />}
       <div className={`max-w-[78%] relative ${mine ? 'order-1' : 'order-2'}`}>
         <div
           className={`rounded-2xl px-3.5 py-2 text-sm ${

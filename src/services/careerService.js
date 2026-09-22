@@ -135,6 +135,12 @@ export const careerService = {
     return data
   },
 
+  async getAcceptedOffer(token) {
+    const { data, error } = await supabase.rpc('public_get_accepted_offer_by_portal_token', { p_token: token })
+    if (error) throw error
+    return data
+  },
+
   async respondToOffer(token, decision, signature = null, metadata = {}) {
     const { data, error } = await supabase.rpc('public_respond_to_offer', {
       p_token: token,

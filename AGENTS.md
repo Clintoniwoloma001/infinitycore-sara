@@ -640,16 +640,150 @@ must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
     employees are still assigned), and `assign_employee_department` (updates both `employees`
     and linked `profiles` rows, audited).
 - `src/services/hrOrganisationService.js` gains matching methods and enriches
-  `listSupervisors()` with employee/supervisor details.
+  `listSupervisors()` with employee/supervisor details. Write RPCs now surface `{ ok: false, ... }`
+  responses as thrown errors so the UI cannot silently swallow save failures.
 - `src/pages/HROrganisation.jsx`:
-  - **Hierarchy & Supervisors** tab: editable supervisor mapping table, department-filtered
-    supervisor dropdown (always includes MD / Head of HR / Head of Business via global role
-    heuristic), blank-supervisor rows highlighted, explicit **Add Row** button, status filter
-    and Resolve/Dismiss/Reopen actions on hierarchy exceptions.
-  - **Data Quality Issues** tab: rows are clickable and open a detail modal with linked
-    employee info (when `entity_type='employee'`) and Resolve/Dismiss/Reopen actions.
+  - **Hierarchy & Supervisors** tab: editable supervisor mapping table with inline Employee,
+    Level, Supervisor and Title fields; department-filtered supervisor dropdown (always includes
+    MD / Head of HR / Head of Business via global role heuristic); blank-supervisor rows
+    highlighted; **Add Row** opens a full mapping modal; **Edit** button per row opens the same
+    modal for atomic update (deletes the old mapping and inserts the new one when the key
+    fields change). Save failures are surfaced instead of appearing to revert.
+  - **Hierarchy Exceptions**: Resolve now opens a supervisor picker and materialises a real
+    `employee_supervisors` row for exceptions that have a linked employee; Dismiss/Reopen remain
+    direct. No-employee import artifacts (`employee_id` is null) are hidden from the active
+    exceptions UI rather than shown as unresolvable rows.
   - **Structure** tab: expandable department rows showing assigned employees, **Edit**
     department modal, **Add Department**, and inline assignment of unassigned/other-department
     employees. Unassigned employees grouped separately.
+  - **Area ↔ Branch Assignment** (Structure tab): native-HTML5 drag-and-drop Kanban board with
+    one column per Area plus an Unassigned column. Branch cards can be dragged between columns;
+    the underlying `branch_area_assignments` table is updated via the existing `set_area_branches`
+    RPC. Head Office branches are excluded from the board.
+- **Data Quality Issues** tab: rows are clickable and open a detail modal with linked
+     employee info (when `entity_type='employee'`) and Resolve/Dismiss/Reopen actions.
 - Test: `npm run test:hr-organisation` — `tests/hrOrganisationModule.test.mjs`. `npm run build`
   passes.
+
+## Phase — Data Quality Branch Correction (auto-resolve workflow)
+- SQL migration: `supabase/migrations/20260921000014_data_quality_branch_correction.sql` — run in
+  Supabase SQL Editor after `20260921000013`. Idempotent/additive (begin/commit).
+  - Adds `resolution jsonb`, `resolved_by uuid`, `resolved_at timestamptz` to
+    `data_quality_exceptions`; re-issues `resolve_data_quality_exception` (same signature,
+    now records who/when/why) — "Keep as it is" = `('dismissed')`.
+  - New SECURITY DEFINER RPC `correct_data_quality_exception(p_exception_id, p_action,
+    p_new_value, p_new_values text[], p_staff_assignments jsonb, p_reason)` —
+    super_admin/admin/head_of_human_resources only, branch issues only, open only.
+    `correct_single`: renames the location across `branches`/`employees`/`profiles`/
+    `employee_onboarding_links` + submission `payload` jsonb (no `branch` column there),
+    requires a different name, auto-resolves. `split`: ≥2 distinct non-blank names,
+    find-or-creates branch rows (`BR-##` code, no duplicate-name unique constraint),
+    validates every `{employee_id, branch_name}` assignment targets a split name, moves
+    employees + linked profiles, errors if any staff still reference the old value,
+    deactivates the combined branch for history, auto-resolves. Writes
+    `DATA_QUALITY_EXCEPTION_CORRECTED`/`_SPLIT` audit rows (format() strings, repo
+    convention). Exceptions are a static seed insert — no rescan, so resolved stays resolved.
+- `src/services/hrOrganisationService.js` gains `correctDataQualityException({ exceptionId,
+  action, newValue, newValues, staffAssignments, reason })`.
+- `src/pages/HROrganisation.jsx` `QualityIssueModal` (keyed by issue id) reworked for branch
+  issues: overview shows linked-staff count; open branch issues offer **Keep as it is**
+  (dismiss) or **Correct**; Correct step toggles **Correct as a single entry** vs
+  **Split into entries** (split-name inputs + per-person target selects + **Assign all**
+  bulk buttons + Clear, validation: ≥2 distinct names, all staff assigned), optional reason,
+  then **Correct & Save** / **Split & Save** → `onCorrect` → parent `exec` + reload. Non-branch
+  issues keep Mark Resolved / Keep as it is / Reopen.
+- Test: `npm run test:hr-organisation` — extended for 00014 (RPC, service wrapper, modal
+  correction/split UI). `npm run build` passes.
+
+## Phase — Leave Entitlement Override & Centralized Defaults
+- SQL migration: `supabase/migrations/20260921000011_leave_entitlement_override.sql` — run in
+  Supabase SQL Editor after existing leave migrations. Idempotent/additive.
+  - Adds `leave_balances.default_entitlement`, `manual_override`, `effective_entitlement`,
+    `pending_days`, `override_reason`, `override_updated_by`, `override_updated_at`.
+  - Adds pure helpers `get_annual_leave_category(text)`, `get_annual_leave_default_days(text)`,
+    and SECURITY DEFINER RPC `get_employee_leave_entitlement(uuid, text)` — the single source
+    of truth for per-employee leave entitlement.
+  - Annual leave defaults are driven by designation: MD/CEO = 20, MD / any HEAD designation = 15,
+    all others = 10. Non-annual leave types continue to fall back to `leave_rules`.
+  - Backfills current-year rows with the new defaults, never overwriting a non-null
+    `manual_override`, and keeps the legacy `entitled_days` column synced with
+    `effective_entitlement` for older consumers.
+  - Adds `audit_leave_entitlement_change(uuid, jsonb, jsonb, text)` for entitlement edits.
+- Frontend: `src/domains/leave/entitlements.js` — pure domain layer for category detection and
+  `balanceFor` (used by `leaveBalanceService.js`, `leaveRulesService.js`, and node tests).
+- `src/services/leaveBalanceService.js` updated to expose `getEmployeeLeaveEntitlement`,
+  create missing balance rows via the centralized engine, and support override/reset modes in
+  `adjustBalance`.
+- `src/pages/LeaveBalances.jsx` redesigned: shows default / override / effective / used /
+  pending / remaining per employee, supports single-employee override edits with live effective
+  preview, batch override adjustments, and a **Reset to Default** action. Correctly uses
+  `auth.users.id` as `leave_balances.employee_id`.
+- `src/pages/Dashboard.jsx` and `src/domains/dashboard/dashboardService.js` updated to consume
+  `effective_entitlement` and `pending_days`.
+- `src/pages/LeaveRequests.jsx` simplified to use the centralized `getEmployeeBalances`.
+- Test: `npm run test:leave-entitlements` — `tests/leaveEntitlements.test.mjs`. `npm run build`
+  passes.
+
+## Phase — Attendance Management filter scoping + auto-clock-out reconciliation
+- SQL migration: `supabase/migrations/20260921000021_attendance_summary_head_hr.sql` — run in
+  Supabase SQL Editor after `20260921000010`. Idempotent/additive (begin/commit).
+  - Re-issues `get_attendance_management_summary()` with `head_of_human_resources` added to the
+    authorized role list alongside `super_admin`/`admin`/`hr_manager`/`hr_officer`/`head_of_business`.
+- `src/pages/AttendanceManagement.jsx`:
+  - Records tab now fetches a bounded date window (7 days ending on the selected date, or
+    30 days ending on today when no date is selected) instead of the latest 500 unbounded
+    records. Selecting a past date retrieves real historical records for that date.
+  - KPI cards (Total Employees, Present, Absent, Late, Attendance %, Avg Hours) and the 7-Day
+    Attendance Trend chart now recalculate against the active Branch/Department/Employee filter
+    subset. Total headcount is derived from the filtered employee list; present/absent/late and
+    trend are derived from attendance records matching the same population scope.
+  - Lazy auto-clock-out reconciliation (`attendanceService.reconcileAutoClockouts()`) is
+    triggered once when the management page mounts, so stale open sessions are closed even when
+    no employee has recently logged in.
+- Test: `npm run test:attendance-management` — `tests/attendanceManagement.test.mjs`. `npm run build`
+  passes.
+
+## Phase — Messages identity fixes ("Unknown User" extermination) + peer search + bulk add
+- SQL migration: `supabase/migrations/20260921000020_messages_identity_directory_left_join.sql` — run
+  in Supabase SQL Editor AFTER 20260921000005 (any order afterwards, additive). Idempotent (create-or-replace).
+  - Root cause: `message_channel_members.member_id` FKs `auth.users`, but `resolve_user_identity`
+    and `get_messaging_directory` INNER JOINed `profiles` — a missing `profiles` row (Phase 69
+    incident class) DROPPED the member row entirely, and `indexIdentityById` coerced name==email →
+    "Unknown User". Display-only fix; the auto-sync functions (`sync_auto_channel_members` /
+    `reconcile_auto_channel_membership_for_employee`) are untouched.
+  - `resolve_user_identity(uuid[])` rewritten: drives from `unnest(p_user_ids)`, LEFT JOINs
+    `profiles` + lateral `employees` (newest-first), so every requested id gets EXACTLY one row.
+    New `has_account` bool (app `profiles` row exists). `profile_status` retained so the UI can
+    label "No account yet" / "Pending approval" and disable "Message" instead of faking a name.
+  - `get_messaging_directory(text)` rewritten: LEFT JOINs `auth.users` → `profiles` →
+    lateral `employees`; filter is `(p.id is null and e.id is not null) or coalesce(p.role,'customer')
+    <> 'customer'` (parenthesized correctly — the parens grouping matters for WHERE precedence),
+    search over coalesced full_name/email/department, `limit 1000`. Employee-linked profile-less
+    accounts (auto channel members) now resolve their real name + picture; bare auth rows, customers,
+    anon/service roles stay excluded.
+- `src/services/corporateChatService.js` `indexIdentityById` no longer coerces — `name =
+  fullName || email || null`, carries `hasAccount`. (The separate explicit `displayName(userId, ident)`
+  escape hatch for a genuinely unknown participant is preserved for legacy callers.)
+- `src/components/messages/personUtils.js` new `isActiveAccount(person)`: admin/super_admin always
+  active; `hasAccount === false` → inactive ("No account yet"); `profileStatus` `active` or `''`
+  (profile row exists, status-less legacy) → active; pending/suspended/rejected → inactive.
+- `src/components/messages/PeoplePicker.jsx` NEW — the ONE shared user-search/multi-select picker
+  (`z-[60]` overlay so it sits above the MemberPanel's `z-50`), reusing `PersonAvatar` +
+  `personMatches`; `mode="single"` (click row) for Direct New Message, `mode="multi"` (checkbox +
+  "Add selected (N)") for channel/group Add People.
+- `MessagesPage.jsx` `indexDirectory` maps `has_account` → `hasAccount` (fallback `true` for
+  profile-derived entries / self) so `isActiveAccount` never wrongly disables everyone.
+- `Conversations.jsx`: list search input (Channels/Groups names) with empty-state copy; MemberPanel
+  replaces the inline single-add list with `PeoplePicker mode="multi"` (`excludeIds` = current
+  members, loops `svc.addMember` on pick); every member row shows "No account yet"/status label and
+  the **Message** button is disabled (with tooltip) for members without an active account; message
+  bubbles render `PersonAvatar` + resolve name via identity/people (never hardcoded "Unknown User").
+- `DirectTab.jsx`: thread-list search input (filter by the other member's display name); New Message
+  modal replaced by `PeoplePicker mode="single"`; `personName` resolves `displayPersonName(identity[id]
+  || people.find(...))`; bubbles get the `person` prop for avatars.
+- `MessageBubble.jsx`: new optional `person` prop renders `PersonAvatar` beside non-mine bubbles.
+- `Layout.jsx`: sidebar chip now uses `PersonAvatar` fed by self identity from
+  `resolveDirectory([user.id])` (real name + profile photo when set; initials fallback).
+- Test: `npm run test:messages-identity` — `tests/messagesIdentity.test.mjs` (migration content,
+  `indexIdentityById` no-coercion, `isActiveAccount` truth table, PeoplePicker wiring, bubble/layout
+  avatars). `npm run build` passes.

@@ -91,8 +91,25 @@ function RecordsTab({ setNotice }) {
     setLoading(true)
     setError('')
     try {
+      // Fetch a window that supports both the table view and the 7-day trend.
+      // When a specific date is selected, fetch the 7 days ending on that date
+      // so the trend still renders; the table will narrow to the exact date.
+      const activeDate = filters.date || platformDateKey()
+      const active = new Date(`${activeDate}T12:00:00`)
+      const start = new Date(active)
+      start.setDate(start.getDate() - 6)
+      const startDate = platformDateKey(start)
+      const endDate = activeDate
+
       const [data, emps, brs, todaySummary] = await Promise.all([
-        attendanceService.listAll(filters),
+        attendanceService.listAll({
+          startDate,
+          endDate,
+          branchId: filters.branchId || undefined,
+          department: filters.department || undefined,
+          employeeId: filters.employeeId || undefined,
+          status: filters.status || undefined,
+        }),
         attendanceService.listEmployees(),
         attendanceService.listBranches(),
         attendanceService.getManagementSummary().catch(() => null),
@@ -110,6 +127,11 @@ function RecordsTab({ setNotice }) {
 
   useEffect(() => { load() }, [filters.date, filters.branchId, filters.department, filters.employeeId, filters.status])
 
+  // Trigger lazy auto-clock-out reconciliation once per management session.
+  useEffect(() => {
+    attendanceService.reconcileAutoClockouts().catch(() => { /* best-effort background reconciliation */ })
+  }, [])
+
   // Apply filters
   const filtered = useMemo(() => {
     return rows.filter((r) => {
@@ -122,34 +144,50 @@ function RecordsTab({ setNotice }) {
     })
   }, [rows, filters])
 
-  // KPIs
-  const kpis = useMemo(() => {
-    const today = platformDateKey()
-    const todayRows = rows.filter((r) => String(r.attendance_date) === today)
-    const totalEmps = summary?.total_employees ?? employees.length
-    const present = todayRows.filter((r) => r.clock_in).length
-    const late = todayRows.filter((r) => r.status === 'late' || (r.late_minutes || 0) > 0).length
-    const absent = totalEmps - present
-    const withHours = todayRows.filter((r) => r.clock_in && r.clock_out)
-    const avgHours = withHours.length > 0 ? (withHours.reduce((s, r) => s + (r.computed_work_hours ?? (Number(r.work_hours) || 0)), 0) / withHours.length).toFixed(1) : 0
-    const pct = totalEmps > 0 ? Math.round((present / totalEmps) * 100) : 0
-    return {
-      totalEmps: summary?.total_employees ?? totalEmps,
-      present: summary?.present_today ?? present,
-      late: summary?.late_today ?? late,
-      absent: summary?.absent_today ?? Math.max(0, absent),
-      avgHours: summary?.average_hours ?? avgHours,
-      pct: summary?.attendance_percent ?? pct,
-    }
-  }, [rows, employees, summary])
+  // Population scope used by metrics and trend (date/status are applied separately).
+  const populationMatch = (r) => {
+    if (filters.employeeId && r.employee_id !== filters.employeeId) return false
+    if (filters.department && r.employees?.department !== filters.department) return false
+    if (filters.branchId && r.branch_id !== filters.branchId) return false
+    return true
+  }
 
-  // Trend data
+  const filteredEmployees = useMemo(() => {
+    return employees.filter((e) => {
+      if (filters.employeeId && e.id !== filters.employeeId) return false
+      if (filters.department && e.department !== filters.department) return false
+      if (filters.branchId && e.branch_id !== filters.branchId) return false
+      return true
+    })
+  }, [employees, filters.employeeId, filters.department, filters.branchId])
+
+  // KPIs — scoped to active filters. Total headcount comes from the filtered
+  // employee list; present/absent/late come from records for the active date.
+  const activeDate = filters.date || platformDateKey()
+  const kpis = useMemo(() => {
+    const activeDateRows = rows.filter((r) => populationMatch(r) && String(r.attendance_date) === activeDate)
+    const totalEmps = filteredEmployees.length || summary?.total_employees || 0
+    const present = activeDateRows.filter((r) => r.clock_in).length
+    const late = activeDateRows.filter((r) => r.status === 'late' || (r.late_minutes || 0) > 0).length
+    const absent = Math.max(0, totalEmps - present)
+    const withHours = activeDateRows.filter((r) => r.clock_in && r.clock_out)
+    const avgHours = withHours.length > 0
+      ? (withHours.reduce((s, r) => s + (r.computed_work_hours ?? (Number(r.work_hours) || 0)), 0) / withHours.length).toFixed(1)
+      : 0
+    const pct = totalEmps > 0 ? Math.round((present / totalEmps) * 100) : 0
+    return { totalEmps, present, late, absent, avgHours, pct }
+  }, [rows, filteredEmployees, summary, activeDate])
+
+  // 7-day trend — scoped to the same population filters, ending on the active date.
   const trendData = useMemo(() => {
+    const active = new Date(`${activeDate}T12:00:00`)
     const last7 = []
     for (let i = 6; i >= 0; i--) {
-      const ds = platformDateKey(new Date(Date.now() - i * 86400000))
+      const d = new Date(active)
+      d.setDate(d.getDate() - i)
+      const ds = platformDateKey(d)
       const [y, m, dd] = ds.split('-').map(Number)
-      const dayRows = rows.filter((r) => String(r.attendance_date) === ds)
+      const dayRows = rows.filter((r) => populationMatch(r) && String(r.attendance_date) === ds)
       const present = dayRows.filter((r) => r.clock_in).length
       last7.push({
         label: new Date(Date.UTC(y, m - 1, dd)).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }).charAt(0),
@@ -158,7 +196,7 @@ function RecordsTab({ setNotice }) {
       })
     }
     return last7
-  }, [rows])
+  }, [rows, filters.employeeId, filters.department, filters.branchId, activeDate])
 
   const departments = useMemo(() => {
     return [...new Set(employees.map((e) => e.department).filter(Boolean))].sort()

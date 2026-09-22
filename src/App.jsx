@@ -68,6 +68,7 @@ import PlatformReset from './pages/PlatformReset'
 import Training from './pages/Training'
 import MyTraining from './pages/MyTraining'
 import ManHourIntelligence from './pages/ManHourIntelligence'
+import PerformanceImprovementPlans from './pages/PerformanceImprovementPlans'
 import CertificateVerification from './pages/CertificateVerification'
 import ActivateAccount from './pages/ActivateAccount'
 
@@ -122,6 +123,7 @@ const pageComponents = {
   Training,
   MyTraining,
   ManHourIntelligence,
+  PerformanceImprovementPlans,
 }
 
 function Protected({ children }) {

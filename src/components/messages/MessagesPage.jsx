@@ -55,6 +55,7 @@ export default function MessagesPage() {
         employment_status: p.employment_status,
         is_former_employee: p.is_former_employee,
         profile_status: p.profile_status,
+        has_account: p.has_account !== undefined ? !!p.has_account : true,
       }))
       const identityMap = {}
       for (const p of rows || []) {
@@ -73,6 +74,7 @@ export default function MessagesPage() {
           profileStatus: p.profile_status,
           profilePicturePath: p.profile_picture_path,
           isFormerEmployee: p.is_former_employee,
+          hasAccount: p.has_account !== undefined ? !!p.has_account : true,
         }
       }
       // always include myself so the picker shows the whole platform
@@ -86,6 +88,8 @@ export default function MessagesPage() {
         staffId: profile?.employee_number,
         employmentStatus: profile?.status,
         branch: profile?.branch,
+        profileStatus: profile?.status,
+        hasAccount: true,
       }
       return { list, identityMap }
     }
