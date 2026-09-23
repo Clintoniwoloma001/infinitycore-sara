@@ -427,7 +427,11 @@ begin
     ar.status,
     ar.work_hours,
     ar.total_minutes,
-    ar.late_status,
+    -- `attendance_records.late_status` is a boolean flag; the summary contract
+    -- is a readable text value. The CASE keeps the declared `text` return
+    -- type aligned (previously the raw boolean raised Postgrest Error 42804
+    -- "Returned type boolean does not match expected type text in column 14").
+    case when ar.late_status then 'late' else 'on_time' end,
     ar.late_minutes,
     ar.location_status,
     ar.geofence_status,

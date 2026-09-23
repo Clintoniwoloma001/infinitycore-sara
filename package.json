@@ -39,6 +39,7 @@
     "test:rules-builder": "node tests/performanceRulesBuilder.test.mjs",
     "test:profiles-unique": "node tests/profilesEmailUnique.test.mjs",
     "test:profiles-fk": "node tests/profilesAuthFk.test.mjs",
+    "test:privileges": "node tests/privilegeManagement.test.mjs",
     "test:hr-jobs": "node tests/hrJobsLifecycle.test.mjs",
     "test:hr-organisation": "node tests/hrOrganisationModule.test.mjs",
     "test:attendance-management": "node tests/attendanceManagement.test.mjs",
@@ -53,7 +54,8 @@
     "test:leave-approval-chain": "node tests/leaveApprovalChain.test.mjs",
     "test:leave-workflow": "node tests/leaveWorkflowFeedback.test.mjs",
     "test:auto-clockout-midnight": "node tests/attendanceAutoClockout.test.mjs",
-    "test:clock-in-canonical": "node tests/attendanceClockInCanonical.test.mjs"
+    "test:clock-in-canonical": "node tests/attendanceClockInCanonical.test.mjs",
+    "test:terminal-gate-field": "node tests/terminalGateFieldFix.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

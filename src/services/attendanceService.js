@@ -274,6 +274,18 @@ export function normalizeAttendanceError(message) {
   return msg
 }
 
+/**
+ * True only when the browser/OS genuinely denied or could not supply a
+ * position — NOT when the server rejected the scan (out of bounds, terminal
+ * errors, device binding, SQL crashes). Public terminal UIs must show
+ * "Location is required" ONLY in this case; every other failure is a
+ * location rejection or a real backend error and must not be mislabelled.
+ */
+export function isLocationBlockedError(message) {
+  const m = (message || '').toLowerCase()
+  return /location access is required|does not support location detection|could not be determined|location request timed out|unable to get your location|location is required|a valid location is required/i.test(m)
+}
+
 export const attendanceService = {
   async getMyEmployee() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -613,8 +625,16 @@ export const attendanceService = {
       p_lng: geo.lng,
       p_event_type: eventType,
     })
-    if (error) throw new Error(normalizeAttendanceError(error.message))
-    if (data?.valid === false) throw new Error(normalizeAttendanceError(data.error))
+    if (error) {
+      const e = new Error(normalizeAttendanceError(error.message))
+      e.kind = 'server'
+      throw e
+    }
+    if (data?.valid === false) {
+      const e = new Error(normalizeAttendanceError(data.error))
+      e.kind = /bounds|geofence|within range/i.test(data.error || '') ? 'rejected' : 'business'
+      throw e
+    }
     return data
   },
 
@@ -632,8 +652,17 @@ export const attendanceService = {
       p_accuracy: coords.accuracy ?? null,
       p_device_fingerprint: deviceFingerprint || null,
     })
-    if (error) throw new Error(normalizeAttendanceError(error.message))
-    if (data?.success === false) throw new Error(normalizeAttendanceError(data.error))
+    if (error) {
+      const e = new Error(normalizeAttendanceError(error.message))
+      e.kind = 'server'
+      throw e
+    }
+    if (data?.success === false) {
+      const e = new Error(normalizeAttendanceError(data.error))
+      e.kind = /bounds|geofence|within range/i.test(data.error || '') ? 'rejected'
+        : (data?.device_binding_blocked ? 'business' : 'business')
+      throw e
+    }
     return data
   },
 

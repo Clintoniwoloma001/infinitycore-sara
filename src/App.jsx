@@ -71,6 +71,7 @@ import ManHourIntelligence from './pages/ManHourIntelligence'
 import PerformanceImprovementPlans from './pages/PerformanceImprovementPlans'
 import CertificateVerification from './pages/CertificateVerification'
 import ActivateAccount from './pages/ActivateAccount'
+import PrivilegeManagement from './pages/PrivilegeManagement'
 
 const pageComponents = {
   Dashboard,
@@ -124,6 +125,7 @@ const pageComponents = {
   MyTraining,
   ManHourIntelligence,
   PerformanceImprovementPlans,
+  PrivilegeManagement,
 }
 
 function Protected({ children }) {

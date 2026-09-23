@@ -63,6 +63,7 @@ export const PERMISSIONS = {
   ADMIN_VIEW_AUDIT: 'admin.view_audit',
   ADMIN_MANAGE_CONFIG: 'admin.manage_config',
   ADMIN_PLATFORM_RESET: 'admin.platform.reset',
+  PRIVILEGES_MANAGE: 'administration.privileges.manage',
 
   // Communications
   COMMUNICATION_MANAGE: 'communication.manage',

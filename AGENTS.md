@@ -859,3 +859,109 @@ must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
   before sending the RPC payload.
 - Tests: `npm run test:clock-in-canonical` — `tests/attendanceClockInCanonical.test.mjs`.
   `npm run build` passes.
+
+## Phase — QR terminal gate field crash fix (`record "v_terminal" has no field "id"`)
+- SQL migration: `supabase/migrations/20260923000002_terminal_gate_field_fix.sql` — run in
+  Supabase SQL Editor after `20260923000001`. Idempotent/additive.
+  - Root cause: `attendance_terminal_for_token()` (20260920000001) populates `v_terminal`
+    with the device PK as **`device_id`** — it has no `id` and no `device_name` field. The
+    live gates that `select * into v_terminal` from it referenced the missing fields and
+    threw `record "v_terminal" has no field "id"` on EVERY valid active-terminal scan
+    (blocking all QR clock-ins, e.g. employee IMFB/24/0365), plus a latent
+    `record "v_terminal" has no field "device_name"` in `validate_attendance_terminal_employee`
+    (20260921000016, device-binding-blocked branch).
+  - Fix: re-issues both gates. Explicit `if not found` guard immediately after the
+    SELECT INTO returns `Terminal not found or inactive. This attendance terminal link is
+    invalid or revoked.` (previously relied on `or` short-circuit). The location gate's
+    `_terminal_geofence()` call now uses `v_terminal.device_id` (was `v_terminal.id`);
+    the employee gate resolves `device_name` via a `(select d.device_name …)` lookup
+    (was `v_terminal.device_name`). Status/active policy and all grants unchanged.
+    `attendance_terminal_for_token()` itself is untouched.
+  - Audited ALL scanner/clock paths: `clock_attendance_terminal` (20260922000001) uses an
+    `attendance_devices%rowtype` + `if not found` guard (safe); canonical web
+    `attendance_clock_in/out_for_employee` (20260922000011) and `mobile_clock_in/out`
+    (20260922000013) have their own guards (safe). Only the two above `v_terminal` gates
+    had the bug.
+- `src/pages/AttendanceTerminal.jsx` + `src/services/attendanceService.js`: public terminal
+  no longer mislabels a backend/server failure as "Location is required". The service tags
+  RPC failures with `e.kind` (`'server'` / `'rejected'` / `'business'`); the page shows
+  **Location is required** only for genuine geolocation denials (`isLocationBlockedError`),
+  **outside permitted area** for geofence rejections, and a generic **Something went
+  wrong. Contact IT.** for server errors. New `geoStatus='error'` display state.
+- Test: `npm run test:terminal-gate-field` — `tests/terminalGateFieldFix.test.mjs`
+  (migration + frontend content assertions, plus last-definition + field-set cross-checks).
+  Verified on the scratch Postgres docker DB: exact crash reproduced pre-fix and the
+  fixed gates resolve the geofence and return the clear not-found error. `npm run build`
+  passes.
+
+## Phase — Granular Access & Privileges (centralized authorization mirror)
+- Replaces ad-hoc UI-level role checks with a single, audited, granular
+  authorization layer layered ON TOP of the existing RBAC. One deliverable —
+  still a pure SPA + hosted Supabase — with enforcement at the DB edges
+  (SECURITY DEFINER functions + RLS), everywhere the frontend already calls.
+- SQL migration: `supabase/migrations/20260923000001_granular_privilege_access.sql` —
+  run in Supabase SQL Editor **after** `20260922000013`. One transaction
+  (`begin;` … `commit;`), idempotent + additive, **no** `hr_manager` strings.
+  Verified end-to-end on a scratch Postgres (compile + behavioral).
+- **Catalog**: `permissions` is now the single permission surface (120 keys,
+  seeded by `scripts/gen-privilege-seed.mjs`, markers
+  `-- BEGIN/END GENERATED PRIVILEGE SEED --`; regenerate with
+  `node scripts/gen-privilege-seed.mjs` when `src/constants/roles.js` drifts).
+  Baseline role↔permission grants + scopes (the role baseline remains the
+  "default allow" — never trimmed, only ever additive).
+- **Precedence**: super_admin → ALLOW > user DENY > user ALLOW > role baseline >
+  default DENY. `has_permission(key)` / `has_permission_for(user,key)` /
+  `require_permission(key)` implement it; `get_my_permissions()` is the
+  authority document (`{epoch, role, is_super_user, allowed, denied, fields,
+  modules}`) consumed by Web, Flutter and SARA; `permission_version(id=1)`
+  epochs every change so clients refresh their doc.
+- **Targets**: `user_permissions` (user overrides, `scope_type` in
+  global/branch/department/selected_users), `permission_field_rules`
+  (table.column show/hide; `has_field_access(table,column)` /
+  `require_field_access`), `permission_delegation` (which roles/users may
+  administer WHICH modules at WHAT max scope).
+- **Holder rule** (`_can_manage_permission`): a manager can only change
+  permissions they hold themselves, only within delegated modules, only at or
+  below their delegation ceiling. `get_privilege_authority()` drives the UI.
+  `set_delegation`/`revoke_delegation` are **super_admin only**.
+- **All changes are audited** (`permission_audit` + `audit_logs` via
+  `_write_privilege_audit`) with a mandatory reason (≥5 chars). RLS: the five
+  new tables are readable only by privilege managers (users may read their own
+  `user_permissions`); write RLS is never granted.
+- **Payroll retrofit** (the first granular-enforcement surface): `list_payroll_master`
+  keeps its role gate but adds `require_permission('payroll.salary.view')`
+  and redacts bank columns when the caller lacks `has_field_access('employees',
+  'bank_account')`. `calculate_employee_salary_breakdown`, `get_employee_compensation`,
+  `preview_employee_compensation` and the 11-arg `upsert_employee_compensation`
+  are renamed to `_*_impl` (bodies untouched, EXECUTE revoked from
+  public/authenticated) behind guarded wrappers; the 5-arg upsert is fully
+  re-emitted verbatim with its original role gate + a granular edit-or-view
+  guard. `financial_controller`, `hr_officer`, `head_of_human_resources`
+  behavior is unchanged from today (baseline already covers them).
+- **Delegations seeded**: super_admin + admin → every module, max `global`;
+  `head_of_human_resources` → HR-adjacent modules (attendance, appraisal,
+  communications, hr, hr_config, medical, messaging, payroll, performance,
+  reports, sara, work, workforce) and an explicit
+  `seed_role_permission('head_of_human_resources', 'administration.privileges.manage')`
+  (the generated baseline only reaches super_admin/admin).
+- **Frontend**: `src/services/privilegeService.js` (RPC wrappers, no raw
+  `employees` access), `src/pages/PrivilegeManagement.jsx` (route `/privileges`,
+  nav group Management, guard `administration.privileges.manage`; tabs Role
+  Privileges / User Privileges / Effective Access / Field Visibility /
+  Delegation / History; audited ReasonModal for every change;
+  super_admin-only delegation + role-grant free-form).
+- **useAuth integration (zero-regression)**: `fetchPermissions` loads
+  `get_my_permissions()`; `hasPermission` = super_user → true, explicit deny →
+  false, explicit allow → true, else legacy `ROLE_PERMISSIONS` fallback (so a
+  not-yet-migrated env keeps working); `deniedKeys`/`allowedKeys` exposed;
+  `canAccessRoute` denies a route when any required permission is explicitly
+  denied. `refreshPermissions()` re-syncs after privilege edits.
+- **SARA**: `sara-intent` calls `get_my_permissions()` and prunes intents whose
+  backing key is explicitly denied (`INTENT_PERMISSION_KEYS`) before the NLU
+  call — execution rights stay with RLS/callers (advisory, never the surface).
+- Tests: `npm run test:privileges` — `tests/privilegeManagement.test.mjs`
+  (migration + service + page + useAuth + navigation + sara content
+  assertions), plus the local-docker behavioral pass (precedence order, deny
+  beats baseline, clear restores, epoch bumps, role grant/revoke, field-rule
+  redaction on `list_payroll_master`, delegation holder rule). `npm run build`
+  passes.

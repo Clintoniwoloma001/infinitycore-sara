@@ -14,13 +14,34 @@ export function AuthProvider({ children }) {
   const [profileError, setProfileError] = useState(null)
   const [viewingAsRole, setViewingAsRole] = useState(null)
   const [accessModules, setAccessModules] = useState([])
+  const [permDoc, setPermDoc] = useState(null)
+
+  const fetchPermissions = async (sessionUser) => {
+    if (!sessionUser) {
+      setPermDoc(null)
+      return null
+    }
+    try {
+      const { data, error } = await supabase.rpc('get_my_permissions')
+      if (error) throw error
+      setPermDoc(data || null)
+      return data || null
+    } catch {
+      // The granular engine may not be deployed yet (or offline) —
+      // fall back to the legacy role-permission matrix, never crash.
+      setPermDoc(null)
+      return null
+    }
+  }
 
   const fetchProfile = async (sessionUser) => {
     if (!sessionUser) {
       setProfile(null)
       setAccessModules([])
+      await fetchPermissions(null)
       return null
     }
+    await fetchPermissions(sessionUser)
     try {
       const { data, error } = await supabase.from('profiles').select('*').eq('id', sessionUser.id).single()
       if (error) throw error
@@ -118,12 +139,19 @@ export function AuthProvider({ children }) {
     return fetchProfile(session?.user || null)
   }
 
+  const refreshPermissions = async () => {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user) return null
+    return fetchPermissions(session.user)
+  }
+
   const signOut = async () => {
     await supabase.auth.signOut()
     setUser(null)
     setProfile(null)
     setProfileError(null)
     setViewingAsRole(null)
+    setPermDoc(null)
   }
 
   const actualRole = profile?.role || ROLES.STAFF
@@ -133,9 +161,16 @@ export function AuthProvider({ children }) {
   const availableModules = ROLE_MODULES[effectiveRole] || []
   const userPermissions = ROLE_PERMISSIONS[effectiveRole] || []
 
-  const hasPermission = (permissionKey) => userPermissions.includes(permissionKey)
-  const hasAnyPermission = (permissions) => permissions.some((p) => userPermissions.includes(p))
-  const hasAllPermissions = (permissions) => permissions.every((p) => userPermissions.includes(p))
+  const hasPermission = (permissionKey) => {
+    if (permDoc?.is_super_user) return true
+    if (permDoc && permDoc.allowed) {
+      if (permDoc.denied?.[permissionKey]) return false
+      if (permDoc.allowed[permissionKey]) return true
+    }
+    return userPermissions.includes(permissionKey)
+  }
+  const hasAnyPermission = (permissions) => permissions.some((p) => hasPermission(p))
+  const hasAllPermissions = (permissions) => permissions.every((p) => hasPermission(p))
 
   const permissions = {
     canReadCustomers: hasPermission('customers.read'),
@@ -192,6 +227,7 @@ export function AuthProvider({ children }) {
     signUp,
     forgotPassword,
     refreshProfile,
+    refreshPermissions,
     signOut,
 
     actualRole,
@@ -210,6 +246,11 @@ export function AuthProvider({ children }) {
     hasAnyPermission,
     hasAllPermissions,
     permissions,
+    // Effective granular permission document (get_my_permissions).
+    permDoc,
+    permissionEpoch: permDoc?.epoch ?? null,
+    deniedKeys: permDoc?.denied || {},
+    allowedKeys: permDoc?.allowed || {},
     // Personnel lifecycle flags at the TOP level as well — several pages
     // destructure canTerminate/canArchive/canDelete straight off useAuth().
     canTerminate: canTerminateEmployee(actualRole),

@@ -104,6 +104,7 @@ export const routeConfig = [
       { label: 'Reports', path: '/reports', icon: BarChart3, element: 'Reports', permissions: [PERMISSIONS.REPORTS_READ] },
       { label: 'Audit Logs', path: '/audit-logs', icon: ScrollText, element: 'AuditLogs', permissions: [PERMISSIONS.ADMIN_VIEW_AUDIT] },
       { label: 'User Management', path: '/users', icon: UserCog, element: 'Users', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
+      { label: 'Access & Privileges', path: '/privileges', icon: ShieldCheck, element: 'PrivilegeManagement', permissions: [PERMISSIONS.PRIVILEGES_MANAGE] },
       { label: 'Platform Reset', path: '/platform-reset', icon: Eraser, element: 'PlatformReset', permissions: [PERMISSIONS.ADMIN_PLATFORM_RESET] },
     ],
   },
@@ -122,6 +123,12 @@ export const protectedRoutes = routeConfig.flatMap((group) => group.items)
 export function canAccessRoute(route, auth) {
   if (!auth?.user || !auth?.profile) return false
   if (auth.role === 'super_admin') return true
+
+  // An explicit granular DENY on a route's required permission wins over any
+  // role/allow fallback — the manager revoked this actor's access on purpose.
+  if (route.permissions?.length && auth.deniedKeys) {
+    if (route.permissions.some((p) => auth.deniedKeys[p])) return false
+  }
 
   // If the user has a per-user access profile, check it first.
   // The access profile stores module keys that match route paths.

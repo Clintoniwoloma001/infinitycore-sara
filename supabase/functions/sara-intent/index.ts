@@ -93,6 +93,37 @@ function serverWhitelist(role, permsText) {
   return [...allowed]
 }
 
+// GRANULAR explicit-deny override: the platform-wide privilege engine can
+// revoke an actor's effective permission (user-level DENY) that the legacy
+// role matrix below still grants. Presence here simply prevents the NLU
+// model from EXPRESSING an intent the actor is explicitly denied — real
+// execution rights remain with RLS + the callers (never advisory).
+const INTENT_PERMISSION_KEYS = {
+  APPROVE_LEAVE: ['hr.leave.manage', 'hr.leave.approve'],
+  REJECT_LEAVE: ['hr.leave.manage', 'hr.leave.approve'],
+  SHOW_PENDING: ['hr.leave.view'],
+  COUNT_PENDING: ['hr.leave.view'],
+  PENDING_ATTENTION: ['hr.leave.view'],
+  PENDING_LOANS: ['loans.read'],
+  TERMINATE_EMPLOYEE: ['hr.employee.update'],
+}
+
+async function applyGranularDeny(supabase, userId, allowed) {
+  try {
+    const { data, error } = await supabase.rpc('get_my_permissions')
+    if (error || !data || !data.denied) return allowed
+    const denied = data.denied
+    return allowed.filter((intent) => {
+      const keys = INTENT_PERMISSION_KEYS[intent]
+      if (!keys) return true
+      return !keys.some((k) => denied[k])
+    })
+  } catch {
+    // Engine not deployed in this environment — fall back to role matrix.
+    return allowed
+  }
+}
+
 function sanitize(raw) {
   if (!raw || typeof raw !== 'object') return { intent: 'UNKNOWN', confidence: 0 }
   const intent = String(raw.intent || 'UNKNOWN').toUpperCase()
@@ -149,6 +180,7 @@ Deno.serve(async (req) => {
   } catch { /* fall through to role-free parse */ }
 
   let allowed = serverWhitelist(role, permsText)
+  allowed = await applyGranularDeny(supabase, user.id, allowed)
   if (allowed.length === 0) allowed = ['SHOW_PENDING', 'COUNT_PENDING', 'HELP', 'UNKNOWN']
 
   let body

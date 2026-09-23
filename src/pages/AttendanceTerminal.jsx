@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Fingerprint, Loader2, Check, X, Clock, MapPin, ShieldCheck, AlertOctagon } from 'lucide-react'
 import { attendanceEngineService } from '../services/attendanceEngineService'
-import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, getPosition, normalizeAttendanceError } from '../services/attendanceService'
+import { attendanceService, DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, getPosition, normalizeAttendanceError, isLocationBlockedError } from '../services/attendanceService'
 import { biometricService } from '../services/biometricService'
 import { speakText } from '../services/saraVoice'
 import { normalizeEmployeeId, canonicalEmployeeId } from '../utils/employeeId'
@@ -119,16 +119,29 @@ export default function AttendanceTerminal() {
       }
     } catch (e) {
       if (publicMode) {
+        const kind = e?.kind
         const m = e?.message || ''
-        if (/bounds|geofence|within range/i.test(m)) {
+        if (kind === 'server') {
+          setGeoStatus('error')
+          setGeoMessage('')
+          setError('Something went wrong. Contact IT.')
+          console.error('Public terminal verification error:', e)
+        } else if (kind === 'rejected' || (!kind && /bounds|geofence|within range/i.test(m))) {
           setGeoStatus('rejected')
           setGeoMessage(normalizeAttendanceError(m))
-        } else {
+          setError(normalizeAttendanceError(m))
+        } else if (isLocationBlockedError(m)) {
           setGeoStatus('denied')
           setGeoMessage('')
+          setError('')
+        } else {
+          setGeoStatus('error')
+          setGeoMessage('')
+          setError(m || 'Employee lookup failed')
         }
+      } else {
+        setError(e?.message || 'Employee lookup failed')
       }
-      setError(e?.message || 'Employee lookup failed')
     } finally {
       setBusy(false)
     }
@@ -198,11 +211,29 @@ export default function AttendanceTerminal() {
         setError(data?.error || 'Clock operation failed')
       }
     } catch (e) {
-      if (publicMode && /bounds|geofence|within range/i.test(e?.message || '')) {
-        setGeoStatus('rejected')
-        setGeoMessage(normalizeAttendanceError(e?.message))
+      if (publicMode) {
+        const kind = e?.kind
+        const m = e?.message || ''
+        if (kind === 'server') {
+          setGeoStatus('error')
+          setGeoMessage('')
+          setError(normalizeAttendanceError(m) || 'Something went wrong. Contact IT.')
+          console.error('Public terminal clock error:', e)
+        } else if (kind === 'rejected' || (!kind && /bounds|geofence|within range/i.test(m))) {
+          setGeoStatus('rejected')
+          setGeoMessage(normalizeAttendanceError(m))
+          setError(normalizeAttendanceError(m))
+        } else if (isLocationBlockedError(m)) {
+          setGeoStatus('denied')
+          setGeoMessage('')
+        } else {
+          setGeoStatus('error')
+          setGeoMessage('')
+          setError(normalizeAttendanceError(m) || 'Terminal error')
+        }
+      } else {
+        setError(normalizeAttendanceError(e?.message) || 'Terminal error')
       }
-      setError(normalizeAttendanceError(e?.message) || 'Terminal error')
     } finally {
       setBusy(false)
     }
@@ -375,6 +406,7 @@ export default function AttendanceTerminal() {
                   {geoStatus === 'fetching' && <span className="text-slate-600">Checking location…</span>}
                   {geoStatus === 'denied' && <span className="text-rose-600">Location is required to clock in or out.</span>}
                   {geoStatus === 'rejected' && <span className="text-rose-600">Location rejected — outside permitted area.</span>}
+                  {geoStatus === 'error' && <span className="text-rose-600">Something went wrong. Contact IT.</span>}
                   {geoStatus === 'ok' && locationCheck?.valid && (
                     <span className="text-emerald-700">
                       Location verified — {locationCheck.actual_location_name || 'approved attendance location'}
