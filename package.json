@@ -55,7 +55,9 @@
     "test:leave-workflow": "node tests/leaveWorkflowFeedback.test.mjs",
     "test:auto-clockout-midnight": "node tests/attendanceAutoClockout.test.mjs",
     "test:clock-in-canonical": "node tests/attendanceClockInCanonical.test.mjs",
-    "test:terminal-gate-field": "node tests/terminalGateFieldFix.test.mjs"
+    "test:terminal-gate-field": "node tests/terminalGateFieldFix.test.mjs",
+    "test:director-intelligence": "node tests/directorIntelligence.test.mjs",
+    "test:chairman-role": "node tests/chairmanRoleDepartments.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

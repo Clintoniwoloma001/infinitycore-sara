@@ -34,6 +34,7 @@ import {
   Eraser,
   GraduationCap,
   Gauge,
+  Crown,
 } from 'lucide-react'
 import { PERMISSIONS } from '../constants/permissions'
 
@@ -42,6 +43,7 @@ export const routeConfig = [
     section: 'Core Banking Intelligence',
     items: [
       { label: 'Dashboard', path: '/', icon: LayoutDashboard, element: 'Dashboard', permissions: [] },
+      { label: 'Director Intelligence', path: '/director', icon: Crown, element: 'DirectorDashboard', permissions: [PERMISSIONS.DIRECTOR_EXECUTIVE_READ] },
       { label: 'My Profile', path: '/profile', icon: UserCircle, element: 'Profile', permissions: [] },
       { label: 'Messages', path: '/chat', icon: MessageSquare, element: 'MessagesPage', permissions: [] },
       { label: 'Comm Admin', path: '/communication-admin', icon: Landmark, element: 'CommunicationAdmin', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
@@ -64,6 +66,7 @@ export const routeConfig = [
     section: 'Performance',
     items: [
       { label: 'Performance', path: '/performance', icon: TrendingUp, element: 'Performance', permissions: [PERMISSIONS.PERFORMANCE_READ] },
+      { label: 'PIP', path: '/performance-improvement-plans', icon: TrendingDown, element: 'PerformanceImprovementPlans', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'Performance Settings', path: '/performance-settings', icon: SlidersHorizontal, element: 'PerformanceSettings', permissions: [PERMISSIONS.PERFORMANCE_MANAGE] },
     ],
   },
@@ -80,7 +83,6 @@ export const routeConfig = [
       { label: 'Onboarding', path: '/onboarding-links', icon: Link2, element: 'OnboardingLinks', permissions: [PERMISSIONS.HR_ONBOARDING_READ] },
       { label: 'HR Queries', path: '/hr-queries', icon: ClipboardList, element: 'HRQueries', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'Appraisals', path: '/appraisals', icon: Star, element: 'Appraisals', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
-      { label: 'PIP', path: '/performance-improvement-plans', icon: TrendingDown, element: 'PerformanceImprovementPlans', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'Medical Screening', path: '/medical-management', icon: Stethoscope, element: 'MedicalManagement', permissions: [PERMISSIONS.MEDICAL_READ] },
       { label: 'Offer Letters', path: '/offer-letters', icon: FileSignature, element: 'OfferLetters', permissions: [PERMISSIONS.HR_OFFER_LETTERS_READ] },
       { label: 'Payroll', path: '/payroll', icon: Wallet, element: 'Payroll', permissions: [PERMISSIONS.HR_PAYROLL_READ] },

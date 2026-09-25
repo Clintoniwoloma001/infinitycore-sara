@@ -1,6 +1,7 @@
 import { supabase } from '../supabaseClient'
 import { logAction } from './supabaseService'
 import { sendInAppNotification } from './notificationService'
+import { averageItemCompletion, progressById } from '../domains/tasks/taskProgress'
 
 export const workTaskService = {
   async list(filters = {}) {
@@ -48,24 +49,49 @@ export const workTaskService = {
       if (!uploadError) evidencePaths.push({ path: filePath, name: file.name, type: file.type })
     }
 
-    // Create submission record
+    // Auto-calculate weighted completion from the itemized instructions
+    // (untouched items count as 0 off the TOTAL sub-item count). Falls back to
+    // the manually-entered single percentage only when the task has no
+    // sub-items at all (legacy tasks). The stored instruction_progress + items
+    // are the source of truth — never the single percentage when items exist.
+    const items = Array.isArray(submission.instructionItems) ? submission.instructionItems : []
+    const progress = Array.isArray(submission.instructionProgress) ? submission.instructionProgress : []
+    const progressMap = progressById(progress)
+    const autoCompletion = averageItemCompletion(items, progressMap)
+    const effectivePercentage =
+      autoCompletion !== null
+        ? autoCompletion
+        : Math.max(0, Math.min(100, Number(submission.completionPercentage ?? 100)))
+
+    // Create submission record (a full snapshot; history is never overwritten)
     const { data: sub, error: subError } = await supabase.from('task_submissions').insert({
       task_id: taskId,
       submitted_by: submission.submittedBy,
       submission_comment: submission.comment,
-      completion_percentage: submission.completionPercentage ?? 100,
+      completion_percentage: effectivePercentage,
       completed_date: submission.completedDate || new Date().toISOString().slice(0, 10),
       reference_url: submission.referenceUrl || null,
       additional_note: submission.additionalNote || null,
       evidence_files: evidencePaths,
       status: 'under_review',
+      instruction_items: items,
+      instruction_progress: progress,
+      // Itemized comments: distinct entries (Enter-to-add / Add more).
+      comment_items: Array.isArray(submission.commentItems) ? submission.commentItems : [],
     }).select().single()
     if (subError) throw subError
 
-    // Update task status to submitted
-    await this.update(taskId, { status: 'submitted', completion_percentage: submission.completionPercentage ?? 100 })
+    // Persist itemized progress + auto completion back onto the task. The task
+    // status is deliberately NOT moved to 'submitted' so the task stays visible
+    // in "My Tasks" and can be resubmitted at higher completion. The submission
+    // row above is the durable review record.
+    await this.update(taskId, {
+      instruction_items: items,
+      instruction_progress: progress,
+      completion_percentage: effectivePercentage,
+    })
 
-    logAction({ action: 'TASK_SUBMISSION_CREATED', entityType: 'TaskSubmission', entityId: sub.id, details: 'Completion proof submitted' })
+    logAction({ action: 'TASK_SUBMISSION_CREATED', entityType: 'TaskSubmission', entityId: sub.id, details: `Completion proof submitted at ${effectivePercentage}% (${items.length} itemized sub-step${items.length === 1 ? '' : 's'})` })
 
     // Notify the assigner
     const task = await this.getById(taskId)
@@ -77,6 +103,18 @@ export const workTaskService = {
 
   async listSubmissions(taskId) {
     const { data, error } = await supabase.from('task_submissions').select('*').eq('task_id', taskId).order('created_at', { ascending: false })
+    if (error) throw error
+    return data || []
+  },
+
+  // The employee's own submission history (Submitted tab) — drive it from the
+  // submission records, not from task.status (which is no longer flipped).
+  async listMySubmissions(userId) {
+    const { data, error } = await supabase
+      .from('task_submissions')
+      .select('*, work_tasks(title, instructions, instruction_items)')
+      .eq('submitted_by', userId)
+      .order('created_at', { ascending: false })
     if (error) throw error
     return data || []
   },
@@ -134,6 +172,18 @@ export const workTaskService = {
     const { data, error } = await supabase.storage.from('task-evidence').createSignedUrl(filePath, expiresIn)
     if (error) throw error
     return data.signedUrl
+  },
+
+  // Aggregate KPI/task completion rate for an employee over a date range —
+  // single source of truth backed by the server-side `calculate_task_completion`.
+  async getEmployeeTaskCompletionRate(employeeId, from, to) {
+    const { data, error } = await supabase.rpc('get_employee_task_completion_rate', {
+      p_employee_id: employeeId,
+      p_from: from,
+      p_to: to,
+    })
+    if (error) throw error
+    return data || { task_count: 0, completion_rate: 0 }
   },
 
   async getStats(userId) {

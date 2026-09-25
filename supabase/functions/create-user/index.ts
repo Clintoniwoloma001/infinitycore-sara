@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
   const employeeId = body?.employeeId || null
   if (!validEmail(email)) return json({ error: 'email_required', message: 'A valid email address is required.' }, 400)
   if (safeRole === 'super_admin' && actorRole !== 'super_admin') return json({ error: 'forbidden', message: 'Only super_admin can assign super_admin' }, 403)
-  if (['admin', 'area_manager', 'head_of_business'].includes(safeRole) && !['super_admin', 'admin'].includes(actorRole)) {
+  if (['admin', 'area_manager', 'head_of_business', 'md_ceo', 'chairman', 'director'].includes(safeRole) && !['super_admin', 'admin'].includes(actorRole)) {
     return json({ error: 'forbidden', message: 'Not authorized to assign this role' }, 403)
   }
 

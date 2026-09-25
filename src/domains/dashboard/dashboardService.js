@@ -6,6 +6,7 @@ import { targetService } from '../../services/targetService'
 import { workTaskService } from '../../services/workTaskService'
 import onboardingStatusService from '../../services/onboardingStatusService'
 import { summarizeKpis } from './dashboardSelectors'
+import { filterDepartmentOptions } from '../../constants/departments'
 
 const RPC_NOT_FOUND = 'PGRST202'
 
@@ -122,7 +123,10 @@ export const dashboardService = {
       p_area: filters.area || null,
     })
     if (error) throw error
-    return data || { branches: [], departments: [], areas: [], employees: [] }
+    const options = data || { branches: [], departments: [], areas: [], employees: [] }
+    // Defense in depth: the server already excludes executive titles from the
+    // department option list, and we never offer one in the UI either.
+    return { ...options, departments: filterDepartmentOptions(options.departments || []) }
   },
 }
 

@@ -6,6 +6,9 @@
 export const ROLES = {
   SUPER_ADMIN: 'super_admin',
   ADMIN: 'admin',
+  MD_CEO: 'md_ceo',
+  CHAIRMAN: 'chairman',
+  DIRECTOR: 'director',
   BRANCH_MANAGER: 'branch_manager',
   AREA_MANAGER: 'area_manager',
   HEAD_OF_BUSINESS: 'head_of_business',
@@ -28,6 +31,9 @@ export const ROLES = {
 export const ROLE_HIERARCHY = {
   [ROLES.SUPER_ADMIN]: 100,
   [ROLES.ADMIN]: 90,
+  [ROLES.MD_CEO]: 98,
+  [ROLES.CHAIRMAN]: 96,
+  [ROLES.DIRECTOR]: 95,
   [ROLES.HEAD_OF_E_BUSINESS]: 80,
   [ROLES.HEAD_OF_OPERATIONS]: 79,
   [ROLES.HEAD_OF_BUSINESS]: 78,
@@ -61,6 +67,27 @@ export const ROLE_METADATA = {
     primaryModule: 'admin',
     color: '#7c3aed',
     icon: 'Lock',
+  },
+  [ROLES.MD_CEO]: {
+    label: 'MD/CEO',
+    description: 'Managing Director / Chief Executive Officer — read-only executive intelligence across the entire bank',
+    primaryModule: 'dashboard',
+    color: '#0f172a',
+    icon: 'Crown',
+  },
+  [ROLES.CHAIRMAN]: {
+    label: 'Chairman',
+    description: 'Board-level read-only executive intelligence across the entire bank',
+    primaryModule: 'dashboard',
+    color: '#1e293b',
+    icon: 'Crown',
+  },
+  [ROLES.DIRECTOR]: {
+    label: 'Director',
+    description: 'Read-only executive intelligence across the entire bank',
+    primaryModule: 'dashboard',
+    color: '#0f172a',
+    icon: 'Crown',
   },
   [ROLES.BRANCH_MANAGER]: {
     label: 'Branch Manager',
@@ -178,6 +205,22 @@ export const ROLE_METADATA = {
 
 // Permissions by role
 export const ROLE_PERMISSIONS = {
+  // MD/CEO, Chairman and Director share ONE read-only executive access
+  // profile. Kept as explicit literals (never a shared spread) because
+  // scripts/gen-privilege-seed.mjs evaluates this object to build the
+  // granular privilege baseline.
+  [ROLES.MD_CEO]: [
+    'director.executive.read',
+    'hr.attendance.self',
+  ],
+  [ROLES.CHAIRMAN]: [
+    'director.executive.read',
+    'hr.attendance.self',
+  ],
+  [ROLES.DIRECTOR]: [
+    'director.executive.read',
+    'hr.attendance.self',
+  ],
   [ROLES.SUPER_ADMIN]: [
     'customers.read',
     'customers.create',
@@ -544,6 +587,18 @@ export const ROLE_PERMISSIONS = {
 
 // Module navigation by role
 export const ROLE_MODULES = {
+  [ROLES.MD_CEO]: [
+    'dashboard',
+    'attendance',
+  ],
+  [ROLES.CHAIRMAN]: [
+    'dashboard',
+    'attendance',
+  ],
+  [ROLES.DIRECTOR]: [
+    'dashboard',
+    'attendance',
+  ],
   [ROLES.SUPER_ADMIN]: [
     'dashboard',
     'customers',
@@ -684,6 +739,18 @@ export const ROLE_MODULES = {
 }
 
 // ------------------------------------------------------------------
+// EXECUTIVE VIEWERS — MD/CEO, Chairman and Director are the same
+// read-only executive audience. Every surface that gates on "is an
+// executive viewer?" MUST use this list (never a single role literal)
+// so a new executive role can never be forgotten in one place.
+// ------------------------------------------------------------------
+export const EXECUTIVE_VIEWER_ROLES = Object.freeze([ROLES.MD_CEO, ROLES.CHAIRMAN, ROLES.DIRECTOR])
+
+export function isExecutiveViewerRole(role) {
+  return EXECUTIVE_VIEWER_ROLES.includes(role)
+}
+
+// ------------------------------------------------------------------
 // STAFF PROMOTION MATRIX — mirrors the DB trigger in
 // schema_phase5_role_security.sql (enforce_role_change_policy).
 // This copy is for UI purposes only (so a manager doesn't see options
@@ -694,7 +761,7 @@ export function assignableRoles(actorRole) {
   if (actorRole === ROLES.SUPER_ADMIN) return Object.values(ROLES)
   if (actorRole === ROLES.ADMIN) return Object.values(ROLES).filter((r) => r !== ROLES.SUPER_ADMIN)
   if (actorRole === ROLES.AREA_MANAGER || actorRole === ROLES.HEAD_OF_HUMAN_RESOURCES) {
-    return Object.values(ROLES).filter((r) => ![ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.AREA_MANAGER, ROLES.HEAD_OF_BUSINESS, ROLES.HEAD_OF_OPERATIONS, ROLES.HEAD_OF_E_BUSINESS, ROLES.FINANCIAL_CONTROLLER, ROLES.HEAD_OF_RISK_COMPLIANCE, ROLES.HEAD_OF_LEGAL, ROLES.HEAD_OF_AUDIT].includes(r))
+    return Object.values(ROLES).filter((r) => ![ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MD_CEO, ROLES.CHAIRMAN, ROLES.DIRECTOR, ROLES.AREA_MANAGER, ROLES.HEAD_OF_BUSINESS, ROLES.HEAD_OF_OPERATIONS, ROLES.HEAD_OF_E_BUSINESS, ROLES.FINANCIAL_CONTROLLER, ROLES.HEAD_OF_RISK_COMPLIANCE, ROLES.HEAD_OF_LEGAL, ROLES.HEAD_OF_AUDIT].includes(r))
   }
   if (actorRole === ROLES.BRANCH_MANAGER) {
     return [ROLES.STAFF, ROLES.LOAN_OFFICER, ROLES.RELATIONSHIP_MANAGER, ROLES.CUSTOMER_SERVICE]

@@ -2,6 +2,7 @@ import { supabase } from '../supabaseClient'
 import { logAction } from './supabaseService'
 import { md5Hex } from './onboardingService'
 import { APP_URL } from '../config/siteUrl'
+import { filterDepartmentOptions } from '../constants/departments'
 export { TRAINING_TYPES, formatTrainingType, hours, buildQuestionSets, calculateTrainingManHours, calculateManHourSummary, aggregateManHourRows } from './trainingCalculations'
 
 async function currentUser() {
@@ -292,7 +293,8 @@ export const trainingService = {
     return {
       areas: data?.areas || [],
       branches: data?.branches || [],
-      departments: data?.departments || [],
+      // Executive titles are roles, not departments — never offered here.
+      departments: filterDepartmentOptions(data?.departments || []),
       employees: data?.employees || [],
     }
   },

@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient'
 import { rpcWithRetry } from './rpcHelper'
+import { filterDepartmentOptions } from '../constants/departments'
 
 // ------------------------------------------------------------------
 // HR Organisation Service — Phase 26 bank-master organisational data.
@@ -47,7 +48,10 @@ export const hrOrganisationService = {
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true })
     if (error) throw error
-    return data || []
+    // A master row named after an executive title (MD/CEO, Chairman…) is not a
+    // department — hide it from the structure/department pickers. The row is
+    // left untouched in the database (see migration 20260924000003).
+    return filterDepartmentOptions(data || [])
   },
 
   async listDesignations() {

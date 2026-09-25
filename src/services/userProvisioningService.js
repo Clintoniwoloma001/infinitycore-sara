@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient'
 import { userInvitationService } from './userInvitationService'
+import { filterDepartmentOptions } from '../constants/departments'
 
 // ------------------------------------------------------------------
 // User Provisioning Service — Phase 30.
@@ -132,10 +133,12 @@ export const userProvisioningService = {
     const clean = (values) => [...new Set(values.filter(Boolean).map((v) => String(v).trim()))]
 
     return {
-      departments: clean([
+      // Executive titles (MD/CEO, Chairman, Director…) are roles, never
+      // departments — they must not be offered in the approval dropdown.
+      departments: filterDepartmentOptions(clean([
         ...(employeeDepts.data || []).map((r) => r.department),
         ...(masterDepts.data || []).map((r) => r.name),
-      ]).sort((a, b) => a.localeCompare(b)),
+      ])).sort((a, b) => a.localeCompare(b)),
       branches: clean([
         ...(employeeBranches.data || []).map((r) => r.branch),
         ...(masterBranches.data || []).map((r) => r.branch_name),

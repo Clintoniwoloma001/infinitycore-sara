@@ -6,6 +6,7 @@ import { kpiService } from '../services/kpiService'
 import { attendanceService } from '../services/attendanceService'
 import { LoadingState, EmptyState } from '../components/PageStates'
 import { formatDate } from '../lib/utils'
+import { averageItemCompletion, progressById, splitInstructions } from '../domains/tasks/taskProgress'
 import { AlertCircle, CheckCircle2, Clock, Loader2, Upload, X, FileText, Zap } from 'lucide-react'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
@@ -64,6 +65,7 @@ export default function MyWork() {
   const [targets, setTargets] = useState([])
   const [kpis, setKpis] = useState([])
   const [stats, setStats] = useState({})
+  const [submissions, setSubmissions] = useState([])
   const [submitTarget, setSubmitTarget] = useState(null)
   const [submitForm, setSubmitForm] = useState({})
   const [evidenceFiles, setEvidenceFiles] = useState([])
@@ -75,20 +77,20 @@ export default function MyWork() {
     if (!user?.id) return
     setLoading(true)
     try {
-      // Resolve this user's own employee record so targets/KPIs are scoped
-      // to the employee, never the whole organisation.
       const emp = await attendanceService.getMyEmployee().catch(() => null)
       const empId = emp?.id || null
-      const [taskList, targetList, kpiList, statData] = await Promise.all([
+      const [taskList, targetList, kpiList, statData, subList] = await Promise.all([
         workTaskService.list({ assignedTo: user.id }).catch(() => []),
         empId ? targetService.list({ employeeId: empId }).catch(() => []) : Promise.resolve([]),
         empId ? kpiService.list({ employeeId: empId }).catch(() => []) : Promise.resolve([]),
         workTaskService.getEmployeeStats(user.id).catch(() => ({})),
+        workTaskService.listMySubmissions(user.id).catch(() => []),
       ])
       setTasks(taskList)
       setTargets(targetList)
       setKpis(kpiList)
       setStats(statData)
+      setSubmissions(subList)
     } finally {
       setLoading(false)
     }
@@ -96,14 +98,32 @@ export default function MyWork() {
 
   useEffect(() => { load() }, [user?.id])
 
-  const overdueTasks = useMemo(() => tasks.filter((t) => t.due_date && new Date(t.due_date) < new Date() && !['completed', 'cancelled', 'submitted'].includes(t.status)), [tasks])
-  const submittedTasks = useMemo(() => tasks.filter((t) => ['submitted', 'under_review'].includes(t.status)), [tasks])
+  const overdueTasks = useMemo(() => tasks.filter((t) => t.due_date && new Date(t.due_date) < new Date() && !['completed', 'cancelled'].includes(t.status)), [tasks])
+  // Submission review queue: tasks that have a submission still in under_review.
+  const submittedTasks = useMemo(() => {
+    const pendingIds = new Set(submissions.filter((s) => s.status === 'under_review').map((s) => s.task_id))
+    return tasks.filter((t) => pendingIds.has(t.id))
+  }, [tasks, submissions])
   const completedTasks = useMemo(() => tasks.filter((t) => t.status === 'completed'), [tasks])
+  // Tasks remain in My Tasks after every submit (status is never flipped to 'submitted').
   const activeTasks = useMemo(() => tasks.filter((t) => ['assigned', 'accepted', 'in_progress', 'rejected'].includes(t.status)), [tasks])
 
   const openSubmit = (task) => {
+    const items = Array.isArray(task.instruction_items) ? task.instruction_items : splitInstructions(task.instructions, task.id)
+    const progress = Array.isArray(task.instruction_progress) ? task.instruction_progress : []
+    const progressMap = progressById(progress)
+    const autoPct = averageItemCompletion(items, progressMap)
     setSubmitTarget(task)
-    setSubmitForm({ completionPercentage: 100, comment: '', referenceUrl: '', additionalNote: '', completedDate: new Date().toISOString().slice(0, 10) })
+    setSubmitForm({
+      completionPercentage: autoPct ?? task.completion_percentage ?? 100,
+      comment: '',
+      referenceUrl: '',
+      additionalNote: '',
+      completedDate: new Date().toISOString().slice(0, 10),
+      instructionItems: items.map((it) => ({ ...it })),
+      instructionProgress: items.map((it) => ({ item_id: it.id, progress: progressMap[it.id] || 0 })),
+      commentItems: [{ id: 'ci_0', text: '' }],
+    })
     setEvidenceFiles([])
     setSubmitError('')
     setSubmitSuccess('')
@@ -116,10 +136,13 @@ export default function MyWork() {
       await workTaskService.submitCompletion(submitTarget.id, {
         submittedBy: user.id,
         comment: submitForm.comment,
-        completionPercentage: parseInt(submitForm.completionPercentage) || 100,
+        completionPercentage: submitForm.completionPercentage,
         completedDate: submitForm.completedDate,
         referenceUrl: submitForm.referenceUrl,
         additionalNote: submitForm.additionalNote,
+        instructionItems: submitForm.instructionItems,
+        instructionProgress: submitForm.instructionProgress,
+        commentItems: submitForm.commentItems,
       }, evidenceFiles)
       setSubmitSuccess('Submission sent for review. Your manager will be notified.')
       setSubmitTarget(null)
@@ -129,6 +152,48 @@ export default function MyWork() {
     } finally {
       setSubmitting(false)
     }
+  }
+
+  // Simple item progress helpers for the modal
+  const updateItemProgress = (idx, value) => {
+    const items = [...submitForm.instructionItems]
+    const progress = [...submitForm.instructionProgress]
+    const n = Math.max(0, Math.min(100, Number(value) || 0))
+    const itemId = items[idx].id
+    const existingIdx = progress.findIndex((p) => p.item_id === itemId)
+    if (existingIdx !== -1) {
+      progress[existingIdx].progress = n
+    } else {
+      progress.push({ item_id: itemId, progress: n })
+    }
+    const overall = averageItemCompletion(items, progressById(progress))
+    setSubmitForm((f) => ({
+      ...f,
+      instructionProgress: progress,
+      completionPercentage: overall !== null ? overall : (f.completionPercentage ?? 100),
+    }))
+  }
+
+  const addComment = () => {
+    setSubmitForm((f) => ({
+      ...f,
+      commentItems: [...f.commentItems, { id: crypto.randomUUID(), text: '' }],
+    }))
+  }
+
+  const removeComment = (idx) => {
+    setSubmitForm((f) => ({
+      ...f,
+      commentItems: f.commentItems.filter((_, i) => i !== idx),
+    }))
+  }
+
+  const updateComment = (idx, value) => {
+    setSubmitForm((f) => {
+      const updated = [...f.commentItems]
+      updated[idx].text = value
+      return { ...f, commentItems: updated }
+    })
   }
 
   if (loading) return <LoadingState label="Loading your work..." />
@@ -175,10 +240,41 @@ export default function MyWork() {
                 <PriorityBadge priority={t.priority} />
               </div>
               {t.instructions && <p className="text-sm text-slate-600 bg-slate-50 rounded-lg p-3 mb-3"><span className="font-medium">Instructions:</span> {t.instructions}</p>}
+              {Array.isArray(t.instruction_items) && t.instruction_items.length > 0 && (
+                <div className="mb-3 space-y-1">
+                  {t.instruction_items.map((it, idx) => {
+                    const prog = (progressById(t.instruction_progress)[it.id]) || 0
+                    return (
+                      <div key={it.id} className="flex items-center gap-2 text-xs">
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-white font-bold">{idx + 1}</span>
+                        <span className="flex-1 text-slate-700 truncate">{it.text}</span>
+                        <span className={prog >= 100 ? 'text-emerald-600 font-semibold' : prog >= 50 ? 'text-amber-600 font-semibold' : 'text-rose-600 font-semibold'}>{prog}%</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {(!Array.isArray(t.instruction_items) || t.instruction_items.length === 0) && t.instructions && (
+                <div className="mb-3 space-y-1">
+                  {splitInstructions(t.instructions, t.id).map((it, idx) => (
+                    <div key={it.id} className="flex items-center gap-2 text-xs">
+                      <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-white font-bold">{idx + 1}</span>
+                      <span className="flex-1 text-slate-600">{it.text}</span>
+                      <span className="text-slate-400">0%</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="flex items-center gap-4 text-xs text-slate-500 mb-3">
                 <span>Due: {formatDate(t.due_date)}</span>
                 <StatusBadge status={t.status} />
                 {t.completion_percentage > 0 && <span>{t.completion_percentage}% complete</span>}
+                {t.status === 'in_progress' && (
+                  <span className="inline-flex items-center gap-1 text-[#009944] font-medium">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#009944]" />
+                    Awaiting your next submission
+                  </span>
+                )}
               </div>
               {t.status === 'rejected' && (
                 <div className="rounded-lg bg-rose-50 border border-rose-200 p-3 mb-3">
@@ -259,17 +355,43 @@ export default function MyWork() {
       {/* Submitted */}
       {tab === 'submitted' && (
         <div className="space-y-3">
-          {submittedTasks.length === 0 ? <EmptyState title="No submissions pending" description="Tasks you've submitted for review will appear here." /> : submittedTasks.map((t) => (
-            <div key={t.id} className="bg-white rounded-lg border border-amber-200 p-5">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h4 className="font-semibold text-slate-900">{t.title}</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Awaiting manager review</p>
+          {submissions.length === 0 ? (
+            <EmptyState title="No submission history" description="Your progress submissions will appear here." />
+          ) : (
+            <>
+              {submissions.map((sub) => (
+                <div key={sub.id} className="bg-white rounded-lg border border-amber-200 p-5">
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <h4 className="font-semibold text-slate-900">{sub.work_tasks?.title || 'Task'}</h4>
+                      <p className="text-xs text-slate-500 mt-0.5">{formatDate(sub.completed_date)} • {sub.completion_percentage}%</p>
+                    </div>
+                    <StatusBadge status={sub.status} />
+                  </div>
+                  {sub.submission_comment && <p className="text-sm text-slate-600 bg-slate-50 rounded-lg p-3 mb-3">{sub.submission_comment}</p>}
+                  {Array.isArray(sub.comment_items) && sub.comment_items.length > 0 && (
+                    <div className="mb-3 space-y-1">
+                      {sub.comment_items.map((c, idx) => (
+                        <div key={c.id} className="flex items-center gap-2 text-xs">
+                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-white font-bold">{idx + 1}</span>
+                          <span className="flex-1 text-slate-600 truncate">{c.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {sub.evidence_files && sub.evidence_files.length > 0 && (
+                    <div className="text-xs text-slate-500 flex-wrap gap-2 mt-2">
+                      {sub.evidence_files.map((f, idx) => (
+                        <span key={idx} className="flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                          <FileText className="w-3 h-3" /> {f.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <StatusBadge status={t.status} />
-              </div>
-            </div>
-          ))}
+              ))}
+            </>
+          )}
         </div>
       )}
 
@@ -304,13 +426,75 @@ export default function MyWork() {
             {submitError && <p className="text-sm text-rose-600 mb-3">{submitError}</p>}
             {submitSuccess && <p className="text-sm text-emerald-600 mb-3">{submitSuccess}</p>}
             <div className="space-y-4">
+              {/* Itemized instruction progress — overall auto-calculated from sub-items */}
+              {submitTarget && (Array.isArray(submitForm.instructionItems) && submitForm.instructionItems.length > 0) && (
+                <div>
+                  <label className={labelCls}>Progress by step (auto: {submitForm.completionPercentage}% overall)</label>
+                  <div className="space-y-2">
+                    {submitForm.instructionItems.map((it, idx) => (
+                      <div key={it.id} className="flex items-center gap-2">
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-white font-bold text-xs flex-shrink-0">{idx + 1}</span>
+                        <span className="flex-1 text-xs text-slate-700 truncate">{it.text}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          className={inputCls}
+                          style={{ width: '64px' }}
+                          value={progressById(submitForm.instructionProgress)[it.id] || 0}
+                          onChange={(e) => updateItemProgress(idx, e.target.value)}
+                          aria-label={`Progress for step ${idx + 1}`}
+                        />
+                        <span className="text-xs text-slate-500">%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(!Array.isArray(submitForm.instructionItems) || submitForm.instructionItems.length === 0) && (
+                <div>
+                  <label className={labelCls}>Completion Percentage</label>
+                  <input type="number" min="0" max="100" className={inputCls} value={submitForm.completionPercentage || 100} onChange={(e) => setSubmitForm((f) => ({ ...f, completionPercentage: e.target.value }))} />
+                </div>
+              )}
+              {/* Itemized comments — Enter to add / Add more */}
               <div>
-                <label className={labelCls}>Completion Percentage</label>
-                <input type="number" min="0" max="100" className={inputCls} value={submitForm.completionPercentage || 100} onChange={(e) => setSubmitForm((f) => ({ ...f, completionPercentage: e.target.value }))} />
+                <label className={labelCls}>Itemized comments</label>
+                {submitForm.commentItems.map((c, idx) => (
+                  <div key={c.id} className="flex items-center gap-2 mb-2">
+                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-white font-bold text-xs flex-shrink-0">{idx + 1}</span>
+                    <input
+                      className={inputCls}
+                      placeholder={`Comment ${idx + 1}`}
+                      value={c.text}
+                      onChange={(e) => updateComment(idx, e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          const nextIdx = idx + 1
+                          if (nextIdx >= submitForm.commentItems.length) {
+                            setSubmitForm((f) => ({ ...f, commentItems: [...f.commentItems, { id: crypto.randomUUID(), text: '' }] }))
+                          } else {
+                            const next = submitForm.commentItems[nextIdx]
+                            if (next && !next.text) {
+                              // move focus to next empty slot — React re-render; leave cursor there
+                            }
+                          }
+                        }
+                      }}
+                    />
+                    {submitForm.commentItems.length > 1 && (
+                      <button type="button" onClick={() => removeComment(idx)} className="px-2 text-slate-400 hover:text-rose-600">×</button>
+                    )}
+                  </div>
+                ))}
+                <button type="button" onClick={addComment} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-300 text-xs text-[#009944] font-medium hover:bg-[#009944]/5">
+                  + Add more
+                </button>
               </div>
               <div>
-                <label className={labelCls}>Completion Comment</label>
-                <textarea className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" rows={3} value={submitForm.comment || ''} onChange={(e) => setSubmitForm((f) => ({ ...f, comment: e.target.value }))} />
+                <label className={labelCls}>Completion Comment (summary)</label>
+                <textarea className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]" rows={2} value={submitForm.comment || ''} onChange={(e) => setSubmitForm((f) => ({ ...f, comment: e.target.value }))} />
               </div>
               <div>
                 <label className={labelCls}>Evidence / Proof Files</label>

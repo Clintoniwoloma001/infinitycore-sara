@@ -14,9 +14,13 @@ export default function RoleSwitcher() {
   if (!canSwitchViews) return null
 
   // Roles available for Super Admin to view as
+  // (Simulation only — real authorization always comes from the actual role.)
   const switchableRoles = [
     ROLES.SUPER_ADMIN,
     ROLES.ADMIN,
+    ROLES.MD_CEO,
+    ROLES.CHAIRMAN,
+    ROLES.DIRECTOR,
     ROLES.BRANCH_MANAGER,
     ROLES.AREA_MANAGER,
     ROLES.HEAD_OF_BUSINESS,

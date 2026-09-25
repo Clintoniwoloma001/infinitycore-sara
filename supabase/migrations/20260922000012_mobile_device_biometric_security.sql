@@ -265,7 +265,7 @@ begin
          mobile_platform = coalesce(nullif(v_session.platform, ''), 'mobile'),
          mobile_app_version = coalesce(p_app_version, v_session.app_version),
          mobile_biometric_verified = true
-   where id = (v_result ->> 'id')::uuid;
+   where id = (v_result ->> 'attendance_id')::uuid;
 
   update public.mobile_device_sessions
      set last_attendance_at = clock_timestamp()
@@ -276,7 +276,7 @@ begin
   perform public.mobile_audit_log(
     'MOBILE_ATTENDANCE_AUTHORIZED',
     'AttendanceRecord',
-    (v_result ->> 'id')::text,
+    (v_result ->> 'attendance_id')::text,
     format('Clock-in authorized for employee %s on device %s', v_employee_id, p_device_id),
     'info'
   );

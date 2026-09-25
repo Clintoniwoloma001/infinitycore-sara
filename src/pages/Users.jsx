@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient'
 import { logAction } from '../services/supabaseService'
 import { useAuth } from '../hooks/useAuth'
 import { ROLE_METADATA, ROLES, assignableRoles } from '../constants/roles'
+import { cleanDepartmentValue, filterDepartmentOptions } from '../constants/departments'
 import { userProvisioningService } from '../services/userProvisioningService'
 import { Shield, UserPlus, CheckCircle2, XCircle, Loader2, Search, UserCog, Power, PowerOff, Mail, Phone, Building2, Calendar, Eye, X, MailPlus, Send, UserCheck, Clock, Layers, Trash2 } from 'lucide-react'
 
@@ -93,7 +94,7 @@ export default function Users() {
       const { data, error } = await supabase.rpc('approve_user', {
         p_user_id: u.id,
         p_role: assignment.role || 'staff',
-        p_department: assignment.department || null,
+        p_department: cleanDepartmentValue(assignment.department) || null,
         p_branch: assignment.branch || null,
         p_user_type: assignment.user_type || 'staff',
       })
@@ -313,7 +314,7 @@ export default function Users() {
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#009944] text-white text-xs font-medium hover:bg-[#007a36] disabled:opacity-50">
                         <Eye className="w-3.5 h-3.5" /> Review
                       </button>
-                      <button onClick={() => approveUser(u, { role: 'staff', department: u.department, branch: u.branch })} disabled={busyId === u.id}
+                      <button onClick={() => approveUser(u, { role: 'staff', department: cleanDepartmentValue(u.department), branch: u.branch })} disabled={busyId === u.id}
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-600 text-xs font-medium hover:bg-emerald-50 disabled:opacity-50">
                         <CheckCircle2 className="w-3.5 h-3.5" /> Approve
                       </button>
@@ -435,7 +436,7 @@ function CreateUserModal({ onClose, onCreated, actorRole, showToast }) {
           fullName: form.full_name,
           phone: form.phone || null,
           role: form.role || 'staff',
-          department: form.department || null,
+          department: cleanDepartmentValue(form.department) || null,
           branch: form.branch || null,
           userType: form.user_type || 'staff',
           employeeId: form.employeeId || null,
@@ -533,7 +534,10 @@ function ReviewUserModal({ user, onClose, onApprove, onReject, busyId, actorRole
         if (opts) setOptions(opts)
         if (employee) {
           setMatchedEmployee(employee)
-          const department = (employee.department && employee.department.trim()) || user?.department || ''
+          // MD/CEO, Chairman, Director… are ROLES, never departments. A role-like
+          // value carried on the employee/profile record is dropped so approval
+          // can never write a title back into the department column.
+          const department = cleanDepartmentValue((employee.department && employee.department.trim()) || user?.department || '')
           const branch = (employee.resolved_branch && employee.resolved_branch.trim()) || user?.branch || ''
           setAssignment((a) => ({ ...a, department, branch }))
         }
@@ -550,9 +554,14 @@ function ReviewUserModal({ user, onClose, onApprove, onReject, busyId, actorRole
 
   // Guarantee the current value is selectable even when the source lists are
   // missing it (messy/legacy data) — never silently drop HR's chosen value.
-  const deptOptions = options.departments.includes(assignment.department)
-    ? options.departments
-    : [...new Set([assignment.department, ...options.departments].filter(Boolean))]
+  // Role-like titles (MD/CEO, Chairman, Director…) are excluded here too: they
+  // are not departments and must not appear as a selectable option.
+  const selectedDepartment = cleanDepartmentValue(assignment.department)
+  const deptOptions = filterDepartmentOptions(
+    options.departments.includes(selectedDepartment)
+      ? options.departments
+      : [...new Set([selectedDepartment, ...options.departments].filter(Boolean))]
+  )
   const branchOptions = options.branches.includes(assignment.branch)
     ? options.branches
     : [...new Set([assignment.branch, ...options.branches].filter(Boolean))]
@@ -562,9 +571,9 @@ function ReviewUserModal({ user, onClose, onApprove, onReject, busyId, actorRole
   const useInputFallback = Boolean(optionsError) || (optionsLoading === false && deptOptions.length === 0)
 
   const DepartmentField = useInputFallback
-    ? <input className={inputCls} value={assignment.department} onChange={set('department')} placeholder="IT, Finance..." />
+    ? <input className={inputCls} value={selectedDepartment} onChange={set('department')} placeholder="IT, Finance..." />
     : (
-      <select className={inputCls} value={assignment.department} onChange={set('department')} disabled={optionsLoading}>
+      <select className={inputCls} value={selectedDepartment} onChange={set('department')} disabled={optionsLoading}>
         <option value="">Select department…</option>
         {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
       </select>

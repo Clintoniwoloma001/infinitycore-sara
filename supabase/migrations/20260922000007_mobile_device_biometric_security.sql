@@ -506,7 +506,7 @@ begin
   perform public.mobile_audit_log(
     'MOBILE_ATTENDANCE_AUTHORIZED',
     'AttendanceRecord',
-    (v_result ->> 'id')::text,
+    (v_result ->> 'attendance_id')::text,
     format('Clock-in authorized for employee %s on device %s', v_employee_id, p_device_id),
     'info'
   );
@@ -563,7 +563,7 @@ begin
   perform public.mobile_audit_log(
     'MOBILE_ATTENDANCE_AUTHORIZED',
     'AttendanceRecord',
-    (v_result ->> 'id')::text,
+    (v_result ->> 'attendance_id')::text,
     format('Clock-out authorized for employee %s on device %s', v_employee_id, p_device_id),
     'info'
   );

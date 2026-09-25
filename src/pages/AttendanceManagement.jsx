@@ -7,6 +7,7 @@ import { platformSettingsService } from '../services/platformSettingsService'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, EmptyState, ErrorState } from '../components/PageStates'
+import { filterDepartmentOptions } from '../constants/departments'
 import SaraBriefing from '../components/attendance/SaraBriefing'
 import TrendChart from '../components/attendance/TrendChart'
 import LocationAuditModal from '../components/attendance/LocationAuditModal'
@@ -200,7 +201,8 @@ function RecordsTab({ setNotice }) {
   }, [rows, filters.employeeId, filters.department, filters.branchId, activeDate])
 
   const departments = useMemo(() => {
-    return [...new Set(employees.map((e) => e.department).filter(Boolean))].sort()
+    // Executive titles (MD/CEO, Chairman, Director…) are roles, not departments.
+    return filterDepartmentOptions([...new Set(employees.map((e) => e.department).filter(Boolean))]).sort()
   }, [employees])
 
   const openCorrection = (row) => {

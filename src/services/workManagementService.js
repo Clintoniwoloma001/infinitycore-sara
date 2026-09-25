@@ -1,4 +1,5 @@
 import { supabase } from '../supabaseClient'
+import { filterDepartmentOptions } from '../constants/departments'
 
 // ------------------------------------------------------------------
 // Work Management Service — Tasks, KPIs, Targets, Work Plans,
@@ -252,7 +253,8 @@ export const workManagementService = {
       .neq('department', '')
       .eq('is_archived', false)
     if (error) throw error
-    const depts = [...new Set((data || []).map((d) => d.department))]
+    // Executive titles are roles, not departments (see constants/departments).
+    const depts = filterDepartmentOptions([...new Set((data || []).map((d) => d.department))])
     return depts
   },
 

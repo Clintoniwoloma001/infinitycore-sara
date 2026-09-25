@@ -75,6 +75,7 @@ assert.match(
   /useInputFallback[\s\S]{0,400}?<input className=\{inputCls\}/,
   'free-text fallback must remain when option lookup fails'
 )
-assert.match(users, /options\.departments\.includes\(assignment\.department\)/, 'current value must always stay selectable')
+assert.match(users, /options\.departments\.includes\(selectedDepartment\)/, 'current value must always stay selectable')
+assert.match(users, /filterDepartmentOptions\(\s*options\.departments\.includes/, 'role-like titles (MD/CEO, Chairman) must never be offered as a department')
 
 console.log('reinviteReviewModal: all assertions passed')

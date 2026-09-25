@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../supabaseClient'
-import { ROLES, ROLE_METADATA, ROLE_MODULES, ROLE_PERMISSIONS } from '../constants/roles'
+import { ROLES, ROLE_METADATA, ROLE_MODULES, ROLE_PERMISSIONS, isExecutiveViewerRole } from '../constants/roles'
 import { canTerminateEmployee, canArchiveEmployee, canDeleteEmployee } from '../services/terminationAuthorization'
 import { AUTH_REDIRECT_URL, SIGNUP_REDIRECT_URL } from '../config/siteUrl'
 
@@ -261,6 +261,11 @@ export function AuthProvider({ children }) {
     name: profile?.full_name || user?.email || 'User',
     email: user?.email,
     isAdmin: actualRole === ROLES.ADMIN || actualRole === ROLES.SUPER_ADMIN,
+    isDirector: actualRole === ROLES.DIRECTOR,
+    // MD/CEO, Chairman and Director are one executive audience.
+    isChairman: actualRole === ROLES.CHAIRMAN,
+    isMdCeo: actualRole === ROLES.MD_CEO,
+    isExecutiveViewer: isExecutiveViewerRole(actualRole),
     isManager: [ROLES.BRANCH_MANAGER, ROLES.AREA_MANAGER, ROLES.HEAD_OF_BUSINESS, ROLES.HEAD_OF_OPERATIONS, ROLES.HEAD_OF_E_BUSINESS, ROLES.FINANCIAL_CONTROLLER, ROLES.HEAD_OF_RISK_COMPLIANCE, ROLES.HEAD_OF_LEGAL, ROLES.HEAD_OF_AUDIT].includes(actualRole),
     isHR: [ROLES.HEAD_OF_HUMAN_RESOURCES, ROLES.HR_OFFICER].includes(actualRole),
     isCustomer: actualRole === ROLES.CUSTOMER,

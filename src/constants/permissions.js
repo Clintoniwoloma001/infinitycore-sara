@@ -49,6 +49,9 @@ export const PERMISSIONS = {
   PAYROLL_PUSH: 'payroll.push',
   PAYROLL_APPROVE: 'payroll.approve',
 
+  // Executive intelligence (read-only, server-authorized)
+  DIRECTOR_EXECUTIVE_READ: 'director.executive.read',
+
   // Data import & migration centre
   DATA_IMPORT_VIEW: 'data.import.view',
   DATA_IMPORT_EXECUTE: 'data.import.execute',
@@ -122,4 +125,5 @@ export const PERMISSION_CATEGORIES = {
   hr_config: 'HR Configuration',
   hr_org: 'HR Organisation',
   workforce: 'Workforce Intelligence',
+  director: 'Director Intelligence',
 }

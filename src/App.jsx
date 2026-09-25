@@ -7,8 +7,10 @@ import Layout from './components/Layout'
 import { AccessDenied, ComingSoonPage } from './components/PageStates'
 import ErrorBoundary from './components/ErrorBoundary'
 import { canAccessRoute, protectedRoutes } from './config/navigation'
+import { isExecutiveViewerRole } from './constants/roles'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
+import DirectorDashboard from './pages/DirectorDashboard'
 import Customers from './pages/Customers'
 import Loans from './pages/Loans'
 import Repayments from './pages/Repayments'
@@ -75,6 +77,7 @@ import PrivilegeManagement from './pages/PrivilegeManagement'
 
 const pageComponents = {
   Dashboard,
+  DirectorDashboard,
   Customers,
   Loans,
   Repayments,
@@ -201,8 +204,10 @@ function ProtectedModule({ route }) {
 }
 
 function Home() {
-  const { role } = useAuth()
-  return role === 'customer' ? <CustomerDashboard /> : <Dashboard />
+  const { actualRole } = useAuth()
+  // MD/CEO, Chairman and Director all land on the executive workspace.
+  if (isExecutiveViewerRole(actualRole)) return <DirectorDashboard />
+  return actualRole === 'customer' ? <CustomerDashboard /> : <Dashboard />
 }
 
 export default function App() {
