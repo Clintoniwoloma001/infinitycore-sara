@@ -1010,7 +1010,7 @@ must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
   - Second operator defect (same RPC, different key): `20260924000005_director_snapshot_roles_record_operator_fix.sql`
     reissues the RPC again for the `roles` aggregate. `jsonb_agg(x order by x->>'role')`
     failed with `operator does not exist: record ->> unknown`, because the
-    `x` subquery projects FOUR columns (`role`, `staff`, `kpi_completion`,
+    `x` subquery projects FIVE columns (`role`, `staff`, `kpi_completion`,
     `attendance_rate`, `target_completion`) so `x` is a **record**, not `jsonb`.
     Every call raised, even after 00004. Fixed to
     `jsonb_agg(to_jsonb(x) order by to_jsonb(x)->>'role')`, keeping the rows,
@@ -1027,6 +1027,22 @@ must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
     `roles` array. `tests/directorIntelligence.test.mjs` contains a structural
     guard that re-parses every `jsonb_agg(x order by … x->>…)` and fails if the
     fed subquery is not single-column or the row is not wrapped in `to_jsonb`.
+  - Third correction (applied live, recorded): `supabase/migrations/20260925160359_director_expected_attendance_20_days.sql`
+    — expected attendance is a FIXED **20 days for every employee**, not the length
+    of the selected date window. `(select count(*) from range_days)::int expected_days`
+    made "today" and a 1–2 day window show `expected = 1` and an inflated 100% rate.
+    The migration patches ONLY that one expression inside
+    `get_director_executive_snapshot` (`pg_get_functiondef` + `create or replace` via
+    `execute replace`), so the deployed body, owner, grants, `security definer` and
+    `search_path` are preserved; it aborts loudly if the expression is missing or
+    appears more than once, and is idempotent (already-fixed definition is a no-op).
+    Every consumer shares the same `expected_days` column, so the fix propagates to
+    staff rows, `attendance_rate`, and the summary/departments/branches/areas/roles
+    aggregates. Date filters still scope the ACTUAL attendance counts (`days_present`).
+    Verified live on `atzomqicwjufuxhfexxd` (migration `director_expected_attendance_20_days`,
+    version `20260925160359`): 211 staff, min = max = 20 expected days, 0 staff rows
+    whose rate differs from `present/20`, and the summary rate matching the recomputed
+    aggregate, for both the `today` and `month` windows.
 - **Department hygiene** — `src/constants/departments.js` (pure ESM, node-testable)
   is the single source of truth: `isRoleLikeDepartment`, `filterDepartmentOptions`,
   `cleanDepartmentValue`, `NON_DEPARTMENT_VALUES` (MD/CEO, MD, M.D., CEO,

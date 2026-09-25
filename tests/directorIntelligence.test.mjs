@@ -7,6 +7,24 @@ const repair = readFileSync('supabase/migrations/20260924000002_director_repayme
 const executiveMigration = readFileSync('supabase/migrations/20260924000003_chairman_md_ceo_roles_department_hygiene.sql', 'utf8')
 const jsonbFix = readFileSync('supabase/migrations/20260924000004_director_snapshot_jsonb_summary_fix.sql', 'utf8')
 const rolesFix = readFileSync('supabase/migrations/20260924000005_director_snapshot_roles_record_operator_fix.sql', 'utf8')
+const expectedDaysFix = readFileSync('supabase/migrations/20260925160359_director_expected_attendance_20_days.sql', 'utf8')
+const previousExpectedDays = '(select count(*) from range_days)::int expected_days'
+const fixedExpectedDays = '20::int expected_days'
+assert.ok(expectedDaysFix.includes(`v_previous text := '${previousExpectedDays}'`))
+assert.ok(expectedDaysFix.includes(`v_replacement text := '${fixedExpectedDays}'`))
+assert.match(expectedDaysFix, /pg_get_functiondef\(v_function\)/)
+assert.match(expectedDaysFix, /execute replace\(v_definition, v_previous, v_replacement\)/)
+assert.match(expectedDaysFix, /elsif strpos\(v_definition, v_replacement\) = 0 then/)
+assert.match(expectedDaysFix, /raise exception 'Director expected_days expression not found/)
+assert.equal(rolesFix.split(previousExpectedDays).length - 1, 1)
+const fixedSnapshot = rolesFix.replace(previousExpectedDays, fixedExpectedDays)
+assert.ok(fixedSnapshot.includes(fixedExpectedDays))
+assert.ok(!fixedSnapshot.includes(previousExpectedDays))
+assert.equal(fixedSnapshot.replace(fixedExpectedDays, previousExpectedDays), rolesFix,
+  'Expected-day correction must preserve all other RPC logic and access gates')
+assert.match(fixedSnapshot, /100\.0\*attendance_present\/expected_days/)
+assert.match(fixedSnapshot, /100\.0\*sum\(attendance_present\)\/nullif\(sum\(expected_days\),0\)/)
+
 const roles = readFileSync('src/constants/roles.js', 'utf8')
 const permissions = readFileSync('src/constants/permissions.js', 'utf8')
 const app = readFileSync('src/App.jsx', 'utf8')
