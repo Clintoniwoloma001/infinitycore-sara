@@ -23,6 +23,7 @@ import {
   currentYear,
 } from '../services/leaveBalanceService'
 import { computeLeaveInsights } from '../services/leaveInsightsService'
+import { leaveBookingService, describeWindow } from '../services/leaveBookingService'
 
 const EMPTY = { leave_type: 'annual', start_date: '', end_date: '', reason: '' }
 const daysBetween = (s, e) => (!s || !e) ? 0 : Math.max(Math.ceil((new Date(e) - new Date(s)) / 86400000) + 1, 0)
@@ -222,6 +223,44 @@ export default function LeaveRequests() {
   const oldestPendingHours = myQueue.length ? Math.max(...myQueue.map(pendingAgeHours)) : 0
   const agingCount = myQueue.filter((r) => pendingAgeHours(r) >= WARN_HOURS).length
 
+  const [bookings, setBookings] = useState([])
+  const [bookingWindow, setBookingWindow] = useState(14)
+  const [converting, setConverting] = useState(null)
+  const [bookingError, setBookingError] = useState(null)
+
+  const loadBookings = async () => {
+    try {
+      const res = await leaveBookingService.myBookings()
+      setBookings(res.bookings || [])
+      setBookingWindow(res.window_days ?? 14)
+    } catch {
+      // Bookings are supplementary; never block the requests page on them.
+      setBookings([])
+    }
+  }
+
+  useEffect(() => { loadBookings() }, [user])
+
+  const convertBooking = async (b) => {
+    if (!window.confirm(
+      `Turn your ${b.leave_type} booking (${b.start_date} to ${b.end_date}) into a formal `
+      + 'leave request?\n\nIt will go through the normal approval chain.',
+    )) return
+    setConverting(b.id); setBookingError(null)
+    try {
+      await leaveBookingService.convertToRequest(b.id)
+      await logAction({
+        action: 'leave_submitted', entityType: 'LeaveRequest',
+        details: `${b.leave_type} ${b.start_date}..${b.end_date} (from booking)`, userName,
+      })
+      await Promise.all([loadBookings(), load()])
+    } catch (e) {
+      setBookingError(e.message)
+    } finally {
+      setConverting(null)
+    }
+  }
+
   return (
     <div>
       <div className="flex justify-between items-end mb-6">
@@ -231,6 +270,55 @@ export default function LeaveRequests() {
         </div>
         <button onClick={() => { setOpen(true); setFormError(null) }} className="bg-[#009944] hover:bg-[#007a35] text-white px-4 py-2 rounded-lg text-sm flex items-center gap-1.5"><Plus className="w-4 h-4" /> Request Leave</button>
       </div>
+
+      {bookings.length > 0 && (
+        <div className="bg-white rounded-2xl border border-sky-200 p-5 mb-6">
+          <h3 className="font-semibold text-slate-800 mb-1 text-sm">Booked dates (planned)</h3>
+          <p className="text-xs text-slate-500 mb-3">
+            These are dates you reserved on the team calendar &mdash; <strong>not</strong> leave
+            requests. You can request one {describeWindow(bookingWindow)}.
+          </p>
+          {bookingError && (
+            <p className="mb-3 text-sm text-red-700">{bookingError}</p>
+          )}
+          <ul className="space-y-2">
+            {bookings.map((b) => (
+              <li key={b.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2.5">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-slate-900">
+                    {LEAVE_TYPE_LABELS[b.leave_type] || b.leave_type}
+                    <span className="ml-2 font-normal text-slate-600">
+                      {formatDate(b.start_date)} &rarr; {formatDate(b.end_date)}
+                    </span>
+                    <span className="ml-2 text-xs text-slate-400">
+                      {b.working_days} working day{Number(b.working_days) === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500">{b.status_message}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {b.status === 'requested' ? (
+                    <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-800">
+                      Requested
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => convertBooking(b)}
+                      // Disabled outside the window. The server enforces the same
+                      // rule, so this is the courtesy, not the control.
+                      disabled={!b.can_request || converting === b.id}
+                      title={b.status_message}
+                      className="rounded-lg bg-[#009944] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#007a35] disabled:cursor-not-allowed disabled:bg-slate-300">
+                      {converting === b.id ? 'Requesting...' : 'Request this leave'}
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
         <h3 className="font-semibold text-slate-800 mb-3 text-sm">My Leave Balance · {currentYear()}</h3>

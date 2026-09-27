@@ -2,6 +2,7 @@ import React from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth, AuthProvider } from './hooks/useAuth'
 import AttendanceTerminal from './pages/AttendanceTerminal'
+import LeaveBooking from './pages/LeaveBooking'
 import TrainingAttendance from './pages/TrainingAttendance'
 import Layout from './components/Layout'
 import { AccessDenied, ComingSoonPage } from './components/PageStates'
@@ -233,6 +234,7 @@ function AppRoutes() {
       <Route path="/activate-account" element={<ActivateAccount />} />
       <Route path="/certificate/verify/:certificateNumber" element={<CertificateVerification />} />
       <Route path="/attendance-terminal" element={<AttendanceTerminal />} />
+      <Route path="/leave-booking/:token" element={<LeaveBooking />} />
       <Route path="/training-attendance/:token" element={<TrainingAttendance />} />
       <Route path="/" element={<Protected><Home /></Protected>} />
       <Route path="/onboarding/:token" element={<OnboardingForm />} />

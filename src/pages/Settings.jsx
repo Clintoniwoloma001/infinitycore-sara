@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState } from '../components/PageStates'
 import { leaveRulesService, LEAVE_TYPE_LABELS, EMPLOYEE_CATEGORIES } from '../services/leaveRulesService'
 import { getApprovalWorkflow, saveApprovalWorkflow, WORKFLOW_ROLES } from '../services/leaveApprovalsService'
+import { leaveBookingService, describeWindow } from '../services/leaveBookingService'
 import PlatformSettings from './PlatformSettings'
 import { performanceService } from '../services/performanceService'
 import { supabase } from '../supabaseClient'
@@ -115,6 +116,7 @@ function LeaveRulesTab({ canManage }) {
   return (
     <div>
       <LeaveWorkflowBuilder canManage={canManage} />
+      <LeaveBookingWindowCard canManage={canManage} />
 
       <div className="flex items-center justify-between mb-4 mt-8">
         <p className="text-sm text-slate-500">Leave entitlements by employee category. These replace hardcoded values — HR can update without code changes.</p>
@@ -811,6 +813,97 @@ function TransportAllowanceTab({ canManage }) {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ---- Leave booking eligibility window (Leave Rules tab) -------------------
+// How far ahead of a booked leave start date the employee may turn that
+// booking into a real request. Gated by the same server permission as the rest
+// of the leave configuration, and every change is audited with a reason.
+function LeaveBookingWindowCard({ canManage }) {
+  const [value, setValue] = useState('14')
+  const [unit, setUnit] = useState('days')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const w = await leaveBookingService.getWindow()
+        setValue(String(w.value ?? 14))
+        setUnit(w.unit || 'days')
+      } catch { /* leave the defaults visible */ }
+    })()
+  }, [])
+
+  const save = async (e) => {
+    e.preventDefault()
+    setMsg(null)
+    if (reason.trim().length < 5) {
+      return setMsg({ tone: 'error', text: 'Record why this is changing (at least 5 characters).' })
+    }
+    setBusy(true)
+    try {
+      const res = await leaveBookingService.saveWindow({
+        value: Number(value), unit, reason: reason.trim(),
+      })
+      setReason('')
+      setMsg({ tone: 'ok', text: `Saved. Employees can now request booked leave ${describeWindow(res.days)}.` })
+    } catch (err) {
+      setMsg({ tone: 'error', text: err.message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-6">
+      <h3 className="font-semibold text-slate-800 text-sm mb-1">Leave booking window</h3>
+      <p className="text-xs text-slate-500 mb-4">
+        When a member of staff reserves planned dates on the team calendar, the
+        &ldquo;Request this leave&rdquo; button stays disabled until this far before the booked
+        start date. Too far ahead gives approvers little notice; too short leaves staff no time
+        to plan.
+      </p>
+      <form onSubmit={save} className="flex flex-wrap items-end gap-3">
+        <label className="block text-sm">
+          <span className="font-medium text-slate-700">Amount</span>
+          <input type="number" min="0" max="365" disabled={!canManage}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="mt-1 w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        </label>
+        <label className="block text-sm">
+          <span className="font-medium text-slate-700">Unit</span>
+          <select disabled={!canManage} value={unit}
+            onChange={(e) => setUnit(e.target.value)}
+            className="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm">
+            <option value="days">days before</option>
+            <option value="weeks">weeks before</option>
+          </select>
+        </label>
+        {canManage && (
+          <label className="block text-sm flex-1 min-w-48">
+            <span className="font-medium text-slate-700">Reason (audited)</span>
+            <input value={reason} onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Aligning with the quarterly planning cycle"
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          </label>
+        )}
+        {canManage && (
+          <button type="submit" disabled={busy}
+            className="rounded-lg bg-[#009944] px-4 py-2 text-sm font-medium text-white hover:bg-[#007a36] disabled:opacity-50">
+            {busy ? 'Saving...' : 'Save window'}
+          </button>
+        )}
+      </form>
+      {msg && (
+        <p className={`mt-3 text-sm ${msg.tone === 'ok' ? 'text-emerald-700' : 'text-red-700'}`}>
+          {msg.text}
+        </p>
       )}
     </div>
   )

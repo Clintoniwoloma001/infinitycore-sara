@@ -27,3 +27,17 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     </ThemeProvider>
   </React.StrictMode>
 )
+
+// PWA: register the app-shell service worker so the app can be installed and
+// opens offline. Production only — in dev a cached shell would fight HMR and
+// serve stale modules.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    // Respect the deployment base (/infinitycore-sara/ on GitHub Pages).
+    const url = `${import.meta.env.BASE_URL}sw.js`
+    navigator.serviceWorker.register(url).catch(() => {
+      // A failed registration must never break the app; it only means no
+      // offline shell and no install prompt.
+    })
+  })
+}

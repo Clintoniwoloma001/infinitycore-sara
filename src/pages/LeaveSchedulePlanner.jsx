@@ -6,7 +6,7 @@
 // explanations and the alternative dates all come from Postgres, so this page
 // and the mobile app can never disagree about a number.
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { CalendarRange, AlertTriangle, CheckCircle2, Users } from 'lucide-react'
+import { CalendarRange, AlertTriangle, CheckCircle2, Users, Link2 } from 'lucide-react'
 import {
   leavePlannerService, formatLeaveRange, eachDay, isoToday, isoDayOffset,
 } from '../services/leavePlannerService'
@@ -18,6 +18,7 @@ import CapacityRuleEditor from '../components/leave/CapacityRuleEditor'
 import PlannerFilters from '../components/leave/PlannerFilters'
 import OverviewCards from '../components/leave/OverviewCards'
 import ExportButtons from '../components/leave/ExportButtons'
+import BookingLinkManager from '../components/leave/BookingLinkManager'
 
 const RANGES = [
   { id: 'week', label: 'This week', from: () => isoDayOffset(-3), to: () => isoDayOffset(3) },
@@ -40,6 +41,7 @@ export default function LeaveSchedulePlanner() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState('timeline')
+  const [linksOpen, setLinksOpen] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -84,7 +86,15 @@ export default function LeaveSchedulePlanner() {
             {isPlanner ? '' : ' · showing your own leave only'}
           </p>
         </div>
-        {isPlanner && <ExportButtons data={data} from={from} to={to} />}
+        {isPlanner && (
+          <div className="flex flex-wrap items-center gap-2 print:hidden">
+            <button onClick={() => setLinksOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+              <Link2 className="w-4 h-4" />Booking links
+            </button>
+            <ExportButtons data={data} from={from} to={to} />
+          </div>
+        )}
       </header>
 
       <OverviewCards
@@ -131,6 +141,8 @@ export default function LeaveSchedulePlanner() {
           {tab === 'rules' && isPlanner && <CapacityRuleEditor onChanged={load} />}
         </>
       )}
+
+      <BookingLinkManager open={linksOpen} onClose={() => setLinksOpen(false)} />
     </div>
   )
 }

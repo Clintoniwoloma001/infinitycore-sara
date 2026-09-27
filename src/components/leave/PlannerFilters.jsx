@@ -1,6 +1,7 @@
 // Every filter here narrows the SERVER query. None of them is decorative, and
 // none is left un-wired.
 import React from 'react'
+import LeaveTypeSelect from './LeaveTypeSelect'
 
 const field = 'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
 const label = 'block text-sm'
@@ -33,8 +34,14 @@ export default function PlannerFilters({
 
       <label className={label}>
         <span className="font-medium text-slate-700">Leave type</span>
-        <input type="text" className={field} value={filters.leaveType}
-          placeholder="e.g. annual" onChange={set('leaveType')} />
+        {/* A real list, not free text: a typed "Annual" vs "annual" would
+            silently return nothing from the server filter. */}
+        <LeaveTypeSelect
+          value={filters.leaveType}
+          onChange={set('leaveType')}
+          allowAny
+          className={field}
+        />
       </label>
 
       <label className={label}>

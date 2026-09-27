@@ -8,6 +8,7 @@ import { CheckCircle2, AlertTriangle, XCircle, CalendarClock } from 'lucide-reac
 import { leavePlannerService, formatLeaveRange, isoToday } from '../../services/leavePlannerService'
 import { supabase } from '../../supabaseClient'
 import ResultPanel from './AvailabilityResult'
+import LeaveTypeSelect from './LeaveTypeSelect'
 
 const field = 'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
 
@@ -106,8 +107,9 @@ export default function AvailabilityChecker({ onChecked }) {
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="block text-sm">
             <span className="font-medium text-slate-700">Leave type</span>
-            <input type="text" value={leaveType} onChange={(e) => setLeaveType(e.target.value)}
-              className={field} />
+            {/* The same catalogue the rest of the app uses, so the check runs
+                against a real leave type rather than whatever was typed. */}
+            <LeaveTypeSelect value={leaveType} onChange={setLeaveType} className={field} />
           </label>
           <label className="block text-sm">
             <span className="font-medium text-slate-700">From</span>

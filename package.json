@@ -58,6 +58,7 @@
     "test:terminal-gate-field": "node tests/terminalGateFieldFix.test.mjs",
     "test:director-intelligence": "node tests/directorIntelligence.test.mjs",
     "test:chairman-role": "node tests/chairmanRoleDepartments.test.mjs",
+    "test:leave-booking": "node tests/phase70bLeaveBooking.test.mjs",
     "test:phase70-attendance-leave": "node tests/phase70AttendanceTrackingLeave.test.mjs",
     "test:acceptance-db": "sh tests/acceptance/run.sh"
   },
