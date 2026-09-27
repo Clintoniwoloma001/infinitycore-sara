@@ -52,6 +52,21 @@ export const PERMISSIONS = {
   // Executive intelligence (read-only, server-authorized)
   DIRECTOR_EXECUTIVE_READ: 'director.executive.read',
 
+  // Employee Tracking (Phase 70). The server is authoritative via
+  // employee_tracking_access(); these keys drive UI affordances only. A
+  // delegated grant works even when the viewer does not hold the key, because
+  // the RPC is what actually decides.
+  TRACKING_VIEW: 'tracking.view',
+  TRACKING_MANAGE: 'tracking.manage',
+  TRACKING_SHARE: 'tracking.share',
+
+  // Leave Schedule Planner (Phase 70). Capacity rules and schedule publication
+  // are administrative; the planner itself is readable by HR and by the
+  // employees whose own leave it shows.
+  LEAVE_SCHEDULE_VIEW: 'leave.schedule.view',
+  LEAVE_SCHEDULE_MANAGE: 'leave.schedule.manage',
+  LEAVE_SCHEDULE_CONFIGURE: 'leave.schedule.configure',
+
   // Data import & migration centre
   DATA_IMPORT_VIEW: 'data.import.view',
   DATA_IMPORT_EXECUTE: 'data.import.execute',
@@ -126,4 +141,6 @@ export const PERMISSION_CATEGORIES = {
   hr_org: 'HR Organisation',
   workforce: 'Workforce Intelligence',
   director: 'Director Intelligence',
+  tracking: 'Employee Tracking',
+  leave_config: 'Leave Configuration',
 }

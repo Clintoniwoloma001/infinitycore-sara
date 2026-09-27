@@ -74,10 +74,14 @@ import PerformanceImprovementPlans from './pages/PerformanceImprovementPlans'
 import CertificateVerification from './pages/CertificateVerification'
 import ActivateAccount from './pages/ActivateAccount'
 import PrivilegeManagement from './pages/PrivilegeManagement'
+import EmployeeTracking from './pages/EmployeeTracking'
+import LeaveSchedulePlanner from './pages/LeaveSchedulePlanner'
 
 const pageComponents = {
   Dashboard,
   DirectorDashboard,
+  EmployeeTracking,
+  LeaveSchedulePlanner,
   Customers,
   Loans,
   Repayments,

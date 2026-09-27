@@ -57,12 +57,15 @@
     "test:clock-in-canonical": "node tests/attendanceClockInCanonical.test.mjs",
     "test:terminal-gate-field": "node tests/terminalGateFieldFix.test.mjs",
     "test:director-intelligence": "node tests/directorIntelligence.test.mjs",
-    "test:chairman-role": "node tests/chairmanRoleDepartments.test.mjs"
+    "test:chairman-role": "node tests/chairmanRoleDepartments.test.mjs",
+    "test:phase70-attendance-leave": "node tests/phase70AttendanceTrackingLeave.test.mjs",
+    "test:acceptance-db": "sh tests/acceptance/run.sh"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",
     "hermes": "^0.4.4",
     "html2pdf.js": "^0.10.3",
+    "jspdf": "^2.5.2",
     "lucide-react": "^0.475.0",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
