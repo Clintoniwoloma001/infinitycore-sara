@@ -3,6 +3,8 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth, AuthProvider } from './hooks/useAuth'
 import AttendanceTerminal from './pages/AttendanceTerminal'
 import LeaveBooking from './pages/LeaveBooking'
+import Audit from './pages/Audit'
+import AutomationCommandCentre from './pages/AutomationCommandCentre'
 import TrainingAttendance from './pages/TrainingAttendance'
 import Layout from './components/Layout'
 import { AccessDenied, ComingSoonPage } from './components/PageStates'
@@ -48,6 +50,7 @@ import Chat from './pages/Chat'
 import MessagesPage from './components/messages/MessagesPage'
 import CommunicationAdmin from './pages/CommunicationAdmin'
 import BankOneImportCenter from './pages/BankOneImportCenter'
+import BankOneImportReview from './pages/BankOneImportReview'
 import BankOneIntegration from './pages/BankOneIntegration'
 import Performance from './pages/Performance'
 import Reconciliation from './pages/Reconciliation'
@@ -81,6 +84,8 @@ import LeaveSchedulePlanner from './pages/LeaveSchedulePlanner'
 const pageComponents = {
   Dashboard,
   DirectorDashboard,
+  Audit,
+  AutomationCommandCentre,
   EmployeeTracking,
   LeaveSchedulePlanner,
   Customers,
@@ -115,6 +120,7 @@ const pageComponents = {
   MessagesPage,
   CommunicationAdmin,
   BankOneImportCenter,
+  BankOneImportReview,
   BankOneIntegration,
   Performance,
   Reconciliation,

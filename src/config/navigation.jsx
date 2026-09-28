@@ -39,6 +39,7 @@ import {
   Crown,
 } from 'lucide-react'
 import { PERMISSIONS } from '../constants/permissions'
+import { DEPARTMENTS } from './navigationConfig'
 
 export const routeConfig = [
   {
@@ -50,11 +51,13 @@ export const routeConfig = [
       { label: 'Messages', path: '/chat', icon: MessageSquare, element: 'MessagesPage', permissions: [] },
       { label: 'Comm Admin', path: '/communication-admin', icon: Landmark, element: 'CommunicationAdmin', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
       { label: 'BankOne Imports', path: '/bankone-imports', icon: Database, element: 'BankOneImportCenter', permissions: [PERMISSIONS.BANKONE_READ] },
+      { label: 'Portfolio Import Review', path: '/bankone-portfolio-review', icon: ShieldCheck, element: 'BankOneImportReview', permissions: [PERMISSIONS.BANKONE_READ] },
       { label: 'BankOne Integration', path: '/bankone-integration', icon: Building2, element: 'BankOneIntegration', permissions: [PERMISSIONS.BANKONE_READ] },
     ],
   },
   {
     section: 'Employee 360',
+    department: DEPARTMENTS.HR,
     items: [
       { label: 'Employees', path: '/employees', icon: UserCheck, element: 'Employees', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'Leave Requests', path: '/leave-requests', icon: CalendarDays, element: 'LeaveRequests', permissions: [] },
@@ -67,6 +70,7 @@ export const routeConfig = [
   },
   {
     section: 'Performance',
+    department: DEPARTMENTS.HR,
     items: [
       { label: 'Performance', path: '/performance', icon: TrendingUp, element: 'Performance', permissions: [PERMISSIONS.PERFORMANCE_READ] },
       { label: 'PIP', path: '/performance-improvement-plans', icon: TrendingDown, element: 'PerformanceImprovementPlans', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
@@ -75,6 +79,7 @@ export const routeConfig = [
   },
   {
     section: 'HR',
+    department: DEPARTMENTS.HR,
     items: [
       { label: 'HR Dashboard', path: '/hr-dashboard', icon: BriefcaseBusiness, element: 'HRDashboard', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'HR Organisation', path: '/hr-organisation', icon: Network, element: 'HROrganisation', permissions: [PERMISSIONS.HR_ORG_MANAGE] },
@@ -99,6 +104,7 @@ export const routeConfig = [
   },
   {
     section: 'Reconciliation',
+    department: DEPARTMENTS.FINANCE,
     items: [
       { label: 'Reconciliation', path: '/reconciliation', icon: ShieldCheck, element: 'Reconciliation', permissions: [PERMISSIONS.RECONCILIATION_READ] },
     ],
@@ -112,6 +118,19 @@ export const routeConfig = [
       { label: 'User Management', path: '/users', icon: UserCog, element: 'Users', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
       { label: 'Access & Privileges', path: '/privileges', icon: ShieldCheck, element: 'PrivilegeManagement', permissions: [PERMISSIONS.PRIVILEGES_MANAGE] },
       { label: 'Platform Reset', path: '/platform-reset', icon: Eraser, element: 'PlatformReset', permissions: [PERMISSIONS.ADMIN_PLATFORM_RESET] },
+    ],
+  },
+  {
+    section: 'Audit & Compliance',
+    department: DEPARTMENTS.AUDIT,
+    items: [
+      { label: 'Audit Workspace', path: '/audit', icon: ShieldCheck, element: 'Audit', permissions: [PERMISSIONS.AUDIT_MONITORING_READ] },
+    ],
+  },
+  {
+    section: 'Automation',
+    items: [
+      { label: 'Command Centre', path: '/automation', icon: Gauge, element: 'AutomationCommandCentre', permissions: [PERMISSIONS.AUTOMATION_PORTFOLIO_READ] },
     ],
   },
   {
