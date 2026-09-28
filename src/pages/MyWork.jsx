@@ -1,6 +1,9 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useCallback } from 'react'
 import { useAuth } from '../hooks/useAuth'
 import { workTaskService } from '../services/workTaskService'
+import { workEngineService } from '../services/workEngineService'
+import ProgressLogger from '../components/work/ProgressLogger'
+import { SlaBadge, RateIndicator, RateBar, TaskStatusChip } from '../components/work/WorkPrimitives'
 import { targetService } from '../services/targetService'
 import { kpiService } from '../services/kpiService'
 import { attendanceService } from '../services/attendanceService'
@@ -72,6 +75,16 @@ export default function MyWork() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
   const [submitSuccess, setSubmitSuccess] = useState('')
+  // Step-engine state: the authoritative per-step view of my own work.
+  const [engine, setEngine] = useState(null)
+  const [engineError, setEngineError] = useState(null)
+  const [loggingTask, setLoggingTask] = useState(null)
+
+  const loadEngine = useCallback(async () => {
+    if (!user?.id) return
+    try { setEngine(await workEngineService.myWork()); setEngineError(null) }
+    catch (e) { setEngineError(e.message) }
+  }, [user?.id])
 
   const load = async () => {
     if (!user?.id) return
@@ -97,6 +110,7 @@ export default function MyWork() {
   }
 
   useEffect(() => { load() }, [user?.id])
+  useEffect(() => { loadEngine() }, [loadEngine])
 
   const overdueTasks = useMemo(() => tasks.filter((t) => t.due_date && new Date(t.due_date) < new Date() && !['completed', 'cancelled'].includes(t.status)), [tasks])
   // Submission review queue: tasks that have a submission still in under_review.
@@ -105,8 +119,14 @@ export default function MyWork() {
     return tasks.filter((t) => pendingIds.has(t.id))
   }, [tasks, submissions])
   const completedTasks = useMemo(() => tasks.filter((t) => t.status === 'completed'), [tasks])
-  // Tasks remain in My Tasks after every submit (status is never flipped to 'submitted').
-  const activeTasks = useMemo(() => tasks.filter((t) => ['assigned', 'accepted', 'in_progress', 'rejected'].includes(t.status)), [tasks])
+  // Tasks must REMAIN visible after every submit, including while a submission
+  // is under review and while a rejected step is awaiting correction. The old
+  // filter omitted 'under_review' and 'needs_revision', which made tasks VANISH
+  // from My Tasks precisely when the employee most needed to see them.
+  // 'submitted'/'completed'/'cancelled'/'overdue' are handled by other tabs.
+  const activeTasks = useMemo(() => tasks.filter((t) =>
+    ['assigned', 'accepted', 'in_progress', 'rejected', 'under_review', 'needs_revision', 'overdue']
+      .includes(t.status)), [tasks])
 
   const openSubmit = (task) => {
     const items = Array.isArray(task.instruction_items) ? task.instruction_items : splitInstructions(task.instructions, task.id)
@@ -212,6 +232,93 @@ export default function MyWork() {
         <StatCard icon={AlertCircle} label="Overdue" value={overdueTasks.length} color="#ef4444" />
         <StatCard icon={CheckCircle2} label="Completed" value={stats.completed ?? 0} color="#10b981" />
       </div>
+
+      {/* Step engine: the weighted KPI score and per-task deliverables.
+          Everything here is server-computed - this view only displays it. */}
+      {engineError ? (
+        <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Detailed task progress is unavailable right now ({engineError}). The task list below still works.
+        </p>
+      ) : engine && (
+        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-800">My performance</h2>
+            <span className="text-xs text-slate-500">
+              Weighted KPI score{' '}
+              <span className="text-sm font-bold text-slate-900">
+                {Number(engine.kpi_score ?? 0).toFixed(1)}%
+              </span>
+            </span>
+          </div>
+          <RateBar value={engine.kpi_score} />
+
+          <ul className="mt-4 space-y-2">
+            {(engine.tasks || []).filter((t) => t.status !== 'completed').map((t) => {
+              const pending = (t.reports || []).find((r) => r.status === 'pending_review')
+              return (
+                <li key={t.id} className="rounded-xl border border-slate-100 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-900">{t.title}</div>
+                      <div className="text-xs text-slate-500">
+                        {(t.steps || []).length} deliverable{(t.steps || []).length === 1 ? '' : 's'}
+                        {t.department ? ` · ${t.department}` : ''}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <RateIndicator
+                        approved={t.calculated_completion_rate}
+                        pending={pending?.pending_percentage}
+                        hasPending={!!pending}
+                      />
+                      <TaskStatusChip status={t.status} />
+                      {t.sla_state && t.sla_state !== 'none' && (
+                        <SlaBadge state={t.sla_state} deadline={t.sla_review_deadline} />
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-2"><RateBar value={t.calculated_completion_rate} tone="violet" /></div>
+
+                  {(t.steps || []).length > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {t.steps.map((s) => (
+                        <li key={s.id} className="flex items-center justify-between gap-2 text-xs text-slate-600">
+                          <span className="truncate">{s.title}</span>
+                          <span className="shrink-0 tabular-nums text-slate-500">
+                            {s.target_type === 'numerical'
+                              ? `${Number(s.current_value ?? 0).toLocaleString()} / ${Number(s.target_value).toLocaleString()}`
+                              : (s.is_completed ? 'Done' : 'Not done')}
+                            {' · '}
+                            <span className="font-medium text-slate-700">{Number(s.calculated_step_rate).toFixed(0)}%</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {!t.has_pending_report && t.status !== 'completed' && (
+                    <button
+                      onClick={() => setLoggingTask(t)}
+                      className="mt-2 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Log progress
+                    </button>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
+
+      {loggingTask && (
+        <ProgressLogger
+          task={loggingTask}
+          onClose={() => setLoggingTask(null)}
+          onSubmitted={() => { loadEngine(); load() }}
+        />
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 overflow-x-auto pb-3 mb-4">

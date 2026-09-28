@@ -8,7 +8,7 @@ import { canTerminateEmployee } from './terminationAuthorization'
 //
 // 1. Deterministic parser first (offline, free, predictable).
 // 2. Only when that fails, ask the server-side `sara-intent` Edge
-//    Function (OpenAI) to extract {intent, entities, criteria, ...}.
+//    Function (through the shared provider router) to extract
 //
 // The Edge Function AUTHENTICATES the caller and derives the allowed
 // intent list server-side from the user's own permissions. It returns

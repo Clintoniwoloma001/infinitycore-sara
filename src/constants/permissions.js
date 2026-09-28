@@ -66,6 +66,10 @@ export const PERMISSIONS = {
   LEAVE_SCHEDULE_VIEW: 'leave.schedule.view',
   LEAVE_SCHEDULE_MANAGE: 'leave.schedule.manage',
   LEAVE_SCHEDULE_CONFIGURE: 'leave.schedule.configure',
+  AUDIT_MONITORING_READ: 'audit.monitoring.read',
+  AUDIT_MONITORING_MANAGE: 'audit.monitoring.manage',
+  AUTOMATION_PORTFOLIO_READ: 'automation.portfolio.read',
+  AUTOMATION_PORTFOLIO_MANAGE: 'automation.portfolio.manage',
 
   // Data import & migration centre
   DATA_IMPORT_VIEW: 'data.import.view',

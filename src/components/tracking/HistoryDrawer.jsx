@@ -1,30 +1,64 @@
-// Movement history for one employee on one day.
+// Movement history for one employee.
 //
-// The polyline and the timeline are both drawn from the SAME array of recorded
-// points the server returned. No route between two points is ever inferred, and
-// with fewer than two points there is deliberately no line at all.
-import React, { useEffect, useMemo, useState } from 'react'
-import { X, Map as MapIcon } from 'lucide-react'
+// The map, the timeline and the summary are all drawn from the SAME array of
+// recorded points the server returned. No route between two points is ever
+// inferred, and with fewer than two points there is deliberately no line.
+//
+// Filtering is done by the SERVER (employee_location_history takes a date plus
+// an optional from/to time window). The client never slices the result itself,
+// so what is drawn is exactly what was authorised and audited.
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { X, Map as MapIcon, Filter, RotateCcw } from 'lucide-react'
 import {
   trackingService, formatCoord, formatClockTime, buildMovementTimeline,
+  describeGeofenceStatus,
 } from '../../services/employeeTrackingService'
 import { LoadingState, ErrorState } from '../PageStates'
-import RecordedPath from './RecordedPath'
+import TrackingMap from './TrackingMap'
+import MovementSummary from './MovementSummary'
+
+const PRESETS = [
+  { id: 'all', label: 'Whole day', from: '', to: '' },
+  { id: 'morning', label: 'Morning (00:00–12:00)', from: '00:00', to: '12:00' },
+  { id: 'afternoon', label: 'Afternoon (12:00–18:00)', from: '12:00', to: '18:00' },
+]
 
 export default function HistoryDrawer({ row, onClose }) {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [fromTime, setFromTime] = useState('')
+  const [toTime, setToTime] = useState('')
+  const [insideOnly, setInsideOnly] = useState('all')
   const [points, setPoints] = useState([])
+  const [geofences, setGeofences] = useState([])
+  const [timezone, setTimezone] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [active, setActive] = useState(null)
 
+  // Geofence circles come from the engine's own registry, fetched once.
   useEffect(() => {
     let alive = true
-    setLoading(true); setError(null)
+    trackingService.geofences()
+      .then((g) => { if (alive) setGeofences(g) })
+      .catch(() => { if (alive) setGeofences([]) })
+    return () => { alive = false }
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true); setError(null); setActive(null)
     ;(async () => {
       try {
-        const res = await trackingService.history(row.employee_id, date)
-        if (alive) setPoints(res.points || [])
+        const res = await trackingService.history(row.employee_id, date, {
+          // Empty strings mean "no bound", which the RPC treats as unbounded.
+          fromTime: fromTime || null,
+          toTime: toTime || null,
+          insideOnly,
+        })
+        if (alive) {
+          setPoints(res.points || [])
+          setTimezone(res.timezone || null)
+        }
       } catch (e) {
         if (alive) setError(e.message)
       } finally {
@@ -32,9 +66,20 @@ export default function HistoryDrawer({ row, onClose }) {
       }
     })()
     return () => { alive = false }
-  }, [row.employee_id, date])
+  }, [row.employee_id, date, fromTime, toTime, insideOnly])
 
   const timeline = useMemo(() => buildMovementTimeline(points), [points])
+
+  const applyPreset = useCallback((preset) => {
+    setFromTime(preset.from)
+    setToTime(preset.to)
+  }, [])
+
+  const resetFilters = useCallback(() => {
+    setFromTime(''); setToTime(''); setInsideOnly('all')
+  }, [])
+
+  const filtered = fromTime || toTime || insideOnly !== 'all'
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -53,35 +98,87 @@ export default function HistoryDrawer({ row, onClose }) {
         </div>
 
         <div className="px-5 py-4 space-y-5">
-          <label className="block text-sm">
-            <span className="font-medium text-slate-700">Date</span>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-              className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-          </label>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="block text-sm">
+              <span className="font-medium text-slate-700">Date</span>
+              <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+                className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </label>
+
+            <label className="block text-sm">
+              <span className="font-medium text-slate-700">From time</span>
+              <input type="time" value={fromTime} onChange={(e) => setFromTime(e.target.value)}
+                className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </label>
+
+            <label className="block text-sm">
+              <span className="font-medium text-slate-700">To time</span>
+              <input type="time" value={toTime} onChange={(e) => setToTime(e.target.value)}
+                className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {PRESETS.map((p) => {
+              const activePreset = fromTime === p.from && toTime === p.to
+              return (
+                <button key={p.id} onClick={() => applyPreset(p)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium border ${
+                    activePreset
+                      ? 'border-[#009944] bg-emerald-50 text-[#009944]'
+                      : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                  {p.label}
+                </button>
+              )
+            })}
+
+            <select value={insideOnly} onChange={(e) => setInsideOnly(e.target.value)}
+              className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600">
+              <option value="all">All points</option>
+              <option value="inside">Inside geofence only</option>
+              <option value="outside">Outside geofence only</option>
+            </select>
+
+            {filtered && (
+              <button onClick={resetFilters}
+                className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium text-slate-500 hover:bg-slate-50">
+                <RotateCcw className="w-3 h-3" />Reset
+              </button>
+            )}
+          </div>
 
           {loading && <LoadingState label="Loading history..." />}
           {error && <ErrorState title="Unable to load history" message={error} />}
 
           {!loading && !error && (
             <>
-              <p className="text-sm text-slate-600">
+              <p className="flex items-center gap-1.5 text-sm text-slate-600">
+                <Filter className="w-3.5 h-3.5 text-slate-400" />
                 {points.length
-                  ? `${points.length} recorded point${points.length === 1 ? '' : 's'} on ${date}`
-                  : `No points recorded on ${date}`}
+                  ? `${points.length} recorded point${points.length === 1 ? '' : 's'} on ${date}${filtered ? ' (filtered)' : ''}`
+                  : `No points recorded on ${date}${filtered ? ' for this time window' : ''}`}
               </p>
 
-              {points.length > 1 && (
+              {points.length > 0 && (
                 <section>
                   <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-2">
                     <MapIcon className="w-4 h-4" />Recorded path
                   </h3>
-                  <RecordedPath points={points} onSelect={setActive} />
+                  <TrackingMap
+                    points={points}
+                    geofences={geofences}
+                    activeId={active?.id ?? null}
+                    onSelect={setActive}
+                  />
                   <p className="mt-1.5 text-xs text-slate-500">
                     Straight lines connect consecutive recorded observations only. No route
-                    between points is inferred.
+                    between points is inferred. Select a marker to see its address.
                   </p>
+                  <MapLegend />
                 </section>
               )}
+
+              <MovementSummary points={points} timezone={timezone} />
 
               {active && <PointDetail row={row} point={active} />}
 
@@ -122,21 +219,47 @@ export default function HistoryDrawer({ row, onClose }) {
 }
 
 function PointDetail({ row, point }) {
+  const status = describeGeofenceStatus(point)
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
       <p className="font-semibold text-slate-800">
         {row.full_name} · {formatClockTime(point.recorded_at)}
       </p>
       <p className="mt-1 text-slate-700">
-        Location: {point.location_label || 'Outside registered locations'}
+        Location: {status.text}
       </p>
+      {status.detail && (
+        <p className="text-slate-600">{status.detail}</p>
+      )}
       <p className="font-mono text-slate-600">
         {formatCoord(point.latitude)}, {formatCoord(point.longitude)}
       </p>
       <p className="text-slate-600">
         Accuracy: {point.accuracy != null ? `±${Math.round(point.accuracy)}m` : '—'}
         {' · '}Geofence: {point.inside_geofence ? 'Inside' : 'Outside'}
+        {point.source && ` · Source: ${point.source}`}
       </p>
     </div>
+  )
+}
+
+/** Explains the map symbols so a colour is never the only signal. */
+function MapLegend() {
+  return (
+    <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+      <li className="flex items-center gap-1.5">
+        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" aria-hidden />Inside a geofence
+      </li>
+      <li className="flex items-center gap-1.5">
+        <span className="w-2.5 h-2.5 rounded-full bg-amber-500" aria-hidden />Outside every geofence
+      </li>
+      <li className="flex items-center gap-1.5">
+        <span className="w-4 h-4 rounded-full border border-dashed border-emerald-600" aria-hidden />
+        Registered location
+      </li>
+      <li className="flex items-center gap-1.5">
+        <span className="w-4 h-0.5 bg-emerald-600" aria-hidden />Recorded path
+      </li>
+    </ul>
   )
 }

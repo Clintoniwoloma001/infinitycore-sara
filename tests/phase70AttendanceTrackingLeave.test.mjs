@@ -215,9 +215,20 @@ check('stale locations are labelled, never shown as live', () => {
   assert.match(page, /is_stale/)
 })
 check('movement path is drawn only from recorded points', () => {
-  const p = read('src/components/tracking/RecordedPath.jsx')
-  assert.match(p, /points\.length < 2/)
-  assert.match(p, /no map\/tile provider is configured/i)
+  // The old assertion required "no map/tile provider is configured", which was
+  // a statement about the absence of a basemap rather than about correctness.
+  // The guarantee that actually matters - never infer a route between points -
+  // is now asserted against the real map component.
+  const p = read('src/components/tracking/TrackingMap.jsx')
+  assert.match(p, /valid\.length >= 2/, 'a polyline needs at least two points')
+  assert.match(p, /No route\s*\n?\s*\/\/ between two points is inferred|consecutive recorded observations/i)
+  assert.match(p, /openstreetmap\.org/, 'a real basemap is now used')
+})
+check('the map never recomputes inside/outside itself', () => {
+  const p = read('src/components/tracking/TrackingMap.jsx')
+  assert.match(p, /inside_geofence/, 'colouring reads the server verdict')
+  assert.ok(!/Math\.(sin|cos|acos|asin)/.test(p),
+    'the map must not re-implement the geofence distance calculation')
 })
 check('planner timeline encodes state beyond colour', () => {
   const tl = read('src/components/leave/PlannerTimeline.jsx')
@@ -249,4 +260,5 @@ check('new permission keys exist in the catalog', () => {
 })
 
 console.log(`\n${passed} checks passed`)
+
 

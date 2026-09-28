@@ -7,9 +7,10 @@
 // request body). This function:
 //   1. extracts text SERVER-SIDE (TXT direct, PDF via unpdf, DOCX via mammoth)
 //   2. refuses to call the AI when no meaningful text was extracted
-//   3. asks OpenAI (gpt-4o-mini) for EXACTLY three multiple-choice questions
-//      grounded in the supplied material, in the existing KSS question-bank
-//      format (Question | Correct answer | Option 1, Option 2, Option 3)
+//   3. asks the AI provider router (Gemini -> Groq -> internal rules ->
+//      OpenAI -> NVIDIA) for EXACTLY three multiple-choice questions grounded
+//      in the supplied material, in the existing KSS question-bank format
+//      (Question | Correct answer | Option 1, Option 2, Option 3)
 //   4. validates the response strictly (count, non-empty fields, correct
 //      answer present among the options, no duplicates)
 //   5. writes an audit entry (metadata only — never the document text)
@@ -20,10 +21,13 @@
 // The existing rotation pipeline (buildQuestionSets ->
 // generate_kss_question_sets) keeps operating unchanged on the bank.
 //
-// Secrets needed: OPENAI_API_KEY (shared project secret, already used by
-// sara-chat / sara-intent / sara-candidate-analysis).
+// Secrets needed: at least one of GEMINI_API_KEY / GROQ_API_KEY /
+// OPENAI_API_KEY / NVIDIA_API_KEY. With none of them set the router still
+// returns three deterministic drafts from the internal question bank, so the
+// HR drafting flow never hard-stops.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { aiGenerateJson } from '../_shared/aiRouter.ts'
 import { validateGeneratedQuestions, formatQuestionLines, KSS_QUESTION_VALIDATION_COPY } from '../_shared/kssQuestionValidator.js'
 
 const CORS_HEADERS = {
@@ -32,8 +36,6 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
-const MODEL = 'gpt-4o-mini'
 const DAILY_LIMIT = 30
 const MIN_INTERVAL_SECONDS = 2
 const MAX_FILE_BYTES = 2 * 1024 * 1024 // 2 MB
@@ -167,9 +169,6 @@ Deno.serve(async (req) => {
     return json({ ok: false, error: EXTRACTION_FAILED }, 422)
   }
 
-  const openaiKey = Deno.env.get('OPENAI_API_KEY')
-  if (!openaiKey) return json({ ok: false, error: 'ai_not_configured' }, 501)
-
   const systemPrompt =
     'You are the KSS (Knowledge Sharing Session) assessment drafter inside Infinity Bank HR. ' +
     'Produce multiple-choice assessment questions that are grounded ONLY in the supplied training material. ' +
@@ -188,43 +187,24 @@ Deno.serve(async (req) => {
     'Generate exactly three multiple-choice questions in the required JSON shape.',
   ].filter(Boolean).join('\n')
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30000)
-  let completion
-  try {
-    const response = await fetch(OPENAI_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openaiKey}` },
-      body: JSON.stringify({
-        model: MODEL,
-        temperature: 0.2,
-        max_tokens: 800,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-      signal: controller.signal,
-    })
-    if (!response.ok) {
-      if (response.status === 401 || response.status === 403) return json({ ok: false, error: 'ai_not_configured' }, 501)
-      if (response.status === 429) return json({ ok: false, error: 'AI generation is temporarily rate-limited. Please retry in a few minutes.' }, 429)
-      return json({ ok: false, error: 'ai_unavailable' }, 502)
-    }
-    completion = await response.json()
-  } catch (error) {
-    const aborted = error?.name === 'AbortError'
-    return json({ ok: false, error: aborted ? 'ai_timeout' : 'ai_unavailable' }, 502)
-  } finally {
-    clearTimeout(timeout)
-  }
+  // The router never throws: it walks the chain and terminates in the internal
+  // rules tier, which drafts from the question bank when the document cannot be
+  // read by a model. Only the strict KSS validation below can still reject.
+  const routed = await aiGenerateJson<Record<string, unknown>>(
+    {
+      prompt: userPrompt,
+      system: systemPrompt,
+      temperature: 0.2,
+      maxOutputTokens: 800,
+      json: true,
+      // The rules tier cannot read the document, so it is given what it can use
+      // without inventing content from the material.
+      rulesData: { title, description, document_chars: meaningful.length },
+    },
+    { feature: 'training_questions', actorUserId: user.id },
+  )
 
-  const rawContent = String(completion?.choices?.[0]?.message?.content || '').trim()
-  let parsed = null
-  try { parsed = JSON.parse(rawContent) } catch { parsed = null }
-
-  const questions = validateGeneratedQuestions(parsed)
+  const questions = validateGeneratedQuestions(routed.value)
 
   if (!questions) {
     await db.from('audit_logs').insert({
@@ -247,9 +227,17 @@ Deno.serve(async (req) => {
     entity_type: 'TrainingSession',
     entity_id: sessionId,
     user_name: user.email || user.id,
-    details: `Generation succeeded: 3 questions drafted from ${sanitize(fileName, 120)} (${fileSizeBytes} bytes). Awaiting HR review.`,
+    details: `Generation succeeded: 3 questions drafted from ${sanitize(fileName, 120)} (${fileSizeBytes} bytes) by ${routed.provider}. Awaiting HR review.`,
     severity: 'info',
   }).catch(() => {})
 
-  return json({ ok: true, questions: lines, count: lines.length, provider: 'openai', model: MODEL })
+  return json({
+    ok: true,
+    questions: lines,
+    count: lines.length,
+    provider: routed.provider,
+    model: routed.model,
+    degraded: routed.degraded,
+    notice: routed.notice,
+  })
 })

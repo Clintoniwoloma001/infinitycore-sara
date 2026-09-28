@@ -62,6 +62,16 @@ export const trackingService = {
     return unwrap(data, error, { points: [], point_count: 0 })
   },
 
+  /**
+   * ACTIVE registered locations with the radius the engine actually applies, so
+   * the map draws exactly the fences that can resolve a clock-in. Read through
+   * the same access gate as every other tracking RPC.
+   */
+  async geofences() {
+    const { data, error } = await supabase.rpc('list_tracking_geofences')
+    return unwrap(data, error, { geofences: [] }).geofences || []
+  },
+
   /** All shares the Super Admin can see, with an explicit status per row. */
   async listGrants() {
     const { data, error } = await supabase.rpc('list_tracking_access_grants')
@@ -124,6 +134,63 @@ export function describeFreshness(row) {
 
 export function formatCoord(value) {
   return value == null ? '—' : Number(value).toFixed(6)
+}
+
+/**
+ * "18 m" / "1.4 km" / "9.2 km". Presentation only - the number itself comes from
+ * the server's geo_distance() result, never recomputed here.
+ */
+export function formatDistance(meters) {
+  if (meters == null || Number.isNaN(Number(meters))) return '—'
+  const m = Number(meters)
+  if (m < 1000) return `${Math.round(m)} m`
+  return `${(m / 1000).toFixed(1)} km`
+}
+
+/**
+ * Why a point is inside or outside, stated so it can be checked.
+ *
+ * The old wording ("HEAD OFFICE" beside a red "Outside" badge) was the actual
+ * defect: the stored label named the NEAREST fence, so a point 9 km away looked
+ * like it was at the branch. The server now stores the honest label, and this
+ * helper additionally surfaces the measured distance and the fence radius, so
+ * "outside" is always a checkable statement rather than an assertion.
+ */
+export function describeGeofenceStatus(point) {
+  if (!point) return { tone: 'muted', text: 'No location recorded', detail: null }
+
+  const nearest = point.nearest_location_name
+  const distance = point.nearest_distance
+  const radius = point.nearest_radius
+
+  if (point.inside_geofence) {
+    return {
+      tone: 'inside',
+      text: point.location_label || nearest || 'Inside a registered location',
+      detail: distance != null
+        ? `${formatDistance(distance)} from the centre (radius ${formatDistance(radius)})`
+        : null,
+    }
+  }
+
+  if (!nearest) {
+    return { tone: 'outside', text: 'Outside all registered locations', detail: null }
+  }
+
+  const gap = distance != null && radius != null
+    ? `${formatDistance(distance)} from ${nearest}, whose radius is ${formatDistance(radius)}`
+    : distance != null
+      ? `${formatDistance(distance)} from ${nearest}`
+      : `nearest registered location is ${nearest}`
+
+  return {
+    tone: 'outside',
+    // The measured distance is part of the headline, not a footnote.
+    text: distance != null
+      ? `${formatDistance(distance)} outside ${nearest}`
+      : `Outside ${nearest}`,
+    detail: gap,
+  }
 }
 
 export function formatClockTime(value) {

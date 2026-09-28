@@ -114,15 +114,6 @@ export const screeningService = {
     return result
   },
 
-  async aiAvailable() {
-    try {
-      const result = await invoke({ action: 'screen_candidate', candidate_id: '00000000-0000-0000-0000-000000000000', job_id: null })
-      return result?.error !== 'ai_not_configured'
-    } catch {
-      return false
-    }
-  },
-
   async setDecision(resultId, decision, notes = null) {
     const { data, error } = await supabase.rpc('hr_set_screening_decision', {
       p_result_id: resultId,

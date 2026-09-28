@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth'
 import { useTheme } from '../context/ThemeContext'
 import Logo from './Logo'
 import { canAccessRoute, routeConfig } from '../config/navigation'
+import { filterSectionsByDepartment } from '../config/navigationConfig'
 import NotificationBell from './NotificationBell'
 import PersonAvatar from './messages/PersonAvatar'
 import { resolveDirectory } from '../services/corporateChatService'
@@ -36,7 +37,14 @@ export default function Layout({ children }) {
   const { theme, toggle: toggleTheme } = useTheme()
   const { user, profile, role, roleMetadata, name, email, signOut } = auth
   const { actualRole } = auth
-  const groups = routeConfig
+  // Two independent filters, in order:
+  //   1. department - which GROUPS belong to this person at all
+  //   2. permission - which ITEMS inside a visible group they may reach
+  // Neither is the security boundary; the server re-checks on every call.
+  const groups = filterSectionsByDepartment(routeConfig, {
+    role: auth.actualRole || auth.role,
+    department: auth.profile?.department,
+  })
     .map((group) => ({ ...group, items: group.items.filter((item) => canAccessRoute(item, auth)) }))
     .filter((group) => group.items.length > 0)
 

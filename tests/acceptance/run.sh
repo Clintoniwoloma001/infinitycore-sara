@@ -43,9 +43,10 @@ run "$ROOT/supabase/migrations/20260926000001_attendance_location_authority.sql"
 run "$ROOT/supabase/migrations/20260926000002_employee_tracking_access.sql" >/dev/null
 run "$ROOT/supabase/migrations/20260926000003_leave_schedule_planner.sql" >/dev/null
 run "$ROOT/supabase/migrations/20260926000004_director_leave_planner_fixes_and_booking_links.sql" >/dev/null
+run "$ROOT/supabase/migrations/20260927000001_audit_department_and_automation_tracking.sql" >/dev/null
 echo "OK"
 
-for t in attendance_location_rule missing_clockout tracking_authorization leave_capacity leave_booking; do
+for t in attendance_location_rule missing_clockout tracking_authorization leave_capacity leave_booking audit_department; do
   echo ""
   echo "############ $t ############"
   # ON_ERROR_STOP is deliberately OFF for the assertion scripts, and the exit

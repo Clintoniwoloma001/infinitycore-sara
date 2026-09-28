@@ -60,7 +60,9 @@ export const bankonePortfolioService = {
         filename: filename || `${sourceType}-${asAtDate}.xlsx`,
         source_format: 'xlsx',
         source_type: sourceType,
-        operation_type: 'portfolio',
+        // 'par' | 'disbursement' - the report type, not a vague "portfolio".
+        // Both are admitted by bankone_import_batches_operation_type_check.
+        operation_type: sourceType === 'disbursement' ? 'disbursement' : 'par',
         status: 'pending_review',
         as_at_date: asAtDate,
         reporting_period: asAtDate,

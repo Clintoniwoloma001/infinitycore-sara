@@ -4,17 +4,19 @@ const MAX_HISTORY_TURNS = 8
 const MAX_TEXT_LENGTH = 1200
 const SUMMARY_CACHE_MS = 5 * 60 * 1000
 
+// SARA always resolves to an answer, so a code reaching the client means the
+// answer could not be produced. None of these name a provider or a backend.
+const NO_ANSWER = 'SARA could not answer that just now. Try rephrasing, or use one of the typed commands below.'
 const ERROR_MESSAGES = {
-  ai_not_configured: 'SARA AI is not configured yet. An administrator needs to add the server-side OpenAI key.',
-  rate_limited: 'SARA has reached its usage limit for now. Please wait a little and try again.',
-  timeout: 'SARA took too long to respond. Please try again.',
-  ai_unavailable: 'SARA is temporarily unavailable. You can still use the existing typed commands.',
-  ai_empty: 'SARA returned an empty response. Please try asking in a different way.',
+  ai_not_configured: NO_ANSWER,
+  rate_limited: NO_ANSWER,
+  timeout: NO_ANSWER,
+  ai_empty: NO_ANSWER,
 }
 
 export class SaraAiError extends Error {
-  constructor(code = 'ai_unavailable') {
-    super(ERROR_MESSAGES[code] || ERROR_MESSAGES.ai_unavailable)
+  constructor(code = 'no_answer') {
+    super(ERROR_MESSAGES[code] || NO_ANSWER)
     this.name = 'SaraAiError'
     this.code = code
     this.userMessage = this.message
@@ -40,7 +42,7 @@ function errorCode(error, data) {
   const explicit = data?.error || error?.code
   if (explicit === 'ai_not_configured' || explicit === 'rate_limited' || explicit === 'timeout' || explicit === 'ai_empty') return explicit
   if (String(error?.message || '').toLowerCase().includes('timeout')) return 'timeout'
-  return 'ai_unavailable'
+  return 'no_answer'
 }
 
 async function invoke(body) {
@@ -87,5 +89,5 @@ export async function requestSaraSummary({ userId, route = '', force = false } =
 }
 
 export function saraErrorMessage(error) {
-  return error?.userMessage || (error?.code && ERROR_MESSAGES[error.code]) || ERROR_MESSAGES.ai_unavailable
+  return error?.userMessage || (error?.code && ERROR_MESSAGES[error.code]) || NO_ANSWER
 }

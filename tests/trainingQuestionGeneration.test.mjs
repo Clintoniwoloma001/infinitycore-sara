@@ -45,8 +45,15 @@ assert.equal(validateGeneratedQuestions(null), null)
 assert.equal(validateGeneratedQuestions({}), null)
 
 // ---- Edge function surface ----
-assert.match(edgeFn, /OPENAI_ENDPOINT/)
-assert.match(edgeFn, /gpt-4o-mini/)
+// Generation is provider-agnostic: the router resolves the model and endpoint
+// from the platform settings, so the function pins neither.
+assert.match(edgeFn, /aiGenerateJson/)
+assert.match(edgeFn, /feature: 'training_questions'/)
+assert.doesNotMatch(edgeFn, /OPENAI_ENDPOINT/)
+assert.doesNotMatch(edgeFn, /api\.openai\.com/)
+assert.doesNotMatch(edgeFn, /Deno\.env\.get\('OPENAI_API_KEY'\)/)
+assert.doesNotMatch(edgeFn, /gpt-4o-mini/)
+assert.doesNotMatch(edgeFn, /ai_unavailable/)
 assert.match(edgeFn, /npm:unpdf@1\.8\.1/)
 assert.match(edgeFn, /npm:mammoth@1\.12\.3/)
 assert.match(edgeFn, /text-based PDF\/DOCX\/TXT file/)

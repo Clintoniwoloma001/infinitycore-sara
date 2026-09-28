@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, AlertTriangle } from 'lucide-react'
 import {
-  trackingService, describeFreshness, formatCoord,
+  trackingService, describeFreshness, formatCoord, describeGeofenceStatus,
 } from '../../services/employeeTrackingService'
 import { LoadingState, EmptyState, ErrorState } from '../PageStates'
 import HistoryDrawer from './HistoryDrawer'
@@ -65,7 +65,9 @@ export default function LivePositions() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.map((r) => (
+            {rows.map((r) => {
+              const status = describeGeofenceStatus(r)
+              return (
               <tr key={r.employee_id} className="hover:bg-slate-50">
                 <td className="px-4 py-3">
                   <p className="font-medium text-slate-900">{r.full_name}</p>
@@ -74,7 +76,10 @@ export default function LivePositions() {
                   </p>
                 </td>
                 <td className="px-4 py-3 text-slate-700">
-                  {r.location_label || 'Outside registered locations'}
+                  {status.text}
+                  {status.detail && (
+                    <p className="text-xs text-slate-500">{status.detail}</p>
+                  )}
                 </td>
                 <td className="px-4 py-3 font-mono text-xs text-slate-600">
                   {formatCoord(r.latitude)}, {formatCoord(r.longitude)}
@@ -102,7 +107,8 @@ export default function LivePositions() {
                   </button>
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -117,7 +123,9 @@ export default function LivePositions() {
 function MobileRows({ rows, onSelect }) {
   return (
     <div className="md:hidden space-y-3">
-      {rows.map((r) => (
+      {rows.map((r) => {
+        const status = describeGeofenceStatus(r)
+        return (
         <div key={r.employee_id} className="rounded-lg border border-slate-200 bg-white p-4">
           <div className="flex items-start justify-between">
             <div>
@@ -131,8 +139,11 @@ function MobileRows({ rows, onSelect }) {
             </span>
           </div>
           <p className="mt-2 text-sm text-slate-700">
-            {r.location_label || 'Outside registered locations'}
+            {status.text}
           </p>
+          {status.detail && (
+            <p className="mt-0.5 text-xs text-slate-500">{status.detail}</p>
+          )}
           <p className="font-mono text-xs text-slate-500 mt-1">
             {formatCoord(r.latitude)}, {formatCoord(r.longitude)}
           </p>
@@ -146,7 +157,8 @@ function MobileRows({ rows, onSelect }) {
             </button>
           </div>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

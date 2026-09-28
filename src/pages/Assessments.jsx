@@ -37,27 +37,27 @@ const AI_GENERATION_STAGES = [
 ]
 
 // Safe, per-stage user messages. Never leave the raw server `error` on screen.
+const GENERATION_UNSATISFIED = 'SARA could not produce a complete, valid question set this time, so nothing was saved. You can start from a template or add questions by hand.'
 const AI_ERROR_MESSAGES = {
-  ai_not_configured: 'AI assessment generation is not configured. Contact an administrator to add the server-side OpenAI key.',
-  ai_invalid_key: 'The AI provider rejected the server key. Contact an administrator.',
-  ai_billing: 'The AI provider account has no available credit. Contact an administrator.',
-  ai_rate_limited: 'OpenAI is rate-limiting requests right now. Please retry in a few minutes.',
-  ai_provider_error: 'The AI service returned an error. No questions were saved. Please retry.',
-  ai_network: 'SARA could not reach the AI service. No questions were saved. Please retry.',
-  ai_timeout: 'SARA took too long to generate. No questions were saved. Please retry.',
-  ai_empty: 'The AI returned an empty response. No questions were saved.',
-  ai_bad_response: 'The AI returned an invalid assessment response. No questions were saved.',
-  ai_bad_shape: 'The AI returned an invalid assessment response. No questions were saved.',
+  ai_not_configured: GENERATION_UNSATISFIED,
+  ai_invalid_key: GENERATION_UNSATISFIED,
+  ai_billing: GENERATION_UNSATISFIED,
+  ai_rate_limited: GENERATION_UNSATISFIED,
+  ai_provider_error: GENERATION_UNSATISFIED,
+  ai_network: GENERATION_UNSATISFIED,
+  ai_timeout: GENERATION_UNSATISFIED,
+  ai_empty: GENERATION_UNSATISFIED,
+  ai_bad_response: GENERATION_UNSATISFIED,
+  ai_bad_shape: GENERATION_UNSATISFIED,
   job_not_found: 'The selected job could not be found. Reload and try again.',
   template_create_failed: 'Questions could not be saved to the Question Bank. No assessment was created.',
   questions_insert_failed: 'Questions could not be saved to the Question Bank. No assessment was created.',
   template_archived: 'The linked template is archived and cannot be reused.',
-  rate_limited: 'SARA has reached its usage limit for now. Please wait and try again.',
-  ai_unavailable: 'AI assessment generation is temporarily unavailable. SARA could not reach the AI service.',
+  rate_limited: GENERATION_UNSATISFIED,
 }
 
 export function aiGenerationErrorMessage(error) {
-  return (error && AI_ERROR_MESSAGES[error]) || AI_ERROR_MESSAGES.ai_unavailable
+  return (error && AI_ERROR_MESSAGES[error]) || GENERATION_UNSATISFIED
 }
 
 const PIPELINE = [

@@ -103,7 +103,7 @@ export const trainingService = {
 
   // AI-assisted KSS question drafting. The document is decoded + parsed
   // server-side by the `generate-training-questions` edge function; only the
-  // extracted text reaches OpenAI. Returns validated question-bank lines in
+  // extracted text reaches a model provider. Returns validated question-bank lines in
   // the existing "Question | Correct answer | Option 1, Option 2, Option 3"
   // format. Nothing is written to the bank — HR reviews/edits first.
   async generateQuestionsFromDocument({ title, description = '', fileName, fileBase64, sessionId = null }) {

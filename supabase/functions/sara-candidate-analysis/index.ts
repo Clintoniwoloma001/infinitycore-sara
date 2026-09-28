@@ -5,22 +5,22 @@
 //     client to declare identity),
 //   - derives the caller's role server-side from their profiles row and
 //     only allows HR personnel (super_admin / admin / head_of_human_resources / hr_officer),
-//   - sends ONLY a scoped, structured payload to OpenAI
-//     (OPENAI_API_KEY lives in function secrets — never the browser),
+//   - sends ONLY a scoped, structured payload to whichever provider the shared
+//     router selects (keys live in function secrets — never the browser),
 //   - writes results back through Postgres using the SERVICE ROLE key
 //     (allowed for Edge Functions, never for the anon/authenticated RLS path),
 //     and
-//   - returns sanitized, failure-safe JSON. If AI is unavailable or fails,
-//     it returns { ok:false, error:'ai_unavailable' } so the client can fall
-//     back to the rule-based hr_run_manual_screening RPC.
+//   - returns sanitized, failure-safe JSON. The router always terminates in the
+//     internal rules tier, so a provider outage degrades to an arithmetic
+//     advisory instead of failing the HR flow.
 //
 // AI output is always ADVICE. HR remains the decision maker — the function
 // never advances a candidate, it only stores advisory scores/summaries and a
 // recommended action.
 //
-// Required secret:
-//   supabase secrets set OPENAI_API_KEY=sk-...
-// (Never put it in the frontend .env or any client bundle.)
+// Provider secrets (any one is enough; the router fails over between them):
+//   supabase secrets set GEMINI_API_KEY=… GROQ_API_KEY=… OPENAI_API_KEY=… NVIDIA_API_KEY=…
+// (Never put a key in the frontend .env or any client bundle.)
 //
 // Supported actions:
 //   screen_candidate      — AI screening of a candidate against a job.
@@ -30,11 +30,14 @@
 //   analyze_interview     — review interview feedback and recommend next step.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { aiGenerateJson, hasProviderSecret } from '../_shared/aiRouter.ts'
 import { validateQuestionSet, validateQuestionRows, ASSESSMENT_QUESTION_VALIDATION_COPY } from '../_shared/assessmentQuestionValidator.js'
 
-const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
+// The OpenAI Responses API is the only tier that can read an attached file
+// (the CV), so it stays as a pre-step; everything else goes through the router,
+// which resolves the per-action model from the platform settings.
 const OPENAI_RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses'
-const MODEL = 'gpt-4o-mini'
+const CV_MODEL = 'gpt-4o-mini'
 
 const ALLOWED_ACTIONS = ['screen_candidate', 'analyze_cv', 'generate_assessment', 'analyze_assessment', 'analyze_interview', 'generate_questions', 'analyze_candidate_scorecard']
 const HR_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer']
@@ -61,8 +64,8 @@ function json(body, status = 200) {
 }
 
 // Structured server-side error. Every recognized failure stage carries its own
-// code so clients can show meaningful, safe messages instead of one blanket
-// "ai_unavailable". Codes never contain secrets, keys or stack traces.
+// code so clients can show meaningful, safe messages. Codes never contain
+// secrets, keys or stack traces.
 class SaraError extends Error {
   constructor(code, detail = '') {
     super(detail || code)
@@ -268,21 +271,24 @@ async function firstRow(supabase, table, id) {
   return data || null
 }
 
-async function runOpenAI(messages) {
-  const resp = await postOpenAI(OPENAI_ENDPOINT, {
-    model: MODEL,
-    temperature: 0,
-    response_format: { type: 'json_object' },
-    messages,
-  })
-  const payload = await resp.json().catch(() => { throw new SaraError('ai_bad_response') })
-  const content = payload?.choices?.[0]?.message?.content
-  if (!content) throw new SaraError('ai_empty')
-  try {
-    return JSON.parse(content)
-  } catch {
-    throw new SaraError('ai_bad_response')
+/**
+ * The router call every action shares. It walks the configured provider chain
+ * and always resolves — the internal rules tier answers from `rulesData` when no
+ * remote provider can — so callers get a JSON object and a degradation note
+ * rather than an exception.
+ */
+let lastRouteMeta = { provider: 'rules', model: 'deterministic-v1', degraded: false, notice: '' }
+
+async function runRoutedJson({ system, prompt, rulesData, feature, signal, temperature = 0, maxOutputTokens = 2000 }) {
+  const routed = await aiGenerateJson(
+    { prompt, system, json: true, temperature, maxOutputTokens, rulesData, signal },
+    { feature },
+  )
+  lastRouteMeta = { provider: routed.provider, model: routed.model, degraded: routed.degraded, notice: routed.notice }
+  if (!routed.value || typeof routed.value !== 'object') {
+    throw new SaraError('ai_bad_shape')
   }
+  return routed.value
 }
 
 function bytesToBase64(bytes) {
@@ -512,7 +518,7 @@ async function getCandidateCV(supabase, candidate) {
 
 async function runOpenAIWithCV(systemPrompt, userPrompt, cv) {
   const resp = await postOpenAI(OPENAI_RESPONSES_ENDPOINT, {
-    model: MODEL,
+    model: CV_MODEL,
     temperature: 0,
     store: false,
     text: { format: { type: 'json_object' } },
@@ -596,7 +602,7 @@ async function screenCandidate(supabase, body, requireCV = false) {
         weights: { education: 0, experience: 25, technical_skills: 20, cv_relevance: 10, cover_letter_relevance: 10, assessment_score: 15, interview_score: 5 },
       }
 
-  const userPrompt = JSON.stringify({
+  const screeningData = {
     role: job.job_title,
     department: job.department,
     description: job.description,
@@ -615,11 +621,39 @@ async function screenCandidate(supabase, body, requireCV = false) {
       cv_text: cvText || null,
       cv_file_attached: Boolean(cv),
     },
-  })
+  }
+  const userPrompt = JSON.stringify(screeningData)
 
-  const parsed = cv
-    ? await runOpenAIWithCV(systemPrompt, userPrompt, cv)
-    : await runOpenAI([{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }])
+  // Reading an attached file needs the OpenAI Responses API, so it is a pre-step
+  // that may legitimately fail; the router then covers the same request from the
+  // structured fields (and the extracted CV text) via every other tier.
+  let parsed = null
+  if (cv && hasProviderSecret('openai')) {
+    try { parsed = await runOpenAIWithCV(systemPrompt, userPrompt, cv) } catch { parsed = null }
+  }
+  if (!parsed) {
+    parsed = await runRoutedJson({
+      system: systemPrompt,
+      prompt: userPrompt,
+      feature: 'candidate_screening',
+      rulesData: {
+        job: { title: job.job_title, requirements: [job.description, job.qualifications].filter(Boolean).join(' ') },
+        criteria: {
+          required_skills: job.required_skills || [],
+          min_experience_years: criteria.experience_threshold ?? candidate.years_experience,
+          min_education: criteria.required_qualifications || job.qualifications,
+        },
+        candidate: {
+          skills: skills.join(', '),
+          cover_letter: cover,
+          education: education.join(' '),
+          experience_years: candidate.years_experience,
+          cv_file_name: cv?.fileName || null,
+          summary: [cvText, experience.join(' ')].filter(Boolean).join(' '),
+        },
+      },
+    })
+  }
   const clean = sanitizeScreen(parsed, cfg)
   if (!clean) return { ok: false, error: 'ai_bad_shape' }
 
@@ -728,10 +762,12 @@ async function generateAssessment(supabase, body) {
     focus_competencies: body.competencies || [],
   })
 
-  const parsed = await runOpenAI([
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
-  ])
+  const parsed = await runRoutedJson({
+    system: systemPrompt,
+    prompt: userPrompt,
+    feature: 'assessment_generation',
+    rulesData: { category: 'technical', title: job.job_title, count, competencies: body.competencies || [] },
+  })
   const questions = sanitizeQuestions(parsed && Array.isArray(parsed.questions) ? parsed.questions : [], job.job_title)
   if (questions.length === 0) return { ok: false, error: 'ai_bad_shape' }
 
@@ -811,10 +847,19 @@ async function analyzeAssessment(supabase, body) {
     questions: qa,
   })
 
-  const parsed = await runOpenAI([
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
-  ])
+  const parsed = await runRoutedJson({
+    system: systemPrompt,
+    prompt: userPrompt,
+    feature: 'assessment_analysis',
+    rulesData: {
+      responses: (qa || []).map((q) => ({
+        question: q.question_text || q.text || '',
+        awarded_marks: q.awarded_marks ?? q.marks_awarded ?? null,
+        total_marks: q.total_marks ?? q.marks ?? null,
+        is_correct: q.is_correct,
+      })),
+    },
+  })
   const clean = sanitizeAssessmentAnalysis(parsed)
   if (!clean) return { ok: false, error: 'ai_bad_shape' }
 
@@ -861,10 +906,16 @@ async function analyzeInterview(supabase, body) {
     interviewer_feedback: interview.feedback,
   })
 
-  const parsed = await runOpenAI([
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
-  ])
+  const parsed = await runRoutedJson({
+    system: systemPrompt,
+    prompt: userPrompt,
+    feature: 'interview_analysis',
+    rulesData: {
+      notes: interview.feedback || interview.notes || interview.summary || '',
+      rating: interview.rating ?? interview.score ?? null,
+      round: interview.interview_round || null,
+    },
+  })
   const clean = sanitizeInterviewAnalysis(parsed)
   if (!clean) return { ok: false, error: 'ai_bad_shape' }
 
@@ -1034,22 +1085,22 @@ async function generateQuestions(supabase, userClient, body) {
     competencies: body.competencies || [],
   })
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 45000)
-  let parsed
-  try {
-    parsed = await runOpenAIWithTimeout([
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ], controller.signal)
-  } catch (e) {
-    const aborted = e?.name === 'AbortError'
-    if (aborted) return { ok: false, error: 'ai_timeout', detail: 'Generation timed out before the AI responded.' }
-    if (e instanceof SaraError) return { ok: false, error: e.code }
-    return { ok: false, error: 'ai_unavailable' }
-  } finally {
-    clearTimeout(timeout)
-  }
+  // The router resolves rather than throwing, so this only has to handle a
+  // genuinely unusable answer shape.
+  const parsed = await runRoutedJson({
+    system: systemPrompt,
+    prompt: userPrompt,
+    feature: 'assessment_generation',
+    temperature: 0.2,
+    maxOutputTokens: 4000,
+    signal: AbortSignal.timeout(45000),
+    rulesData: {
+      category: body.category || 'technical',
+      title: job?.job_title || (body.roleTitle ? asString(body.roleTitle, 200) : 'General role'),
+      count,
+      competencies: body.competencies || [],
+    },
+  })
 
   const questions = validateQuestionSet(parsed && { questions: parsed.questions })
   if (!questions) {
@@ -1068,7 +1119,7 @@ async function generateQuestions(supabase, userClient, body) {
     severity: 'info',
   })
 
-  return { ok: true, questions, provider: 'openai', model: MODEL, mode }
+  return { ok: true, questions, provider: lastRouteMeta.provider, model: lastRouteMeta.model, degraded: lastRouteMeta.degraded, mode }
 }
 
 function roleLabel(job) {
@@ -1219,10 +1270,24 @@ async function analyzeCandidateScorecard(supabase, userClient, body) {
     available_roles: jobCart,
   })
 
-  const parsed = await runOpenAI([
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
-  ])
+  const parsed = await runRoutedJson({
+    system: systemPrompt,
+    prompt: userPrompt,
+    feature: 'candidate_scorecard',
+    temperature: 0.2,
+    maxOutputTokens: 4000,
+    rulesData: {
+      candidate: { full_name: target.candidate_name || body.candidate_name, role: target.job_title || body.role_title },
+      questions: (qa || []).map((q) => ({
+        question: q.question_text || q.text || '',
+        awarded_marks: q.awarded_marks ?? q.marks_awarded ?? null,
+        total_marks: q.total_marks ?? q.marks ?? null,
+        is_correct: q.is_correct,
+        flagged: q.flagged === true,
+      })),
+      peer_comparison: { template_average: templateAvg, role_average: roleAvg, percentile },
+    },
+  })
   const clean = sanitizeCandidateAnalysis(parsed, templateAvg, roleAvg)
   if (!clean) return { ok: false, error: 'ai_bad_shape' }
 
@@ -1352,24 +1417,6 @@ function sanitizeCandidateAnalysis(raw, templateAvg, roleAvg) {
   return { analysis, role_fit: roleFit }
 }
 
-async function runOpenAIWithTimeout(messages, signal) {
-  const resp = await postOpenAI(OPENAI_ENDPOINT, {
-    model: MODEL,
-    temperature: 0.2,
-    max_tokens: 4000,
-    response_format: { type: 'json_object' },
-    messages,
-  }, signal)
-  const payload = await resp.json().catch(() => { throw new SaraError('ai_bad_response') })
-  const content = payload?.choices?.[0]?.message?.content
-  if (!content) throw new SaraError('ai_empty')
-  try {
-    return JSON.parse(content)
-  } catch {
-    throw new SaraError('ai_bad_response')
-  }
-}
-
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS })
@@ -1439,9 +1486,9 @@ Deno.serve(async (req) => {
   } catch (e) {
     // Failure-safe: never expose raw errors. Structured SaraError codes
     // classify the actual stage (missing key, provider error, bad output…);
-    // anything unexpected is abstracted to ai_unavailable. Clients render
+    // anything unexpected is abstracted to a generic code. Clients render
     // safe, per-stage messages.
-    const code = e instanceof SaraError ? e.code : 'ai_unavailable'
+    const code = e instanceof SaraError ? e.code : 'ai_error'
     return json({ ok: false, error: code }, 200)
   }
 })

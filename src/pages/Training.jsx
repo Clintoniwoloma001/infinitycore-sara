@@ -44,7 +44,7 @@ function copyText(text, onDone) {
 }
 
 // Read a chosen .txt/.pdf/.docx File into a base64 string for the server-side
-// AI question-drafting edge function. The raw file never reaches OpenAI.
+// AI question-drafting edge function. The raw file never reaches a model provider.
 function readFileAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()

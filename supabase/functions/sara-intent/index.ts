@@ -5,10 +5,14 @@
 //     client to declare identity),
 //   - derives the user's allowed intent set server-side (RLS-scoped
 //     read of v_user_permissions, with a role fallback),
-//   - sends ONLY the transcript + the server-derived whitelist to
-//     OpenAI (OPENAI_API_KEY lives in function secrets — never the
+//   - sends ONLY the transcript + the server-derived whitelist to whichever
+//     provider the router selects (keys live in function secrets — never the
 //     browser), and
 //   - returns a sanitized { intent, entities, criteria } JSON parse.
+//
+// The provider chain is Gemini -> Groq -> internal rules -> OpenAI -> NVIDIA,
+// so a classifier outage degrades to the deterministic rule classifier instead
+// of returning nothing.
 //
 // It NEVER executes anything. Execution stays in the client flow
 // (agentService → authorized pool → confirm → executeLeaveDecision →
@@ -16,14 +20,14 @@
 // untrusted data in the prompt and the model is told to output JSON
 // only, so a prompt-injection attempt cannot change its behavior.
 //
-// The OPENAI_API_KEY secret must be set server-side:
-//   supabase secrets set OPENAI_API_KEY=sk-...
-// (Never put it in the frontend .env or any client bundle.)
+// Provider secrets must be set server-side (any one of them is enough; the
+// router fails over between them and always has the internal rules tier):
+//   supabase secrets set GEMINI_API_KEY=… GROQ_API_KEY=… OPENAI_API_KEY=… NVIDIA_API_KEY=…
+// (Never put a key in the frontend .env or any client bundle.)
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { aiGenerateJson } from '../_shared/aiRouter.ts'
 
-const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
-const MODEL = 'gpt-4o-mini'
 const DAILY_CALL_LIMIT = 40
 
 const READ_INTENTS = ['SHOW_PENDING', 'COUNT_PENDING', 'DASHBOARD_SUMMARY', 'PENDING_ATTENTION', 'PENDING_LOANS']
@@ -152,9 +156,9 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
-  const openaiKey = Deno.env.get('OPENAI_API_KEY')
   if (!supabaseUrl || !anonKey) return json({ error: 'env_missing' }, 500)
-  if (!openaiKey) return json({ intent: 'UNKNOWN', confidence: 0, error: 'ai_not_configured' }, 200)
+  // No key guard: the router's internal rules tier classifies without a key, so
+  // a deployment with no provider secret still returns a usable intent.
 
   const supabase = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
@@ -215,34 +219,20 @@ Deno.serve(async (req) => {
 
   const userPrompt = `Page the user is on: ${String(body?.route || '').slice(0, 80)}\nUser request: ${text}`
 
-  try {
-    const openaiResp = await fetch(OPENAI_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${openaiKey}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        temperature: 0,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-    })
-    if (!openaiResp.ok) {
-      return json({ intent: 'UNKNOWN', confidence: 0, error: `ai_error_${openaiResp.status}` }, 200)
-    }
-    const payload = await openaiResp.json()
-    const content = payload?.choices?.[0]?.message?.content
-    if (!content) return json({ intent: 'UNKNOWN', confidence: 0, error: 'ai_empty' }, 200)
-    const parsed = JSON.parse(content)
-    const clean = sanitize(parsed)
-    if (!allowed.includes(clean.intent)) clean.intent = 'HELP'
-    return json(clean, 200)
-  } catch (e) {
-    return json({ intent: 'UNKNOWN', confidence: 0, error: 'ai_unavailable' }, 200)
-  }
+  // The rule classifier reads the text and the allow-list, so a provider outage
+  // still yields a real classification instead of UNKNOWN.
+  const routed = await aiGenerateJson<Record<string, unknown>>(
+    {
+      prompt: userPrompt,
+      system: systemPrompt,
+      temperature: 0,
+      json: true,
+      rulesData: { text, allowed },
+    },
+    { feature: 'intent', actorUserId: user.id },
+  )
+
+  const clean = sanitize(routed.value)
+  if (!allowed.includes(clean.intent)) clean.intent = 'HELP'
+  return json({ ...clean, degraded: routed.degraded }, 200)
 })

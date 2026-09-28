@@ -1,14 +1,15 @@
 // Supabase Edge Function: sara-chat
 //
 // Conversational SARA replies and compact insight summaries. The browser
-// sends text and bounded history only. The OpenAI key remains a function
-// secret, and every data tool below is read-only and runs through the
-// caller's authenticated Supabase session/RLS.
+// sends text and bounded history only. Every provider key stays a function
+// secret, the AI provider is chosen by the shared router (Gemini -> Groq ->
+// internal rules -> OpenAI -> NVIDIA), and every data tool below is read-only
+// and runs through the caller's authenticated Supabase session/RLS.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { aiGenerateJson, aiTurn, hasProviderSecret, PROVIDER_CATALOG } from '../_shared/aiRouter.ts'
+import type { TurnRequest, TurnResult } from '../_shared/aiRouter.ts'
 
-const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
-const MODEL = 'gpt-4o-mini'
 const DAILY_CALL_LIMIT = 40
 // The durable per-user daily cap is shared with sara-intent. A single
 // conversational turn can legitimately make one intent call plus one chat
@@ -243,30 +244,13 @@ async function executeTool(name: string, db: any, context: any) {
   return { ok: false, error: 'unsupported_read_tool' }
 }
 
-async function callOpenAI(apiKey: string, body: Record<string, unknown>) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 15000)
-  try {
-    const response = await fetch(OPENAI_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    })
-    if (!response.ok) {
-      if (response.status === 429) throw new AiError('rate_limited')
-      if (response.status === 401 || response.status === 403) throw new AiError('ai_not_configured')
-      throw new AiError('ai_unavailable')
-    }
-    return await response.json()
-  } catch (error) {
-    if (error instanceof AiError) throw error
-    if ((error as Error)?.name === 'AbortError') throw new AiError('timeout')
-    throw new AiError('ai_unavailable')
-  } finally {
-    clearTimeout(timeout)
-  }
-}
+// The router already speaks each provider's tool dialect, so the definitions
+// are passed through in the neutral shape it normalises per provider.
+const ROUTER_TOOLS = TOOL_DEFINITIONS.map((t: any) => ({
+  name: t.function.name,
+  description: t.function.description,
+  parameters: t.function.parameters,
+}))
 
 function safeHistory(history: unknown) {
   return (Array.isArray(history) ? history : [])
@@ -286,72 +270,137 @@ const CHAT_SYSTEM = (context: any, route: string) => [
   'Use a short answer. Use bullets when listing more than two facts.',
 ].join(' ')
 
-async function chatReply(apiKey: string, db: any, context: any, body: any) {
+interface RoutedReply {
+  text: string
+  functionCalls: Array<{ name: string; args: Record<string, unknown> }>
+  degraded: boolean
+  notice: string
+  provider: string
+}
+
+/**
+ * Ask the router for a reply. The operational snapshot travels as the live
+ * `rulesData` for the internal tier and as the `get_operational_summary` tool
+ * result, so a degraded reply quotes the same figures a model reply would.
+ */
+async function askRouter(request: TurnRequest, userId: string): Promise<RoutedReply> {
+  const routed = await aiTurn<TurnResult>(request, { feature: 'chat', actorUserId: userId })
+  const value = routed.value as unknown as TurnResult
+  return {
+    text: value?.text || routed.text || '',
+    functionCalls: Array.isArray(value?.functionCalls) ? value.functionCalls : [],
+    degraded: routed.degraded,
+    notice: routed.notice,
+    provider: routed.provider,
+  }
+}
+
+async function chatReply(db: any, context: any, body: any, snapshot: any, userId: string) {
   const route = text(body?.route, 120)
   const message = text(body?.message)
   if (!message) throw new AiError('ai_empty')
-  const messages: any[] = [
-    { role: 'system', content: CHAT_SYSTEM(context, route) },
-    ...safeHistory(body?.history),
-    { role: 'user', content: message },
+
+  // History and the current message are already in the neutral turn shape; the
+  // router maps assistant -> model for Gemini and to tool messages for the
+  // OpenAI-compatible providers.
+  const turns: TurnRequest['turns'] = [
+    ...safeHistory(body?.history).map((m: { role: string; content: string }) => ({
+      role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+      parts: [{ text: m.content }],
+    })),
+    { role: 'user', parts: [{ text: message }] },
   ]
 
+  let degraded = false
+  let notice = ''
+
   for (let round = 0; round < 2; round += 1) {
-    const payload = await callOpenAI(apiKey, {
-      model: MODEL,
-      temperature: 0.2,
-      max_tokens: 420,
-      messages,
-      tools: TOOL_DEFINITIONS,
-      tool_choice: 'auto',
-    })
-    const assistant = payload?.choices?.[0]?.message
-    if (!assistant) throw new AiError('ai_empty')
-    if (!assistant.tool_calls?.length) {
-      const reply = text(assistant.content, 2200)
-      if (!reply) throw new AiError('ai_empty')
-      return reply
+    const routed = await askRouter(
+      {
+        prompt: message,
+        turns,
+        system: CHAT_SYSTEM(context, route),
+        temperature: 0.2,
+        maxOutputTokens: 420,
+        tools: ROUTER_TOOLS,
+        rulesData: snapshot,
+        signal: AbortSignal.timeout(15000),
+      },
+      userId,
+    )
+    degraded = degraded || routed.degraded
+    notice = routed.notice || notice
+
+    // The model's own turn is echoed back with its tool requests attached, so a
+    // Gemini provider keeps its reasoning and an OpenAI-compatible provider
+    // replays it as an assistant tool_calls message.
+    if (routed.functionCalls.length === 0) {
+      const out = text(routed.text, 2200)
+      if (out) return { reply: out, degraded, notice }
+      // An empty remote answer is already handled by the router (it fails
+      // over); reaching here means the internal tier produced nothing usable.
+      break
     }
-    messages.push({
-      role: 'assistant',
-      content: assistant.content || null,
-      tool_calls: assistant.tool_calls,
-    })
-    for (const toolCall of assistant.tool_calls.slice(0, 3)) {
-      const result = await executeTool(toolCall?.function?.name, db, context)
-      messages.push({
-        role: 'tool',
-        tool_call_id: toolCall.id,
-        content: JSON.stringify(result).slice(0, 12000),
+
+    turns.push({ role: 'assistant', parts: routed.functionCalls.map((c) => ({ functionCall: { name: c.name, args: c.args } })) })
+    for (const call of routed.functionCalls.slice(0, 3)) {
+      const result = call.name === 'get_operational_summary' ? snapshot : await executeTool(call.name, db, context)
+      turns.push({
+        role: 'user',
+        parts: [{
+          functionResponse: {
+            name: call.name,
+            response: { result: JSON.parse(JSON.stringify(result).slice(0, 12000)) },
+          },
+        }],
       })
     }
   }
-  throw new AiError('ai_unavailable')
+
+  // Deterministic, data-grounded last reply rather than an error the user
+  // would read as a broken product.
+  const fallback = text(snapshot?.text, 2200) || text(
+    operationalSummaryText(snapshot),
+    2200,
+  )
+  if (fallback) return { reply: fallback, degraded: true, notice }
+  return {
+    reply: 'I could not complete that request just now. Your reports and typed commands are unaffected — please rephrase the question, or ask about a specific record.',
+    degraded: true,
+    notice,
+  }
 }
 
-async function summaryReply(apiKey: string, snapshot: any) {
-  const payload = await callOpenAI(apiKey, {
-    model: MODEL,
-    temperature: 0.1,
-    max_tokens: 260,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: 'You produce a compact InfinityCore operational insight. Use only the supplied current data. Never fill null or unavailable values with guesses. Return JSON only in the shape {"bullets": ["short bullet", "short bullet"]}. Return at most four bullets, each under 160 characters. Mention when data is unavailable rather than inventing it.',
-      },
-      { role: 'user', content: `Current data captured at ${snapshot.captured_at}: ${JSON.stringify(snapshot).slice(0, 14000)}` },
-    ],
-  })
-  const content = payload?.choices?.[0]?.message?.content
-  if (!content) throw new AiError('ai_empty')
-  let parsed: any
-  try { parsed = JSON.parse(content) } catch { throw new AiError('ai_empty') }
-  const bullets = Array.isArray(parsed?.bullets)
-    ? parsed.bullets.map((item: unknown) => text(item, 260)).filter(Boolean).slice(0, 4)
-    : []
-  if (!bullets.length) throw new AiError('ai_empty')
-  return bullets
+/** Turn a captured snapshot into the compact "your position" fallback. */
+function operationalSummaryText(snapshot: any) {
+  const metrics = snapshot?.metrics || {}
+  const lines = Object.entries(metrics)
+    .filter(([, value]) => value !== null && typeof value !== 'object')
+    .map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value}`)
+  return lines.length ? ['Your current position:', ...lines].join('\n') : ''
+}
+
+async function summaryReply(snapshot: any, userId: string) {
+  const routed = await aiGenerateJson<{ bullets?: unknown[] }>(
+    {
+      prompt: `Current data captured at ${snapshot.captured_at}: ${JSON.stringify(snapshot).slice(0, 14000)}`,
+      system: 'You produce a compact InfinityCore operational insight. Use only the supplied current data. Never fill null or unavailable values with guesses. Return JSON only in the shape {"bullets": ["short bullet", "short bullet"]}. Return at most four bullets, each under 160 characters. Mention when data is unavailable rather than inventing it.',
+      temperature: 0.1,
+      maxOutputTokens: 260,
+      json: true,
+      rulesData: snapshot,
+      signal: AbortSignal.timeout(15000),
+    },
+    { feature: 'summary', actorUserId: userId, admin: null },
+  )
+
+  // The internal tier answers in prose; fold it into the same bullet contract
+  // the client already renders, so the caller needs no degraded branch.
+  const raw = Array.isArray(routed.value?.bullets) ? routed.value.bullets : []
+  const bullets = raw.length
+    ? raw.map((item: unknown) => text(item, 260)).filter(Boolean).slice(0, 4)
+    : text(routed.text, 1200).split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 4)
+  return { bullets, degraded: routed.degraded, notice: routed.notice }
 }
 
 Deno.serve(async (req: Request) => {
@@ -360,24 +409,44 @@ Deno.serve(async (req: Request) => {
 
   try {
     const { db, user } = await authenticate(req)
-    const openaiKey = Deno.env.get('OPENAI_API_KEY')
-    if (!openaiKey) return json({ ok: false, error: 'ai_not_configured' })
+    // The router always terminates in the internal rules tier, so a deployment
+    // with no remote key still answers. Only warn when nothing remote is set up.
+    const remoteReady = Object.keys(PROVIDER_CATALOG)
+      .filter((id) => PROVIDER_CATALOG[id].kind === 'remote')
+      .some((id) => hasProviderSecret(id))
+
     const context = await getUserContext(db, user.id)
-    if (context.status && context.status !== 'active') return json({ ok: false, error: 'forbidden' })
+    if (context.status && context.status !== 'active') return json({ ok: false, error: 'forbidden' }, 401)
     const limit = await allowCall(db, user.id)
     if (limit.allowed === false) return json({ ok: false, error: 'rate_limited', retry_after_seconds: limit.retry_after_seconds })
 
     let body: any = {}
     try { body = await req.json() } catch { return json({ ok: false, error: 'invalid_request' }) }
+
+    // One snapshot per request: it grounds the model, feeds the tools and is the
+    // `rulesData` the internal tier answers from, so it is never fetched twice.
+    let snapshotPromise: Promise<any> | null = null
+    const snapshot = () => (snapshotPromise ||= operationalSummary(db, context))
+
     if (body?.mode === 'summary') {
-      const snapshot = await operationalSummary(db, context)
-      const bullets = await summaryReply(openaiKey, snapshot)
-      return json({ ok: true, mode: 'summary', bullets, generated_at: snapshot.captured_at, source_metrics: snapshot.metrics })
+      const data = await snapshot()
+      const result = await summaryReply(data, user.id)
+      return json({
+        ok: true,
+        mode: 'summary',
+        bullets: result.bullets,
+        generated_at: data.captured_at,
+        source_metrics: data.metrics,
+        degraded: result.degraded,
+        notice: result.notice,
+        remote_providers_ready: remoteReady,
+      })
     }
-    const reply = await chatReply(openaiKey, db, context, body)
-    return json({ ok: true, mode: 'chat', reply })
+
+    const result = await chatReply(db, context, body, await snapshot(), user.id)
+    return json({ ok: true, mode: 'chat', ...result, remote_providers_ready: remoteReady })
   } catch (error) {
-    const code = error instanceof AiError ? error.code : 'ai_unavailable'
+    const code = error instanceof AiError ? error.code : 'ai_error'
     if (code === 'unauthorized' || code === 'forbidden') return json({ ok: false, error: code }, 401)
     if (code === 'env_missing') return json({ ok: false, error: code }, 500)
     return json({ ok: false, error: code })
