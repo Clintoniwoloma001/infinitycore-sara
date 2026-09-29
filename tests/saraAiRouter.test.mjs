@@ -39,12 +39,34 @@ console.log('\nSARA AI provider router\n')
 // 1. Chain + catalog
 // ---------------------------------------------------------------------------
 
-test('default chain is gemini > groq > rules > openai > nvidia', () => {
-  assert.match(ROUTER, /DEFAULT_CHAIN = \['gemini', 'groq', 'rules', 'openai', 'nvidia'\]/)
+test('default chain prefers cleanapis and keeps the internal rules tier', () => {
+  // Clean APIs is placed first so a configured CLEAN_APIS_KEY is actually
+  // used, with the previous chain intact as failover. The invariant that
+  // matters is preserved: the deterministic `rules` tier is still present, so
+  // the router can never be exhausted.
   const match = ROUTER.match(/DEFAULT_CHAIN = \[([^\]]+)\]/)
-  assert.deepEqual(match[1].split(',').map((s) => s.trim().replace(/'/g, '')), [
-    'gemini', 'groq', 'rules', 'openai', 'nvidia',
-  ])
+  const chain = match[1].split(',').map((s) => s.trim().replace(/'/g, ''))
+  assert.ok(chain.includes('cleanapis'), 'cleanapis is in the default chain')
+  assert.equal(chain[0], 'cleanapis', 'cleanapis is tried first')
+  assert.ok(chain.includes('rules'), 'the deterministic rules tier remains')
+  // Every previous provider is still available as failover.
+  for (const p of ['gemini', 'groq', 'openai', 'nvidia']) {
+    assert.ok(chain.includes(p), `${p} is still in the chain`)
+  }
+  assert.ok(chain.indexOf('rules') > 0, 'rules is not first (a real model leads)')
+})
+
+test('cleanapis is a real OpenAI-compatible provider, not a new architecture', () => {
+  // It must reuse the existing chat/completions transport and read a key from
+  // a function secret - the whole point of adding it to the router rather than
+  // building a parallel service.
+  assert.match(ROUTER, /cleanapis:\s*\{\s*base:\s*'https:\/\/cleanapis\.com\/v1'/)
+  assert.match(ROUTER, /cleanapis:\s*\['CLEAN_APIS_KEY'\]/)
+  // The key must be read only through the shared secret map, never inline.
+  assert.ok(!/Deno\.env\.get\('CLEAN_APIS_KEY'\)/.test(ROUTER),
+    'the key is read via SECRET_ENV, not ad hoc')
+  // And it must be catalogued with the dashboard model ids.
+  assert.match(ROUTER, /cleanapis:\s*\{[^}]*defaultModel:\s*'gpt-5\.6-luna'/)
 })
 
 test('every provider in the default chain is described in the catalog', () => {
