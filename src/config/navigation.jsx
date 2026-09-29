@@ -63,7 +63,6 @@ export const routeConfig = [
       { label: 'Leave Requests', path: '/leave-requests', icon: CalendarDays, element: 'LeaveRequests', permissions: [] },
       { label: 'Leave Balances', path: '/leave-balances', icon: ListChecks, element: 'LeaveBalances', permissions: [PERMISSIONS.HR_LEAVE_MANAGE] },
       { label: 'Leave Planner', path: '/leave-planner', icon: CalendarRange, element: 'LeaveSchedulePlanner', permissions: [PERMISSIONS.LEAVE_SCHEDULE_VIEW] },
-      { label: 'Attendance', path: '/attendance', icon: Clock3, element: 'Attendance', permissions: [PERMISSIONS.HR_ATTENDANCE_SELF] },
       { label: 'Attendance Mgmt', path: '/attendance-management', icon: ClipboardList, element: 'AttendanceManagement', permissions: [PERMISSIONS.HR_ATTENDANCE_MANAGE] },
       { label: 'Attendance Terminal', path: '/attendance-terminal', icon: Monitor, element: 'AttendanceTerminal', permissions: [PERMISSIONS.ATTENDANCE_TERMINAL] },
     ],
@@ -137,6 +136,7 @@ export const routeConfig = [
     section: 'Work',
     items: [
       { label: 'My Work', path: '/my-work', icon: ListChecks, element: 'MyWork', permissions: [] },
+      { label: 'Attendance', path: '/attendance', icon: Clock3, element: 'Attendance', permissions: [PERMISSIONS.HR_ATTENDANCE_SELF] },
       { label: 'Work Management', path: '/work-management', icon: Target, element: 'WorkManagement', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'My Training', path: '/my-training', icon: GraduationCap, element: 'MyTraining', permissions: [] },
     ],

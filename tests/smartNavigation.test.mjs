@@ -13,7 +13,7 @@ import {
   DEPARTMENTS, ROLE_DEPARTMENT, UNRESTRICTED_ROLES,
   departmentsForRole, isSharedOnly, filterSectionsByDepartment,
 } from '../src/config/navigationConfig.js'
-import { ROLES } from '../src/constants/roles.js'
+import { ROLES, ROLE_PERMISSIONS } from '../src/constants/roles.js'
 // navigation.jsx is JSX, which plain Node cannot import, so the wiring into it
 // is asserted from source below rather than executed.
 
@@ -170,6 +170,73 @@ check('every role in the catalog has an explicit mapping decision', () => {
   for (const role of Object.values(ROLES)) {
     assert.ok(role in ROLE_DEPARTMENT,
       `${role} missing from ROLE_DEPARTMENT - it would silently fall back to shared-only`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Self-service Attendance is company-wide.
+// Every employee clocks in from the web, so the item must sit in a SHARED group
+// (no `department` tag) and must be reachable by every internal role. A customer
+// portal login has no attendance of its own and stays out.
+// ---------------------------------------------------------------------------
+console.log('\nSelf-service Attendance is company-wide')
+
+// The real groups, rebuilt from source so the real filter can be run over them.
+const navGroups = [
+  ...[...navSource.matchAll(/section: '([^']+)',\s*\n\s*department: DEPARTMENTS\.([A-Z_]+),\s*\n\s*items: \[([\s\S]*?)\n\s*\],/g)]
+    .map((m) => ({ section: m[1], department: DEPARTMENTS[m[2]], body: m[3] })),
+  ...[...navSource.matchAll(/section: '([^']+)',\s*\n\s*items: \[([\s\S]*?)\n\s*\],/g)]
+    .map((m) => ({ section: m[1], department: null, body: m[2] })),
+].map((g) => ({
+  ...g,
+  items: [...g.body.matchAll(/path: '([^']+)'/g)].map((m) => m[1]),
+}))
+
+const groupOf = (path) => navGroups.find((g) => g.items.includes(path))
+
+check('the nav config is fully parsed', () => {
+  assert.ok(navGroups.length >= 9, `only ${navGroups.length} groups parsed from navigation.jsx`)
+  for (const g of navGroups) assert.ok(g.items.length > 0, `${g.section} parsed with no items`)
+})
+
+check('self-service Attendance lives in a shared (untagged) group', () => {
+  const group = groupOf('/attendance')
+  assert.ok(group, '/attendance is not in routeConfig')
+  assert.equal(group.department, null,
+    `Attendance sits in the '${group.department}'-tagged group, so the department filter hides it from everyone outside ${group.department}`)
+})
+
+check('every internal role keeps the Attendance menu item', () => {
+  for (const role of Object.values(ROLES)) {
+    if (role === ROLES.CUSTOMER) continue
+    const visible = filterSectionsByDepartment(navGroups, { role })
+      .flatMap((g) => g.items)
+    assert.ok(visible.includes('/attendance'), `${role} cannot see Attendance in the menu`)
+  }
+})
+
+check('the permission behind Attendance is held by every internal role', () => {
+  const key = 'hr.attendance.self'
+  for (const role of Object.values(ROLES)) {
+    if (role === ROLES.CUSTOMER) continue
+    assert.ok((ROLE_PERMISSIONS[role] || []).includes(key),
+      `${role} has no ${key}, so canAccessRoute would render AccessDenied`)
+  }
+  assert.ok(!(ROLE_PERMISSIONS[ROLES.CUSTOMER] || []).includes(key),
+    'a customer must not be given self-service attendance')
+})
+
+check('/attendance is declared exactly once', () => {
+  const all = navGroups.flatMap((g) => g.items)
+  assert.equal(all.filter((p) => p === '/attendance').length, 1,
+    'a duplicate path would register the React route twice')
+})
+
+check('the privileged attendance modules stay department-scoped', () => {
+  for (const path of ['/attendance-management', '/attendance-terminal']) {
+    const group = groupOf(path)
+    assert.ok(group, `${path} is not in routeConfig`)
+    assert.ok(group.department, `${path} must stay in a department-tagged group`)
   }
 })
 
