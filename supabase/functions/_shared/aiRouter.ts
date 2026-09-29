@@ -71,10 +71,17 @@ export const PROVIDER_CATALOG: Record<string, ProviderDescriptor> = {
   groq: { id: 'groq', name: 'Groq', kind: 'remote', defaultModel: 'llama-3.3-70b-versatile' },
   rules: { id: 'rules', name: 'Internal Rules Engine', kind: 'internal', defaultModel: 'deterministic-v1' },
   openai: { id: 'openai', name: 'OpenAI', kind: 'remote', defaultModel: 'gpt-4o-mini' },
+  // Clean APIs is an OpenAI-compatible gateway. Adding it here rather than
+  // building a parallel service is what keeps SARA identical on Web and Flutter:
+  // both keep calling the same router, so failover, rate limiting, usage
+  // accounting and audit all continue to work unchanged.
+  cleanapis: { id: 'cleanapis', name: 'Clean APIs', kind: 'remote', defaultModel: 'gpt-5.6-luna' },
   nvidia: { id: 'nvidia', name: 'NVIDIA NIM', kind: 'remote', defaultModel: 'meta/llama-3.3-70b-instruct' },
 }
 
-export const DEFAULT_CHAIN = ['gemini', 'groq', 'rules', 'openai', 'nvidia']
+// Clean APIs is tried EARLY (before the paid OpenAI tier) so a configured
+// Clean APIs key is actually used; the rest of the chain remains as failover.
+export const DEFAULT_CHAIN = ['cleanapis', 'gemini', 'groq', 'rules', 'openai', 'nvidia']
 
 // ---------------------------------------------------------------------------
 // Failure classification
@@ -306,6 +313,10 @@ const SECRET_ENV: Record<string, string[]> = {
   gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
   groq: ['GROQ_API_KEY'],
   openai: ['OPENAI_API_KEY'],
+  // Supabase function secret, set with:
+  //   node scripts/set-supabase-secret.mjs --name CLEAN_APIS_KEY
+  // It is read ONLY here, server-side, and never returned to a caller.
+  cleanapis: ['CLEAN_APIS_KEY'],
   nvidia: ['NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'],
 }
 
@@ -335,6 +346,10 @@ interface OpenAiTool {
 const OPENAI_COMPATIBLE: Record<string, { base: string; authHeader: string; authPrefix: string }> = {
   groq: { base: 'https://api.groq.com/openai/v1', authHeader: 'Authorization', authPrefix: 'Bearer ' },
   openai: { base: 'https://api.openai.com/v1', authHeader: 'Authorization', authPrefix: 'Bearer ' },
+  // Clean APIs speaks the OpenAI chat/completions wire format, so it reuses the
+  // exact same request/response path as OpenAI and Groq. If the account's
+  // gateway base path differs, change it HERE and nowhere else.
+  cleanapis: { base: 'https://cleanapis.com/v1', authHeader: 'Authorization', authPrefix: 'Bearer ' },
   nvidia: { base: 'https://integrate.api.nvidia.com/v1', authHeader: 'Authorization', authPrefix: 'Bearer ' },
 }
 
