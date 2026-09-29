@@ -62,16 +62,59 @@ export default function BranchReview({ state, branches, batchId, onDone }) {
     })
   }
 
+  /**
+   * Turn an opaque PostgREST "in the schema cache" failure into a real
+   * diagnosis, using the signature the server reports as actually deployed.
+   */
+  const describeSplitFailure = async (e) => {
+    const base = e?.message || String(e)
+    if (!/schema cache|Could not find the function|PGRST202/i.test(base)) return base
+    let sig = null
+    try { sig = await bankonePortfolioService.getSplitBranchSignature() } catch { /* probe absent */ }
+    if (!sig) {
+      return `${base}\n\nThe database does not expose the split-branch contract. Apply migration ` +
+        `20260931000003_bankone_split_branch_contract.sql in the Supabase SQL Editor, then reload the schema.`
+    }
+    if (!sig.exists) {
+      return `${base}\n\nsplit_bankone_branch is not present on the database. Apply migrations ` +
+        `20260931000002 and 20260931000003, then reload the PostgREST schema.`
+    }
+    if (Number(sig.overload_count) > 1) {
+      return `${base}\n\nThe database has ${sig.overload_count} overloads of split_bankone_branch, ` +
+        `so PostgREST cannot resolve the call. Apply 20260931000003 to restore a single definition.`
+    }
+    const deployed = (sig.args || []).map((a) => `${a.name} ${a.type}`).join(', ')
+    return `${base}\n\nThe database is expecting: (${deployed}). ` +
+      `This build sends: (p_parent_branch_id, p_new_branch_names, p_source_import_id, p_reason). ` +
+      `If those differ, reload the app so it runs the current build.`
+  }
+
   const doSplit = (m) => {
     const names = splitNames.split(',').map((s) => s.trim()).filter(Boolean)
     if (names.length < 2) { setError('List at least two real branch names, separated by commas.'); return }
     if (!reason.trim()) { setError('A reason is required to split a branch.'); return }
     return run(`split-${m.branch_id}`, async () => {
-      await bankonePortfolioService.splitBranch({
-        parentBranchId: m.branch_id, newBranchNames: names, importId: batchId, reason: reason.trim(),
-      })
+      let res
+      try {
+        res = await bankonePortfolioService.splitBranch({
+          parentBranchId: m.branch_id, newBranchNames: names, importId: batchId, reason: reason.trim(),
+        })
+      } catch (e) {
+        // Replace the opaque PostgREST text with the real cause.
+        const diagnosis = await describeSplitFailure(e)
+        setError(diagnosis)
+        throw new Error(diagnosis)
+      }
+      const repointed = Number(res?.rows_repointed ?? 0)
+      const created = (res?.created_branch_ids || []).length
+      const reused = (res?.reused_branch_ids || []).length
+      const total = created + reused
       setSplitFor(null); setSplitNames(''); setReason('')
-      await onDone(`Branch split into ${names.length}. The original was deactivated, not deleted, so no history was lost.`)
+      await onDone(
+        `Split into ${total} branch${total === 1 ? '' : 'es'} (${created} created, ${reused} reused), ` +
+        `re-pointing ${repointed} loan(s). The combined branch was deactivated, not deleted, ` +
+        `so no history was lost.`,
+      )
     })
   }
 
@@ -102,7 +145,12 @@ export default function BranchReview({ state, branches, batchId, onDone }) {
 
   return (
     <div className="space-y-4">
-      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {/* whitespace-pre-line so a multi-line contract diagnosis stays readable */}
+      {error && (
+        <p className="whitespace-pre-line rounded-lg bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700">
+          {error}
+        </p>
+      )}
 
       {/* §14 MERGED structures first - they change the bank-wide shape. */}
       {merged.length > 0 && (
@@ -149,9 +197,9 @@ export default function BranchReview({ state, branches, batchId, onDone }) {
                     <div className="flex justify-end gap-2">
                       <button onClick={() => setSplitFor(null)}
                         className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600">Cancel</button>
-                      <button onClick={() => doSplit(m)} disabled={busyKey === `split-${m.branch.id}`}
+                      <button onClick={() => doSplit(m)} disabled={busyKey === `split-${m.branch_id}`}
                         className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">
-                        {busyKey === `split-${m.branch.id}`
+                        {busyKey === `split-${m.branch_id}`
                           ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Split branch'}
                       </button>
                     </div>

@@ -200,6 +200,128 @@ describe('safety of "add as employee"', () => {
   })
 })
 
+describe('the split-branch RPC contract', () => {
+  const splitMigration = read(
+    'supabase/migrations/20260931000003_bankone_split_branch_contract.sql')
+
+  test('declares exactly one canonical signature, unchanged from the original', () => {
+    // The argument names are the CONTRACT: PostgREST matches an RPC call on
+    // argument name, so a rename breaks every caller. The names below must stay
+    // identical to the ones in 20260929000002.
+    assert.match(
+      splitMigration,
+      /create or replace function public\.split_bankone_branch\(\s*p_parent_branch_id\s+uuid,\s*p_new_branch_names\s+text\[\],\s*p_source_import_id\s+uuid default null,\s*p_reason\s+text default null\s*\)/s,
+    )
+    // CREATE OR REPLACE only, never a bare CREATE and never a DROP, so applying
+    // the migration cannot remove the function or create a second overload.
+    assert.ok(!/drop function[^;]*split_bankone_branch/i.test(splitMigration),
+      'must not drop the function; the signature is unchanged')
+    assert.ok(!/create\s+(?!or replace)/i.test(
+      splitMigration.replace(/create or replace/gi, '')),
+      'every CREATE in this migration must be CREATE OR REPLACE')
+  })
+
+  test('uses the canonical normalizer, never the legacy expression', () => {
+    // The legacy expression kept slashes and did not collapse whitespace, which
+    // produced a mapping key ("MUSHIN/YABA") that no row could ever match.
+    const code = splitMigration.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')
+    assert.ok(!/v_norm\s*:=\s*upper\(replace\(btrim\(v_name\)/i.test(code),
+      'the mapping key must use bankone_norm_branch()')
+    assert.match(code, /v_norm\s*:=\s*public\.bankone_norm_branch\(v_name\)/)
+    assert.match(code, /public\.bankone_norm_branch\(r\.branch_name_raw\)/)
+  })
+
+  test('re-points loans by matching the combined parent label too', () => {
+    // BankOne often reports a COMBINED label ("Mushin/Yaba") while the split
+    // creates individual branches. Comparing only against the individual keys
+    // ("MUSHIN", "YABA") can never equal the row key ("MUSHIN YABA"), which is
+    // how the split silently re-pointed zero loans.
+    assert.match(splitMigration, /v_parent_norm\s*:=\s*public\.bankone_norm_branch\(v_parent\.branch_name\)/)
+    assert.match(splitMigration, /= v_parent_norm/)
+  })
+
+  test('returns a verifiable effect and keeps the original keys', () => {
+    assert.match(splitMigration, /'created_branch_ids'/)
+    assert.match(splitMigration, /'rows_repointed'/)
+    assert.match(splitMigration, /'parent_branch_id'/)
+    assert.match(splitMigration, /'ok', true/)
+  })
+
+  test('preserves authorization and never becomes public', () => {
+    assert.match(splitMigration, /security definer/)
+    assert.match(splitMigration, /set search_path = public/)
+    assert.match(splitMigration, /public\.can_review_work_tasks\(\)/)
+    assert.match(splitMigration, /grant execute on function public\.split_bankone_branch\(uuid, text\[\], uuid, text\) to authenticated/)
+    assert.match(splitMigration, /revoke all on function public\.split_bankone_branch\(uuid, text\[\], uuid, text\) from anon/)
+    assert.ok(!/grant execute[^;]*split_bankone_branch[^;]*\bto anon\b/i.test(splitMigration),
+      'the split RPC must never be executable by anon')
+  })
+
+  test('still deactivates rather than deletes, and still audits', () => {
+    assert.match(splitMigration, /set status = 'inactive'/)
+    assert.ok(!/delete from public\.branches/i.test(splitMigration),
+      'a split must never delete the parent branch')
+    assert.match(splitMigration, /'BRANCH_SPLIT'/)
+  })
+
+  test('reloads the PostgREST schema cache', () => {
+    assert.match(splitMigration, /notify pgrst, 'reload schema'/)
+  })
+})
+
+describe('the frontend split call matches the deployed contract', () => {
+  const branchReview = read('src/components/bankone/BranchReview.jsx')
+
+  test('sends the exact snake_case argument names', () => {
+    assert.match(service, /p_parent_branch_id: parentBranchId/)
+    assert.match(service, /p_new_branch_names: newBranchNames/)
+    assert.match(service, /p_source_import_id: importId \?\? null/)
+    assert.match(service, /p_reason: reason \?\? null/)
+  })
+
+  test('sends none of the non-contract names that produced the error', () => {
+    // Scope to the split payload object only. The wider file legitimately
+    // mentions other names (e.g. the probe's error text), and a loose slice
+    // would flag those.
+    const start = service.indexOf("supabase.rpc('split_bankone_branch'")
+    const open = service.indexOf('{', start)
+    const close = service.indexOf('})', open)
+    const payload = service.slice(open, close)
+    // Match on a KEY boundary: '_reason' is a substring of the VALID 'p_reason',
+    // so a bare includes() would produce a false positive.
+    const keys = [...payload.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/gm)].map((m) => m[1])
+    assert.deepEqual(
+      keys,
+      ['p_parent_branch_id', 'p_new_branch_names', 'p_source_import_id', 'p_reason'],
+      'the payload keys must be exactly the deployed contract',
+    )
+    for (const bad of ['p_source_importId', 'p_source_importid', '_reason', 'p_importId']) {
+      assert.ok(!keys.includes(bad), `must not send ${bad}`)
+    }
+  })
+
+  test('diagnoses a schema-cache failure instead of echoing it', () => {
+    assert.match(branchReview, /describeSplitFailure/)
+    assert.match(branchReview, /getSplitBranchSignature/)
+    assert.match(branchReview, /overload_count/)
+    // The original opaque text must not be the whole message.
+    assert.ok(branchReview.includes('The database is expecting'),
+      'the error must name the deployed signature')
+  })
+
+  test('reports the real effect of a split', () => {
+    assert.match(branchReview, /rows_repointed/)
+    assert.match(branchReview, /created_branch_ids/)
+    assert.match(branchReview, /reused_branch_ids/)
+  })
+
+  test('uses the merged row shape consistently (m.branch_id, not m.branch.id)', () => {
+    assert.ok(!/split-\$\{m\.branch\.id\}/.test(branchReview),
+      'the merged branch rows expose branch_id directly')
+    assert.match(branchReview, /parentBranchId: m\.branch_id/)
+  })
+})
+
 describe('error handling and authorization', () => {
   test('the page no longer swallows the real error', () => {
     const page = read('src/pages/BankOneImportReview.jsx')
@@ -223,5 +345,6 @@ describe('error handling and authorization', () => {
     assert.match(lifecycle, /revoke all on function public\.bankone_seed_resolutions\(uuid\) from anon/)
   })
 })
+
 
 

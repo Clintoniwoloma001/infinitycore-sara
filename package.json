@@ -58,6 +58,7 @@
     "test:bankone-vocab": "node --test tests/bankoneImportVocabulary.test.mjs",
     "test:bankone-parity": "node --test tests/bankoneImportParity.test.mjs",
     "test:bankone-e2e": "bash scripts/test-bankone-e2e.sh",
+    "test:bankone-split": "bash scripts/test-bankone-split.sh",
     "test:auto-clockout-midnight": "node tests/attendanceAutoClockout.test.mjs",
     "test:clock-in-canonical": "node tests/attendanceClockInCanonical.test.mjs",
     "test:terminal-gate-field": "node tests/terminalGateFieldFix.test.mjs",

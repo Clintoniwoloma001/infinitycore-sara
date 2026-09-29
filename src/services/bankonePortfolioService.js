@@ -345,8 +345,20 @@ export const bankonePortfolioService = {
   },
 
   /**
-   * §15 Split a combined branch. The parent is DEACTIVATED, never deleted, and
-   * every historical record keeps its original branch_id.
+   * §15 Split a combined branch.
+   *
+   * CONTRACT — the argument names below MUST match the deployed PostgreSQL
+   * signature exactly, because PostgREST matches RPC calls on argument NAME:
+   *
+   *   split_bankone_branch(
+   *     p_parent_branch_id uuid,
+   *     p_new_branch_names text[],
+   *     p_source_import_id uuid default null,
+   *     p_reason           text default null)
+   *
+   * Sending anything else (p_source_importId, _reason, positional args) produces
+   * "Could not find the function ... in the schema cache", which reads like a
+   * server outage but is actually a client/contract mismatch.
    */
   async splitBranch({ parentBranchId, newBranchNames, importId, reason }) {
     return unwrap(supabase.rpc('split_bankone_branch', {
@@ -355,6 +367,27 @@ export const bankonePortfolioService = {
       p_source_import_id: importId ?? null,
       p_reason: reason ?? null,
     }), 'Could not split the branch')
+  },
+
+  /**
+   * Read the DEPLOYED signature of split_bankone_branch.
+   *
+   * The "in the schema cache" error is opaque because PostgREST echoes the keys
+   * the CALLER sent rather than what the database actually has. When a split
+   * fails, this tells us what IS deployed, so the message can name the real
+   * difference (missing migration, stale build, or an ambiguous overload)
+   * instead of guessing. Safe to call on any database: if the function is
+   * absent it reports exists = false rather than throwing.
+   */
+  async getSplitBranchSignature() {
+    const { data, error } = await supabase.rpc('bankone_split_branch_signature')
+    if (error) {
+      // The probe itself is missing => migrations are behind. Say so plainly.
+      const err = surface(error, 'Could not read the split-branch contract')
+      err.contractMissing = true
+      throw err
+    }
+    return data
   },
 
   /** Saved mappings, so the UI can show what will resolve automatically. */
