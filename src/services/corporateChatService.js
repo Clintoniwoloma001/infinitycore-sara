@@ -223,29 +223,28 @@ export async function markChatThreadRead(threadId) {
 }
 
 /**
- * Clear the READ flag on every message addressed to the signed-in user.
+ * Clear the READ flag on every message the caller is a recipient of.
+ *
+ * Delegates to the `mark_all_chat_messages_read` RPC rather than updating the
+ * table from the client, because the only UPDATE policy on `chat_messages` is
+ * `using (sender_id = auth.uid())` — a client-side update by a recipient
+ * matches zero rows and silently does nothing.
  *
  * Strictly a read-receipt operation. It does NOT touch `chat_message_acks`, so
  * "mark all as read" can never be mistaken for, or silently act as,
- * acknowledgement of an Important/Urgent message.
+ * acknowledgment of an Important/Urgent message. The response reports how many
+ * acknowledgements are still outstanding so the UI can say so.
  *
- * Best effort: a failure returns false rather than throwing, because a stale
- * unread badge is a far smaller problem than an error in the notification tray.
+ * Returns null on failure rather than throwing: a stale unread badge is a far
+ * smaller problem than an error in the notification tray.
  */
 export async function markAllRead() {
   try {
-    const { data: user } = await supabase.auth.getUser()
-    const uid = user?.user?.id
-    if (!uid) return false
-    const { error } = await supabase
-      .from('chat_messages')
-      .update({ read_at: new Date().toISOString() })
-      .neq('sender_id', uid)
-      .is('read_at', null)
+    const { data, error } = await supabase.rpc('mark_all_chat_messages_read')
     if (error) throw error
-    return true
+    return data || null
   } catch {
-    return false
+    return null
   }
 }
 

@@ -13,14 +13,22 @@ import {
 const root = new URL('../', import.meta.url)
 const read = (path) => readFileSync(new URL(path, root), 'utf8')
 
-const migration = read('supabase/migrations/20260931000003_ack_accountability_and_push_subscriptions.sql')
+const markAllMigration = read('supabase/migrations/20260931000004_mark_all_chat_messages_read.sql')
+const ackMigration = read('supabase/migrations/20260931000003_ack_accountability_and_push_subscriptions.sql')
+const schema40 = read('schema_phase40_corporate_communication.sql')
 const directTab = read('src/components/messages/DirectTab.jsx')
 const conversations = read('src/components/messages/Conversations.jsx')
 const messageBubble = read('src/components/messages/MessageBubble.jsx')
+const composer = read('src/components/messages/Composer.jsx')
+const bell = read('src/components/NotificationBell.jsx')
 const layout = read('src/components/Layout.jsx')
 const banner = read('src/components/chat/AckReminderBanner.jsx')
+const chatService = read('src/services/corporateChatService.js')
 const sw = read('public/sw.js')
 const push = read('src/services/webPushService.js')
+// The acknowledgement migration is the one carrying the ack RPCs and the push
+// store; the mark-all-read migration is separate (see below).
+const migration = ackMigration
 
 const ME = 'me'
 const THEM = 'them'
@@ -230,3 +238,114 @@ assert.ok(
 )
 
 console.log('acknowledgement accountability: all assertions passed')
+
+// ---------------------------------------------------------------------------
+// ACCESS CONTROL — group/channel visibility is enforced in RLS, not the UI
+// ---------------------------------------------------------------------------
+assert.ok(
+  /for select using \(\s*public\.is_group_member\(id\)\s*or creator_id = auth\.uid\(\)\s*or public\.is_communication_admin\(\)/.test(schema40),
+  'groups must be readable only by members, their creator, or a comm admin',
+)
+assert.ok(
+  /for select using \(\s*public\.is_channel_member\(id\)\s*or creator_id = auth\.uid\(\)\s*or public\.is_communication_admin\(\)/.test(schema40),
+  'channels must be readable only by members, their creator, or a comm admin',
+)
+// Membership must be an exact identity check, not a broad "has a role" test.
+assert.ok(
+  /where group_id = p_group_id and member_id = auth\.uid\(\)/.test(schema40),
+  'is_group_member must compare member_id to the caller exactly',
+)
+assert.ok(
+  /where channel_id = p_channel_id and member_id = auth\.uid\(\)/.test(schema40),
+  'is_channel_member must compare member_id to the caller exactly',
+)
+// Super Admin keeps the all-access exception, and it must not be narrowed.
+assert.ok(
+  /role in \('super_admin', 'admin', 'hr_manager', 'hr_officer'\)/.test(schema40),
+  'is_communication_admin must continue to admit super_admin',
+)
+// Message loading is gated by the same membership predicate.
+assert.ok(
+  /if v_msg\.message_type = 'channel' then\s*return public\.is_channel_member\(v_msg\.channel_id\)/.test(schema40),
+  'reading a channel message must require channel membership',
+)
+assert.ok(
+  /if v_msg\.message_type = 'group' then\s*return public\.is_group_member\(v_msg\.group_id\)/.test(schema40),
+  'reading a group message must require group membership',
+)
+
+// ---------------------------------------------------------------------------
+// @ MENTIONS — scoped to the conversation's own membership
+// ---------------------------------------------------------------------------
+assert.ok(
+  conversations.includes('const mentionPeople = useMemo('),
+  'Conversations must build a conversation-scoped mention list',
+)
+assert.ok(
+  /if \(isGroup\) \{[\s\S]*?new Set\(\(members \|\| \[\]\)\.map\(\(m\) => m\.member_id\)/.test(conversations),
+  'the mention list must be derived from the conversation member table',
+)
+assert.ok(
+  /people=\{mentionPeople\}/.test(conversations),
+  'the Composer must receive the scoped list, not the platform directory',
+)
+// The other pickers legitimately keep the full directory (adding members,
+// assigning a task) — only the mention path is conversation-scoped.
+const peoplePropUses = conversations.match(/people=\{people\}/g) || []
+assert.ok(
+  peoplePropUses.length >= 3,
+  'add-member and task pickers must keep the full directory',
+)
+// The Composer uses `people` for nothing but mentions, so scoping it is safe.
+assert.ok(
+  !/people\.(filter|map)\(/.test(composer),
+  'Composer must not re-derive the candidate list itself',
+)
+// Defence in depth: the server already drops non-member mentions.
+assert.ok(
+  read('supabase/migrations/20260922000003_direct_message_requires_ack.sql')
+    .includes('from public.message_group_members m where m.group_id'),
+  'the server must independently validate group mentions against membership',
+)
+
+// ---------------------------------------------------------------------------
+// MARK ALL AS READ — must work for a recipient, and must not acknowledge
+// ---------------------------------------------------------------------------
+assert.ok(
+  markAllMigration.includes('create or replace function public.mark_all_chat_messages_read()'),
+  'recipients need a server-side path to mark messages read',
+)
+assert.ok(
+  markAllMigration.includes('security definer'),
+  'the RPC must run as definer: the chat_messages UPDATE policy only admits the sender',
+)
+assert.ok(
+  /using \(sender_id = auth\.uid\(\)\)/.test(schema40),
+  'documents WHY the client cannot do this itself',
+)
+assert.ok(
+  chatService.includes("supabase.rpc('mark_all_chat_messages_read')"),
+  'the client must call the RPC rather than updating the table',
+)
+// The critical exception: read state must not alias compliance state.
+const markAllBody = markAllMigration.split('create or replace function')[1] || ''
+assert.ok(
+  !markAllBody.includes('update public.chat_message_acks'),
+  'mark-all-read must never write chat_message_acks',
+)
+assert.ok(
+  !markAllBody.includes("set status = 'acknowledged'"),
+  'mark-all-read must never acknowledge anything',
+)
+assert.ok(
+  markAllBody.includes('acknowledgements_outstanding'),
+  'the RPC should report what is still owed so the UI can stay honest',
+)
+assert.ok(
+  /if \(typeof stillOwed === 'number'\) setAckPending\(stillOwed\)/.test(bell),
+  'the bell must not zero the acknowledgement badge on mark-all-read',
+)
+assert.ok(
+  bell.includes('Mark all as read'),
+  'the bell must offer "Mark all as read"',
+)

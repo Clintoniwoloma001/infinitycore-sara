@@ -52,14 +52,19 @@ export default function NotificationBell() {
   // "Mark all as read" clears the READ side of the feed only. It deliberately
   // does NOT acknowledge anything: dismissing or clearing a notification is
   // never compliance, and conflating the two would let a compliance obligation
-  // be cleared without the user ever confirming it.
+  // be cleared without the user ever confirming it. `ackPending` is therefore
+  // left untouched — the acknowledgement-required entry stays visible and
+  // outstanding until the user actually acknowledges.
   const onMarkAllRead = async () => {
     setMarking(true)
     try {
-      const ok = await markAllRead()
-      if (ok) {
+      const res = await markAllRead()
+      if (res) {
         setChatUnread(0)
-        setAckPending(0)
+        // Keep the count honest: the server reports what is still owed, so the
+        // badge reflects reality rather than being optimistically zeroed.
+        const stillOwed = res.acknowledgements_outstanding
+        if (typeof stillOwed === 'number') setAckPending(stillOwed)
       }
     } finally {
       setMarking(false)

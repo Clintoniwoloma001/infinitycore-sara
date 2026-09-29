@@ -469,7 +469,29 @@ export default function Conversations({ kind, people, identity, onStartDirectMes
     task: true,
   }), [myRole, isCommAdmin])
 
-  const actionError = (e) => setError(e?.message || 'Action failed')
+  // ---- @ mention candidates ------------------------------------------------
+  // The Composer used to receive the PLATFORM-WIDE directory, so typing "@" in
+  // any group or channel offered every InfinityCore account. Mentions must be
+  // scoped to the conversation: a @ in Group A may only resolve to Group A
+  // members.
+  //
+  // `members` is loaded per conversation from the membership table
+  // (message_group_members / message_channel_members), which is RLS-guarded to
+  // the conversation, so the candidate set is derived from real membership
+  // rather than from a client-side filter over the global directory.
+  //
+  // Direct threads keep the full directory: there the peer set is already the
+  // two participants, and this is the "new chat" entry point where mentioning
+  // anyone you work with is the point.
+  const mentionPeople = useMemo(() => {
+    if (isGroup) {
+      const ids = new Set((members || []).map((m) => m.member_id).filter(Boolean))
+      if (ids.size === 0) return []
+      return (people || []).filter((p) => ids.has(p.id))
+    }
+    return people || []
+  }, [isGroup, members, people])
+
 
   return (
     <div className="grid lg:grid-cols-[300px_1fr] gap-4">
@@ -691,7 +713,7 @@ export default function Conversations({ kind, people, identity, onStartDirectMes
                 onSend={send}
                 sending={sending}
                 disabled={!!gateMsg}
-                people={people}
+                people={mentionPeople}
                 allowRequireAck={['owner', 'admin', 'moderator'].includes(myRole)}
                 replyTo={replyTo ? {
                   ...replyTo,
