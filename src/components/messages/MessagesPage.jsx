@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { AtSign, Bookmark, Hash, Landmark, Loader2, MessageSquare, Users, X } from 'lucide-react'
+import { AtSign, Bookmark, Hash, Landmark, Loader2, MessageSquare, Search, Users, X } from 'lucide-react'
 import { supabase } from '../../supabaseClient'
 import { useAuth } from '../../hooks/useAuth'
 import { getUnreadMessageCounts, unreadMessageTotal, getInviteContext, joinViaInvite } from '../../services/corporateChatService'
@@ -20,6 +20,44 @@ const TABS = [
 
 const realPersonName = (person) => displayPersonName(person)
 
+// Search is scoped to the active tab, and the placeholder states that scope so
+// a user never wonders why a channel name finds nothing in the people list.
+const SEARCH_PLACEHOLDER = {
+  direct: 'Search people…',
+  groups: 'Search groups…',
+  channels: 'Search channels…',
+  announcements: 'Search announcements…',
+  saved: 'Search saved messages…',
+  mentions: 'Search mentions…',
+}
+
+function MessageSearchBar({ tabKey, value, onChange }) {
+  const placeholder = SEARCH_PLACEHOLDER[tabKey]
+  if (!placeholder) return null
+  return (
+    <div className="relative mb-3">
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        className="w-full pl-9 pr-9 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#009944]/30 focus:border-[#009944]"
+      />
+      {value && (
+        <button
+          onClick={() => onChange('')}
+          aria-label="Clear search"
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-slate-100"
+        >
+          <X className="w-3.5 h-3.5 text-slate-400" />
+        </button>
+      )}
+    </div>
+  )
+}
+
 export default function MessagesPage() {
   const { user, profile } = useAuth()
   const me = user?.id
@@ -35,6 +73,10 @@ export default function MessagesPage() {
   const [joiningInvite, setJoiningInvite] = useState(false)
   const [reloadTick, setReloadTick] = useState(0)
   const [pendingDmThreadId, setPendingDmThreadId] = useState(null)
+  // Search is scoped to the ACTIVE tab. Held here rather than inside each tab
+  // so switching tabs can clear it explicitly, which stops a channel query
+  // from silently filtering the people list and vice versa.
+  const [search, setSearch] = useState('')
 
   // Directory for pickers: staff across the platform (including me).
   // Sourced from the get_messaging_directory RPC — profiles/employees are
@@ -157,6 +199,10 @@ export default function MessagesPage() {
 
   const setTabAndDeepLink = (key) => {
     setTab(key)
+    // Clear the previous tab's query. A channel name left in the box would
+    // filter the people list to nothing, which reads as a broken search rather
+    // than a stale query.
+    setSearch('')
     const base = window.location.hash.split('?')[0]
     window.history.replaceState(null, '', `${base}?tab=${key}`)
   }
@@ -223,13 +269,19 @@ export default function MessagesPage() {
         </div>
       ) : (
         <>
-          {activeTab.key === 'direct' && <DirectTab people={people} identity={identity} onUnreadChange={setDirectUnread} openThreadId={pendingDmThreadId} onThreadOpened={() => setPendingDmThreadId(null)} />}
+          {/* Per-tab search: Direct searches people, Channels searches channels,
+              Groups searches groups. The placeholder changes with the tab so
+              the scope is never ambiguous. */}
+          <MessageSearchBar tabKey={activeTab.key} value={search} onChange={setSearch} />
+          {activeTab.key === 'direct' && <DirectTab people={people} identity={identity} onUnreadChange={setDirectUnread} openThreadId={pendingDmThreadId} onThreadOpened={() => setPendingDmThreadId(null)} search={search} />}
           {activeTab.key === 'groups' && (
             <Conversations
               key={`group-${reloadTick}`}
               kind="group"
               people={people}
               identity={identity}
+              search={search}
+              onSearchChange={setSearch}
               onStartDirectMessage={(threadId) => {
                 setPendingDmThreadId(threadId)
                 setTabAndDeepLink('direct')
@@ -242,6 +294,8 @@ export default function MessagesPage() {
               kind="channel"
               people={people}
               identity={identity}
+              search={search}
+              onSearchChange={setSearch}
               onStartDirectMessage={(threadId) => {
                 setPendingDmThreadId(threadId)
                 setTabAndDeepLink('direct')

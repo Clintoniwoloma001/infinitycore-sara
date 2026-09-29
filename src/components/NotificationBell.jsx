@@ -3,14 +3,17 @@ import { useNavigate } from 'react-router-dom'
 import { Bell, Clock } from 'lucide-react'
 import { formatDate } from '../lib/utils'
 import { useMyLeaveApprovals } from '../hooks/useMyLeaveApprovals'
-import { getUnreadMessageCounts, unreadMessageTotal } from '../services/corporateChatService'
+import { getUnreadMessageCounts, unreadMessageTotal, markAllRead } from '../services/corporateChatService'
+import { listMyPendingAcks } from '../services/acknowledgementService'
 
 export default function NotificationBell() {
   const [open, setOpen] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
+  const [ackPending, setAckPending] = useState(0)
+  const [marking, setMarking] = useState(false)
   const navigate = useNavigate()
   const { count, oldest, queue } = useMyLeaveApprovals()
-  const totalCount = count + chatUnread
+  const totalCount = count + chatUnread + ackPending
 
   useEffect(() => {
     let mounted = true
@@ -21,6 +24,12 @@ export default function NotificationBell() {
       } catch (_) {
         // The chat unread RPC is additive; the existing notification feed remains usable before it is deployed.
       }
+      try {
+        // Ack obligations are surfaced in the bell as well as the shell
+        // banner, so a user who ignores the banner still sees them counted.
+        const rows = await listMyPendingAcks()
+        if (mounted) setAckPending(rows.length)
+      } catch (_) { /* the banner is the authoritative surface */ }
     }
     refresh()
     const timer = window.setInterval(refresh, 60000)
@@ -38,6 +47,23 @@ export default function NotificationBell() {
   const goToChat = () => {
     setOpen(false)
     navigate('/chat')
+  }
+
+  // "Mark all as read" clears the READ side of the feed only. It deliberately
+  // does NOT acknowledge anything: dismissing or clearing a notification is
+  // never compliance, and conflating the two would let a compliance obligation
+  // be cleared without the user ever confirming it.
+  const onMarkAllRead = async () => {
+    setMarking(true)
+    try {
+      const ok = await markAllRead()
+      if (ok) {
+        setChatUnread(0)
+        setAckPending(0)
+      }
+    } finally {
+      setMarking(false)
+    }
   }
 
   return (
@@ -59,7 +85,18 @@ export default function NotificationBell() {
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-slate-200 shadow-xl z-40 overflow-hidden">
-            <div className="px-4 py-3 border-b border-slate-100 font-semibold text-sm text-slate-800">Notifications</div>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+              <span className="font-semibold text-sm text-slate-800">Notifications</span>
+              {totalCount > 0 && (
+                <button
+                  onClick={onMarkAllRead}
+                  disabled={marking}
+                  className="text-[11px] font-medium text-[#009944] hover:underline disabled:opacity-50"
+                >
+                  {marking ? 'Marking…' : 'Mark all as read'}
+                </button>
+              )}
+            </div>
             {totalCount === 0 ? (
               <div className="px-4 py-8 text-center text-sm text-slate-400">You're all caught up.</div>
             ) : (
@@ -89,6 +126,21 @@ export default function NotificationBell() {
                     </div>
                     <p className="text-sm text-slate-500 mt-1">{chatUnread} message{chatUnread === 1 ? '' : 's'} waiting in Messages.</p>
                     <span className="inline-block text-xs font-medium text-[#009944] mt-2">Open Messages →</span>
+                  </button>
+                )}
+                {ackPending > 0 && (
+                  <button
+                    onClick={() => { setOpen(false); navigate('/messages') }}
+                    className="w-full text-left px-4 py-3.5 border-t border-slate-100 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />
+                      <span className="text-sm font-medium text-slate-800">Acknowledgement required</span>
+                    </div>
+                    <p className="text-sm text-slate-500 mt-1">
+                      {ackPending} important or urgent message{ackPending === 1 ? '' : 's'} still awaiting your confirmation.
+                    </p>
+                    <span className="inline-block text-xs font-medium text-rose-600 mt-2">Review now →</span>
                   </button>
                 )}
               </>

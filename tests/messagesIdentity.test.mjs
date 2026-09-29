@@ -85,11 +85,21 @@ assert.match(directTab, /import PeoplePicker from '\.\/PeoplePicker'/)
 assert.match(directTab, /<PeoplePicker\s+title="New Message"/)
 assert.match(directTab, /mode="single"/)
 assert.match(directTab, /filteredThreads\.map\(\(t\) =>/)
-assert.match(directTab, /placeholder="Search direct messages…"/)
+// The per-tab search field moved to MessagesPage: ONE search box whose
+// placeholder states the active tab's scope, instead of a separate box inside
+// each tab. The filter itself still lives in DirectTab.
+assert.match(
+  messagesPage,
+  /direct: 'Search people…',\s*\n\s*groups: 'Search groups…',\s*\n\s*channels: 'Search channels…'/,
+  'MessagesPage must scope the search placeholder to the active tab',
+)
+assert.match(messagesPage, /<MessageSearchBar tabKey=\{activeTab\.key\}/)
 assert.match(conversations, /import PeoplePicker from '\.\/PeoplePicker'/)
 assert.match(conversations, /<PeoplePicker\s+title=\{isGroup \? 'Add People' : 'Add Channel Member'\}/)
 assert.match(conversations, /mode="multi"/)
-assert.match(conversations, /placeholder=\{`Search \$\{isGroup \? 'groups' : 'channels'\}…`\}/)
+// The channel/group filter now consumes the shared page-level query rather than
+// owning a second input, so there is exactly one search control per tab.
+assert.match(conversations, /useEffect\(\(\) => \{\s*\n\s*setConvSearch\(search \|\| ''\)/)
 // MemberPanel labels members without an active account instead of faking a name
 assert.match(conversations, /No account yet/)
 assert.match(conversations, /memberIsActive|isActiveAccount\(/)

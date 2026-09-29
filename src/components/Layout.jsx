@@ -13,6 +13,7 @@ import Sara from './sara/Sara'
 import OnboardingFlow from './OnboardingFlow'
 import OnboardingStatusBanner from './OnboardingStatusBanner'
 import LeaveApprovalReminder from './leave/LeaveApprovalReminder'
+import AckReminderBanner from './chat/AckReminderBanner'
 import LeaveFeedbackModal from './leave/LeaveFeedbackModal'
 import onboardingStatusService, { ONBOARDING_STATES } from '../services/onboardingStatusService'
 import {
@@ -196,6 +197,12 @@ export default function Layout({ children }) {
           <div className="max-w-7xl mx-auto px-4 lg:px-8 py-6">
             {showBanner && <OnboardingStatusBanner status={onboardingStatus} onContinue={openOnboarding} onDismiss={dismissBanner} />}
             <LeaveApprovalReminder />
+            {/* Point 7: the acknowledgement reminder lives in the SHELL, above
+                the routed content, so a pending Important/Urgent obligation is
+                visible on Dashboard, Employees, Leave, Attendance, Customers,
+                Loans and Messages alike. Placing it inside a Messages sub-tab
+                would hide it on every other route. */}
+            <AckReminderBanner />
             {children}
           </div>
         </main>

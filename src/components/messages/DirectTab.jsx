@@ -6,7 +6,7 @@ import {
   conversationPins, directChat, listAttachments, listMessageAcks, messageActions, resolveDirectory, unreadMessageTotal, uploadChatAttachment,
 } from '../../services/corporateChatService'
 import { readOutbox, syncOutbox } from '../../services/chatService'
-import MessageBubble from './MessageBubble'
+import MessageBubble, { AckRosterModal, useAckRoster } from './MessageBubble'
 import Composer from './Composer'
 import PersonAvatar from './PersonAvatar'
 import PeoplePicker from './PeoplePicker'
@@ -46,7 +46,7 @@ const fmtTime = (iso) => {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function DirectTab({ people, identity, onUnreadChange, openThreadId, onThreadOpened }) {
+export default function DirectTab({ people, identity, onUnreadChange, openThreadId, onThreadOpened, search = '' }) {
   const { user, profile } = useAuth()
   const me = user?.id
   const myName = displayPersonName({ full_name: profile?.full_name, email: user?.email })
@@ -59,6 +59,9 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
   const [reactions, setReactions] = useState({})
   const [acks, setAcks] = useState({})
   const [ackBusy, setAckBusy] = useState(false)
+  // The message whose recipient roster the sender has opened (point 5).
+  const [rosterFor, setRosterFor] = useState(null)
+  const roster = useAckRoster(rosterFor?.id)
   const [text, setText] = useState('')
   const [online, setOnline] = useState(navigator.onLine)
   const [pendingCount, setPendingCount] = useState(0)
@@ -236,8 +239,14 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
     return (acks[msg.id] || []).find((r) => r.user_id === me) || null
   }
 
+  // Point 1: the sender must never be blocked and never owes an
+  // acknowledgment. This guard was missing here (it existed in Conversations),
+  // so sending an urgent message in a direct thread immediately gated the
+  // sender's own composer with "Acknowledge the urgent message to continue"
+  // and they could not reply until the RECIPIENT acknowledged.
   const myAckRequired = (msg) => {
     if (!msg?.requires_ack || !me) return false
+    if (msg.sender_id === me) return false
     const rows = acks[msg.id] || []
     return !rows.some((r) => r.user_id === me && r.status === 'acknowledged')
   }
@@ -405,12 +414,14 @@ export default function DirectTab({ people, identity, onUnreadChange, openThread
   ), [threads, pinnedConvs])
 
   // Client-side search over the Direct Messages thread list (names only).
+  // Driven by the page-level `search` prop so Direct has ONE search field, like
+  // the Groups and Channels tabs.
   const filteredThreads = useMemo(() => {
-    if (!threadSearch.trim()) return sortedThreads
-    const q = threadSearch.trim().toLowerCase()
+    const q = String(search || '').trim().toLowerCase()
+    if (!q) return sortedThreads
     return sortedThreads.filter((t) => personName(otherMember(t)).toLowerCase().includes(q))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortedThreads, threadSearch])
+  }, [sortedThreads, search])
 
   const send = async (bodyValue, mentionIds, opts = {}) => {
     const body = (bodyValue || '').trim()
@@ -542,17 +553,6 @@ return (
             </button>
           </div>
         </div>
-        <div className="px-4 pb-3 pt-0">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              value={threadSearch}
-              onChange={(e) => setThreadSearch(e.target.value)}
-              placeholder="Search direct messages…"
-              className="w-full pl-9 h-9 rounded-lg border border-slate-200 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
-            />
-          </div>
-        </div>
         {pendingCount > 0 && (
           <button onClick={flushOutbox} className="w-full px-4 py-2 bg-amber-50 text-amber-700 text-xs flex items-center justify-between hover:bg-amber-100">
             {pendingCount} message{pendingCount === 1 ? '' : 's'} queued offline — <span className="font-semibold underline">Sync now</span>
@@ -563,8 +563,8 @@ return (
           {!loading && threads.length === 0 && (
             <div className="px-4 py-10 text-center text-sm text-slate-400">No conversations yet.<br /><button onClick={() => setShowNew(true)} className="text-[#009944] hover:underline mt-1">Start one</button></div>
           )}
-           {filteredThreads.length === 0 && threadSearch.trim() && (
-             <div className="px-4 py-10 text-center text-sm text-slate-400">No conversations match “{threadSearch.trim()}”.</div>
+           {filteredThreads.length === 0 && String(search || '').trim() && (
+             <div className="px-4 py-10 text-center text-sm text-slate-400">No conversations match “{String(search).trim()}”.</div>
            )}
            {filteredThreads.map((t) => {
              const other = otherMember(t)
@@ -706,10 +706,18 @@ return (
                     onBookmark={doBookmark}
                     myAck={myAckOf(m)}
                     onAcknowledge={handleAcknowledge}
+                    acks={acks[m.id] || []}
+                    onOpenAckRoster={mine && m.requires_ack ? () => setRosterFor(m) : null}
                     allowed={{ edit: true, delete: true, report: true }}
                   />
                 )
               })}
+              <AckRosterModal
+                open={!!rosterFor}
+                onClose={() => setRosterFor(null)}
+                rollup={roster?.rollup}
+                names={roster?.names}
+              />
               <div ref={bottomRef} />
             </div>
 

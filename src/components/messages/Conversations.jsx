@@ -9,7 +9,7 @@ import {
   conversationPins, sendRichMessage, listAttachments, listMessageAcks, uploadChatAttachment,
   createMessageInvite, revokeMessageInvite, listMessageInvites, buildInviteUrl, waShareUrl,
 } from '../../services/corporateChatService'
-import MessageBubble from './MessageBubble'
+import MessageBubble, { AckRosterModal, useAckRoster } from './MessageBubble'
 import Composer from './Composer'
 import PersonAvatar from './PersonAvatar'
 import PeoplePicker from './PeoplePicker'
@@ -28,7 +28,7 @@ const COMM_ADMIN_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr
 
 const typeLabel = (channel) => ({ branch: 'Branch', area: 'Area', department: 'Department', announcement: 'Announcements' })[channel.channel_type] || (channel.channel_type === 'role' ? 'Role' : 'Team')
 
-export default function Conversations({ kind, people, identity, onStartDirectMessage }) {
+export default function Conversations({ kind, people, identity, onStartDirectMessage, search = '', onSearchChange }) {
   const { profile } = useAuth()
   const isCommAdmin = COMM_ADMIN_ROLES.includes(profile?.role)
   const [me, setMe] = useState(null)
@@ -51,11 +51,26 @@ export default function Conversations({ kind, people, identity, onStartDirectMes
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [convSearch, setConvSearch] = useState('')
+
+  // The page-level search bar owns the single search field for the active tab.
+  // Mirror the incoming value down and push edits back up, so the two inputs
+  // are one control rather than two boxes that can disagree. When the parent
+  // clears the query on a tab switch, this clears with it.
+  useEffect(() => {
+    setConvSearch(search || '')
+  }, [search])
+  const onSearchInput = useCallback((next) => {
+    setConvSearch(next)
+    onSearchChange?.(next)
+  }, [onSearchChange])
   const [taskModal, setTaskModal] = useState(null)
   const [myRole, setMyRole] = useState(null)
   const [pinnedConvs, setPinnedConvs] = useState([])
   const [attachments, setAttachments] = useState({})
   const [acks, setAcks] = useState({})
+  // The message whose recipient roster the sender has opened (point 5).
+  const [rosterFor, setRosterFor] = useState(null)
+  const roster = useAckRoster(rosterFor?.id)
   const [ackBusy, setAckBusy] = useState(false)
   const bottomRef = useRef(null)
   const messageIdsRef = useRef(new Set())
@@ -468,17 +483,6 @@ export default function Conversations({ kind, people, identity, onStartDirectMes
             <Plus className="w-3.5 h-3.5" /> New
           </button>
         </div>
-        <div className="px-4 pb-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              value={convSearch}
-              onChange={(e) => setConvSearch(e.target.value)}
-              placeholder={`Search ${isGroup ? 'groups' : 'channels'}…`}
-              className="w-full pl-9 h-9 rounded-lg border border-slate-200 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]"
-            />
-          </div>
-        </div>
         <div className="max-h-[70vh] overflow-y-auto divide-y divide-slate-50">
           {loading && <div className="flex justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-slate-300" /></div>}
           {!loading && conversations.length === 0 && (
@@ -611,9 +615,17 @@ export default function Conversations({ kind, people, identity, onStartDirectMes
                     attachments={attachments[m.id] || []}
                     myAck={myAckOf(m)}
                     onAcknowledge={handleAcknowledge}
+                    acks={acks[m.id] || []}
+                    onOpenAckRoster={mine && m.requires_ack ? () => setRosterFor(m) : null}
                   />
                 )
               })}
+              <AckRosterModal
+                open={!!rosterFor}
+                onClose={() => setRosterFor(null)}
+                rollup={roster?.rollup}
+                names={roster?.names}
+              />
               <div ref={bottomRef} />
             </div>
 

@@ -11,7 +11,7 @@
 //   navigation  -> network first, fall back to the cached shell (offline start)
 //   static asset-> cache first, refreshed in the background
 //   /rest/v1, auth, edge functions -> never cached, always the network
-const VERSION = 'infinitycore-v1'
+const VERSION = 'infinitycore-v2'
 const SHELL_CACHE = `${VERSION}-shell`
 const ASSET_CACHE = `${VERSION}-assets`
 
@@ -92,3 +92,82 @@ self.addEventListener('fetch', (event) => {
     )
   }
 })
+
+// ============================================================================
+// PUSH (points 9/10/18)
+// A real system notification for an Important/Urgent message, delivered while
+// the page is closed or the device is locked. This is the mechanism that makes
+// a message land outside the active tab; the in-app banner is explicitly not a
+// substitute for it.
+//
+// The payload is produced server-side by a Supabase Edge Function holding the
+// VAPID private key, shaped as { title, body, url, tag, priority }.
+// `url` deep-links to the conversation, group or channel and focuses the
+// message, so the acknowledgement action is exposed on arrival.
+// ============================================================================
+self.addEventListener('push', (event) => {
+  // A missing payload is legitimate (a liveness ping). Never throw here: an
+  // exception would silently drop the notification.
+  let payload = {}
+  try {
+    payload = event.data ? event.data.json() : {}
+  } catch {
+    payload = { body: event.data ? event.data.text() : '' }
+  }
+
+  const urgent = String(payload.priority).toLowerCase() === 'urgent'
+  const options = {
+    body: payload.body || '',
+    // A stable tag per message collapses a resend onto the same notification
+    // instead of stacking duplicates in the shade.
+    tag: payload.tag || 'infinitycore-message',
+    renotify: Boolean(payload.tag),
+    icon: payload.icon || new URL('icons/icon-192.png', BASE).href,
+    badge: payload.badge || new URL('icons/icon-96.png', BASE).href,
+    data: { url: payload.url || '/' },
+    visibility: 'visible',
+    // Urgent must persist until dealt with; an important message may go to the
+    // shade, which is the visible difference between the two levels (point 12).
+    requireInteraction: urgent,
+  }
+
+  event.waitUntil(self.registration.showNotification(payload.title || 'InfinityCore', options))
+})
+
+// Point 10: a tap opens InfinityCore at the right conversation, focused on the
+// message. Focus an already-open tab rather than piling up new ones.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const target = new URL(event.notification.data?.url || '/', self.location.origin).href
+
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.startsWith(self.location.origin) && 'focus' in client) {
+          // Hand the route to the page so it can navigate and focus the
+          // message, rather than forcing a full reload.
+          client.postMessage({ type: 'infinitycore-navigate', url: target })
+          return client.focus()
+        }
+      }
+      return self.clients.openWindow(target)
+    }),
+  )
+})
+
+// The page can ask the worker to display a notification it composed itself.
+// Used as the foreground fallback while the push service is still being wired
+// up, so an Important/Urgent alert is a real system notification either way.
+self.addEventListener('message', (event) => {
+  const data = event.data || {}
+  if (data.type !== 'show-notification') return
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'InfinityCore', {
+      body: data.body || '',
+      tag: data.tag || 'infinitycore-message',
+      data: { url: data.url || '/' },
+      requireInteraction: String(data.priority).toLowerCase() === 'urgent',
+    }),
+  )
+})
+

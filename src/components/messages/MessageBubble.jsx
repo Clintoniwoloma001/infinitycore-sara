@@ -1,10 +1,11 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertTriangle, Bookmark, CheckCheck, ChevronRight, CloudDownload, FileText, Image as ImageIcon,
   Landmark, Loader2, MailCheck, Pin, Reply, ShieldAlert, Volume2, X,
 } from 'lucide-react'
-import { getAttachmentSignedUrl, scanSensitiveContent } from '../../services/corporateChatService'
+import { getAttachmentSignedUrl, scanSensitiveContent, resolveDirectory } from '../../services/corporateChatService'
+import { summarizeAcks, fetchAckRollup, subscribeToAcks } from '../../services/acknowledgementService'
 import PersonAvatar from './PersonAvatar'
 
 const attachmentUrlCache = new Map()
@@ -92,6 +93,8 @@ export default function MessageBubble({
   attachments = [],
   myAck = null,
   onAcknowledge = null,
+  acks = [],
+  onOpenAckRoster = null,
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
@@ -178,6 +181,11 @@ export default function MessageBubble({
                   <CheckCheck className="w-3 h-3" /> You acknowledged
                 </span>
               )}
+              {/* Point 5: the SENDER's accountability ledger. Shows real
+                  progress ("8 of 10 acknowledged") and opens the full
+                  per-recipient roster. Never shown to a recipient, who has no
+                  ledger to read. */}
+              {mine && onOpenAckRoster && <AckProgressTally acks={acks} onOpen={() => onOpenAckRoster(msg)} />}
             </div>
           )}
 
@@ -494,5 +502,164 @@ function FileAttachment({ attachment, mine }) {
       {!url && !loading && <span className="text-[10px] text-slate-400">{loadError || 'Unavailable'}</span>}
       <CloudDownload className={`w-3 h-3 ${mine ? 'text-emerald-100' : 'text-slate-400'}`} />
     </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// SENDER ACKNOWLEDGEMENT LEDGER (point 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Loads the per-recipient roster for one message and keeps it live.
+ *
+ * Point 6: subscribed to `chat_message_acks` for this message, so the sender's
+ * count and per-recipient status move the moment anyone acknowledges — on this
+ * platform or the other one, since the row is the same row.
+ */
+export function useAckRoster(messageId) {
+  const [rollup, setRollup] = useState(null)
+  const [names, setNames] = useState({})
+  const [open, setOpen] = useState(false)
+
+  const load = useCallback(async () => {
+    if (!messageId) return
+    try {
+      const data = await fetchAckRollup(messageId)
+      if (data) setRollup(data)
+    } catch { /* the ledger is supplementary; the bubble still renders */ }
+  }, [messageId])
+
+  useEffect(() => { load() }, [load])
+
+  // Resolve recipient names once per roster load, so the modal lists people
+  // rather than UUIDs.
+  useEffect(() => {
+    const ids = [
+      ...(rollup?.acknowledged_list || []).map((r) => r.user_id),
+      ...(rollup?.pending_list || []).map((r) => r.user_id),
+    ].filter(Boolean)
+    if (!ids.length) return
+    let cancelled = false
+    resolveDirectory(ids)
+      .then((dir) => { if (!cancelled && dir) setNames(dir) })
+      .catch(() => { /* names are cosmetic */ })
+    return () => { cancelled = true }
+  }, [rollup])
+
+  useEffect(() => {
+    if (!messageId) return undefined
+    // Realtime so a recipient acknowledging elsewhere updates this view
+    // without a refresh.
+    const unsubscribe = subscribeToAcks([messageId], () => load())
+    return unsubscribe
+  }, [messageId, load])
+
+  return { rollup, names, open, setOpen, reload: load }
+}
+
+/**
+ * "8 of 10 acknowledged · 2 pending", or the completion label once every
+ * recipient has confirmed.
+ *
+ * Counts only `status === 'acknowledged'`. Tallying the seeded ROW count made a
+ * freshly-sent broadcast read as fully acknowledged instantly, because every
+ * recipient already holds a `pending` row from the moment the message is sent.
+ */
+function AckProgressTally({ acks, onOpen }) {
+  const { done, total, pending, complete } = summarizeAcks(acks)
+  if (!total) return null
+  return (
+    <button
+      onClick={onOpen}
+      className={`inline-flex items-center gap-1 text-[10px] font-semibold rounded px-2 py-0.5 border ${
+        complete
+          ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100'
+          : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
+      }`}
+      title="View who has acknowledged"
+    >
+      {complete ? <CheckCheck className="w-3 h-3" /> : <MailCheck className="w-3 h-3" />}
+      {complete
+        ? `ALL ${total} RECIPIENTS ACKNOWLEDGED`
+        : `${done} of ${total} acknowledged · ${pending} pending`}
+    </button>
+  )
+}
+
+/**
+ * The detailed per-recipient roster.
+ *
+ * ACKNOWLEDGED and PENDING are two clearly separated sections with timestamps,
+ * because the actionable question for a sender is "who still owes me this", not
+ * merely a count.
+ */
+export function AckRosterModal({ open, onClose, rollup, names = {} }) {
+  if (!open || !rollup) return null
+  const acked = rollup.acknowledged_list || []
+  const waiting = rollup.pending_list || []
+  const nameOf = (id) => names[id]?.full_name || names[id]?.email || 'Unknown member'
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-xl w-full max-w-md p-5 space-y-4 max-h-[80vh] overflow-y-auto"
+      >
+        <div>
+          <h3 className="text-base font-semibold text-slate-900">Acknowledgment status</h3>
+          <p className="text-xs text-slate-500 mt-1">
+            {rollup.acknowledged} of {rollup.total} recipients have acknowledged.
+            {rollup.pending > 0
+              ? ' This message stays outstanding until every recipient confirms.'
+              : ' Every recipient has confirmed receipt.'}
+          </p>
+        </div>
+
+        {waiting.length > 0 && (
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-amber-600 mb-1.5">
+              Still outstanding ({waiting.length})
+            </p>
+            <ul className="divide-y divide-slate-100">
+              {waiting.map((row) => (
+                <li key={row.user_id} className="py-2 text-sm text-slate-700 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+                  {nameOf(row.user_id)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {acked.length > 0 && (
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-600 mb-1.5">
+              Acknowledged ({acked.length})
+            </p>
+            <ul className="divide-y divide-slate-100">
+              {acked.map((row) => (
+                <li key={row.user_id} className="py-2 text-sm text-slate-700 flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                    {nameOf(row.user_id)}
+                  </span>
+                  {row.acknowledged_at && (
+                    <span className="text-[11px] text-slate-400 shrink-0">
+                      {new Date(row.acknowledged_at).toLocaleString()}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-100 text-sm font-medium text-slate-700 hover:bg-slate-200">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

@@ -222,6 +222,33 @@ export async function markChatThreadRead(threadId) {
   ], { p_thread_id: threadId })
 }
 
+/**
+ * Clear the READ flag on every message addressed to the signed-in user.
+ *
+ * Strictly a read-receipt operation. It does NOT touch `chat_message_acks`, so
+ * "mark all as read" can never be mistaken for, or silently act as,
+ * acknowledgement of an Important/Urgent message.
+ *
+ * Best effort: a failure returns false rather than throwing, because a stale
+ * unread badge is a far smaller problem than an error in the notification tray.
+ */
+export async function markAllRead() {
+  try {
+    const { data: user } = await supabase.auth.getUser()
+    const uid = user?.user?.id
+    if (!uid) return false
+    const { error } = await supabase
+      .from('chat_messages')
+      .update({ read_at: new Date().toISOString() })
+      .neq('sender_id', uid)
+      .is('read_at', null)
+    if (error) throw error
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function unreadMessageTotal(payload) {
   if (typeof payload === 'number') return payload
   if (!payload) return 0
