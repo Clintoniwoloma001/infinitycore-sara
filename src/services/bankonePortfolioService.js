@@ -13,12 +13,43 @@ import { runImport } from '../domains/bankone/importPipeline'
 /** Rows are inserted in chunks; PostgREST caps a single statement. */
 const CHUNK = 500
 
-async function unwrap(promise) {
+/**
+ * Surface the REAL server reason. Never collapse a Supabase failure into a
+ * generic message: the reported "TypeError: Load failed" hid a CHECK-constraint
+ * violation that only the database could explain.
+ * A Supabase error is shaped { message, code, details, hint }.
+ */
+function surface(err, context) {
+  const raw = err?.message || String(err ?? '')
+  // Postgres prefixes the message with the SQLSTATE; keep the human part.
+  const detail = raw.split(/:(.+)/s).slice(1).join(':').trim() || raw
+  const out = new Error(context ? `${context}: ${detail}` : detail)
+  out.raw = raw
+  out.code = err?.code || (raw.split(':')[0] || '').trim()
+  out.hint = err?.hint || null
+  out.details = err?.details || null
+  // Correlation id for the server log. No secrets, no payload.
+  out.correlationId = `${context || 'bankone'}:${out.code || 'unknown'}`
+  if (typeof console !== 'undefined' && console.error) {
+    console.error('[bankone-import]', out.correlationId, { message: detail, code: out.code })
+  }
+  return out
+}
+
+async function unwrap(promise, context) {
   const { data, error } = await promise
-  if (error) throw new Error(error.message || 'The server rejected that request.')
-  if (data && data.ok === false) throw new Error(data.error || 'That request could not be completed.')
+  if (error) throw surface(error, context)
+  // ok:false is the RPC's own structured refusal (e.g. role gate).
+  if (data && data.ok === false) {
+    throw surface({ message: data.error || data.reason || 'The server refused that request.' }, context)
+  }
   return data
 }
+
+/** Seed the durable review state for a freshly imported batch. */
+const bankoneSeed = (batchId) =>
+  unwrap(supabase.rpc('bankone_seed_resolutions', { p_batch_id: batchId }),
+    'Could not prepare the review list')
 
 export const bankonePortfolioService = {
   /**
@@ -157,7 +188,18 @@ export const bankonePortfolioService = {
       severity: 'info',
     })
 
-    return { ...result, persisted: true, batchId }
+    // Seed the persistent decision rows and the BankOne branch master NOW, so
+    // the review screen has durable state from the first paint and a refresh
+    // loses nothing. If this fails the rows are still imported, so it is
+    // reported without discarding the batch.
+    let seedWarning = null
+    try {
+      await bankoneSeed(batchId)
+    } catch (seedErr) {
+      seedWarning = seedErr?.message || 'The import was stored, but the review list could not be prepared.'
+    }
+
+    return { ...result, persisted: true, batchId, seedWarning }
   },
 
   /** Re-open a snapshot for review. */
@@ -207,6 +249,51 @@ export const bankonePortfolioService = {
     return data
   },
 
+  // --- §17-§21: server-owned import state -------------------------------
+  // Everything the review screen renders comes from the database, so a browser
+  // refresh resumes the import instead of losing it, and the summary can never
+  // disagree with the resolution lists.
+
+  /**
+   * Seed the persistent decision rows + BankOne branch master for a new batch.
+   * Called once, after createImport() has written the rows. Idempotent.
+   */
+  async seedResolutions(batchId) {
+    return unwrap(supabase.rpc('bankone_seed_resolutions', { p_batch_id: batchId }), null)
+  },
+
+  /** The single source of truth for the review screen. */
+  async getImportState(batchId) {
+    return unwrap(supabase.rpc('bankone_get_import_state', { p_batch_id: batchId }), null)
+  },
+
+  /** Unfinished imports, so the page can offer "Resume import" after a refresh. */
+  async listOpenImports(limit = 10) {
+    return unwrap(supabase.rpc('bankone_get_open_imports', { p_limit: limit }), null)
+  },
+
+  /**
+   * Whether this batch may be published, and the exact blockers. Returns DATA
+   * rather than raising, so the UI can show the real reason and persist
+   * 'blocked' (a publish failure rolls back any status write).
+   */
+  async validatePublish(batchId) {
+    return unwrap(supabase.rpc('bankone_validate_publish', { p_batch_id: batchId }), null)
+  },
+
+  /** Mark a batch blocked with a human-readable reason. Never deletes it. */
+  async markBlocked(batchId, reason) {
+    return unwrap(supabase.rpc('bankone_mark_publication_blocked', {
+      p_batch_id: batchId,
+      p_reason: reason,
+    }), null)
+  },
+
+  /** Publish into the branch/officer snapshot tables. Throws the real reason. */
+  async publish(batchId) {
+    return rpcWithRetry(() => supabase.rpc('bankone_publish_snapshot', { p_batch_id: batchId }))
+  },
+
   // --- §9/§19 resolution actions (all audited, all role-gated) ------------
 
   /** Confirm which employee a BankOne officer name refers to. */
@@ -218,7 +305,7 @@ export const bankonePortfolioService = {
       p_match_type: matchType || 'manual',
       p_confidence: confidence ?? 1,
       p_reason: reason ?? null,
-    }))
+    }), `Could not save the officer mapping for "${sourceName}"`)
   },
 
   /** Explicitly leave an officer unresolved. Their portfolio stays unattributed. */
@@ -227,7 +314,7 @@ export const bankonePortfolioService = {
       p_normalized_source_name: normalizedSourceName,
       p_bankone_source_name: sourceName,
       p_reason: reason ?? null,
-    }))
+    }), `Could not leave "${sourceName}" unresolved`)
   },
 
   /** §12 Create a PENDING employee from BankOne facts only. No invented data. */
@@ -238,10 +325,14 @@ export const bankonePortfolioService = {
       p_branch_name_raw: branchNameRaw ?? null,
       p_source_import_id: importId ?? null,
       p_branch_id: branchId ?? null,
-    }))
+    }), `Could not add "${sourceName}" as an employee`)
   },
 
-  /** Map a BankOne branch to an existing InfinityCore branch. */
+  /**
+   * Map a BankOne branch to an existing InfinityCore branch.
+   * Returns { rows_affected } so the caller can refuse to claim success when the
+   * mapping changed nothing - the exact failure that made Accept look broken.
+   */
   async confirmBranch({ normalizedBranchName, bankoneBranchName, canonicalBranchId, mappingType, splitFromBranchId, reason }) {
     return unwrap(supabase.rpc('confirm_bankone_branch_mapping', {
       p_normalized_bankone_branch_name: normalizedBranchName,
@@ -250,7 +341,7 @@ export const bankonePortfolioService = {
       p_mapping_type: mappingType || 'manual',
       p_split_from_branch_id: splitFromBranchId ?? null,
       p_reason: reason ?? null,
-    }))
+    }), `Could not save the branch mapping for "${bankoneBranchName}"`)
   },
 
   /**
@@ -263,7 +354,7 @@ export const bankonePortfolioService = {
       p_new_branch_names: newBranchNames,
       p_source_import_id: importId ?? null,
       p_reason: reason ?? null,
-    }))
+    }), 'Could not split the branch')
   },
 
   /** Saved mappings, so the UI can show what will resolve automatically. */

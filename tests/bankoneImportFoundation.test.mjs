@@ -426,7 +426,9 @@ check('unresolved officers are retained, never dropped', () => {
 })
 
 check('§18/§19 review UI shows the financial impact and all three actions', () => {
-  assert.match(empUi, /money\(item\.outstandingTotal\)/)
+  // The review screen now renders the PERSISTED decision row, so the field is
+  // the snake_case one the database returns, not the pipeline's camelCase.
+  assert.match(empUi, /money\(item\.outstanding_total\)/)
   assert.match(empUi, /Confirm/)
   assert.match(empUi, /Add as employee/)
   assert.match(empUi, /Leave unresolved/)
@@ -449,7 +451,20 @@ check('the review page is routed and gated', () => {
   assert.match(read('src/config/navigation.jsx'), /Portfolio Import Review/)
   assert.match(read('src/App.jsx'), /BankOneImportReview/)
   assert.match(page, /canManage/)
-  assert.match(page, /parPublishable/)
+  // PAR is no longer a client-side boolean: the page renders the server's
+  // publish verdict, which is derived from the real imported data.
+  assert.match(page, /verdict/)
+  assert.match(page, /validatePublish/)
+})
+
+check('the review page is resumable and does not re-upload on Accept', () => {
+  // The reported bug was compounded by onDone() calling run(), which re-parsed
+  // the whole workbook after every single decision.
+  assert.match(page, /getImportState/)
+  assert.match(page, /listOpenImports/)
+  assert.ok(!/onDone=\{\(m\) => \{ setNotice\(m\); run\(\) \}\}/.test(page),
+    'a decision must not trigger a full re-upload')
+  assert.match(page, /Import in progress — nothing was lost/)
 })
 
 console.log('\nAll ' + n + ' checks passed.')

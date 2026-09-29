@@ -56,6 +56,8 @@
     "test:leave-chain": "node --test tests/leaveApprovalChainSnapshot.test.mjs",
     "test:leave-chain-db": "docker cp tests/acceptance/leave_approval_chain.sql supabase_db_infinitycore-sara:/tmp/leave_chain.sql && docker exec supabase_db_infinitycore-sara psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /tmp/leave_chain.sql",
     "test:bankone-vocab": "node --test tests/bankoneImportVocabulary.test.mjs",
+    "test:bankone-parity": "node --test tests/bankoneImportParity.test.mjs",
+    "test:bankone-e2e": "bash scripts/test-bankone-e2e.sh",
     "test:auto-clockout-midnight": "node tests/attendanceAutoClockout.test.mjs",
     "test:clock-in-canonical": "node tests/attendanceClockInCanonical.test.mjs",
     "test:terminal-gate-field": "node tests/terminalGateFieldFix.test.mjs",
