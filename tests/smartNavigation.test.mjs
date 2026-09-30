@@ -126,8 +126,19 @@ const layoutSrc = read('src/components/Layout.jsx')
 check('the permission filter still runs on every item', () => {
   assert.ok(layoutSrc.includes('filterSectionsByDepartment'), 'department filter not applied')
   assert.ok(layoutSrc.includes('canAccessRoute'), 'permission filter was dropped')
-  assert.match(navSrc, /export function canAccessRoute/)
-  assert.match(navSrc, /if \(!auth\?\.user \|\| !auth\?\.profile\) return false/)
+  // navigation.jsx now re-exports the single implementation rather than defining
+  // its own, so the filter is unchanged in behaviour but cannot drift again.
+  // The unauthenticated guard is asserted where it now lives.
+  assert.match(
+    navSrc,
+    /export\s*\{\s*canAccessRoute\s*\}\s*from\s*['"]\.\/accessControl\.js['"]/,
+    'navigation must delegate canAccessRoute to accessControl.js',
+  )
+  assert.match(
+    read('src/config/accessControl.js'),
+    /if \(!auth\?\.user \|\| !auth\?\.profile\) return false/,
+    'an unauthenticated user must be denied',
+  )
 })
 
 check('routes are still guarded at the router, not only in the sidebar', () => {

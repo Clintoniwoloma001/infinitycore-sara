@@ -10,6 +10,7 @@ const service = read('src/services/privilegeService.js')
 const page = read('src/pages/PrivilegeManagement.jsx')
 const useAuth = read('src/hooks/useAuth.jsx')
 const navigation = read('src/config/navigation.jsx')
+const accessControl = read('src/config/accessControl.js')
 const app = read('src/App.jsx')
 const saraIntent = read('supabase/functions/sara-intent/index.ts')
 
@@ -135,9 +136,24 @@ assert.match(useAuth, /if \(permDoc\.denied\?\.\[permissionKey\]\) return false/
 assert.match(useAuth, /return userPermissions\.includes\(permissionKey\)/, 'legacy fallback preserved')
 
 // Route gating denies a route when a required permission is explicitly denied.
+//
+// The deny check now lives in accessControl.js, which navigation.jsx re-exports.
+// It used to be asserted against navigation.jsx directly, which is exactly what
+// let the two implementations drift apart: navigation had its own copy, and
+// this test kept passing against that copy while the menu ran it. Asserting
+// against the single implementation is the point.
 assert.match(navigation, /PERMISSIONS\.PRIVILEGES_MANAGE/, 'privileges permission constant referenced')
 assert.match(navigation, /path: '\/privileges'/, '/privileges route registered')
-assert.match(navigation, /route\.permissions\.some\(\(p\) => auth\.deniedKeys\[p\]\)/, 'deny wins in canAccessRoute')
+assert.match(
+  accessControl,
+  /required\.some\(\(p\) => auth\.deniedKeys\[p\]\)/,
+  'deny wins in canAccessRoute',
+)
+assert.match(
+  navigation,
+  /export\s*\{\s*canAccessRoute\s*\}\s*from\s*['"]\.\/accessControl\.js['"]/,
+  'navigation must delegate to the single access-control decision',
+)
 assert.match(app, /PrivilegeManagement/, 'page wired into App')
 
 // ------------------------------------------------------------------

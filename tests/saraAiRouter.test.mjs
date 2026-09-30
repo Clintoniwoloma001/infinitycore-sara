@@ -559,8 +559,24 @@ test('chat and summary report degradation instead of failing', () => {
 test('sara-chat passes the live snapshot to the rules tier and the tools', () => {
   assert.match(CHAT, /rulesData: snapshot/)
   assert.match(CHAT, /const data = await snapshot\(\)/)
-  // The snapshot is memoised so it is never fetched twice for one request.
-  assert.match(CHAT, /snapshotPromise \|\|= operationalSummary\(db, context\)/)
+
+  // The snapshot is organisation-wide, so it is now GATED on the caller's
+  // effective permission before it is ever fetched. It is still fetched at most
+  // once per request — the promise is created eagerly from a single await, and
+  // `snapshot()` only ever hands back that same resolved value.
+  assert.match(
+    CHAT,
+    /permitted\(perms, 'hr\.employees\.read'\)/,
+    'the org-wide snapshot must be gated on the employee-read permission',
+  )
+  assert.match(
+    CHAT,
+    /await operationalSummary\(db, context\)/,
+    'the snapshot must still be the live operational summary',
+  )
+  // A caller without the permission gets an explicitly restricted snapshot
+  // rather than a fabricated empty one that could be mistaken for real figures.
+  assert.match(CHAT, /restricted: true/)
 })
 
 test('the internal summary tier is folded into the bullet contract the client renders', () => {

@@ -147,31 +147,20 @@ export const routeConfig = [
 
 export const protectedRoutes = routeConfig.flatMap((group) => group.items)
 
-export function canAccessRoute(route, auth) {
-  if (!auth?.user || !auth?.profile) return false
-  if (auth.role === 'super_admin') return true
-
-  // An explicit granular DENY on a route's required permission wins over any
-  // role/allow fallback — the manager revoked this actor's access on purpose.
-  if (route.permissions?.length && auth.deniedKeys) {
-    if (route.permissions.some((p) => auth.deniedKeys[p])) return false
-  }
-
-  // If the user has a per-user access profile, check it first.
-  // The access profile stores module keys that match route paths.
-  if (auth.accessModules && auth.accessModules.length > 0) {
-    // Map route paths to module keys
-    const moduleKey = route.path === '/' ? 'dashboard' : route.path.replace(/^\//, '').replace(/-/g, '_')
-    const moduleKeyDash = route.path === '/' ? 'dashboard' : route.path.replace(/^\//, '')
-    // Check both dash and underscore variants, plus the raw path
-    if (auth.accessModules.includes(moduleKey) || auth.accessModules.includes(moduleKeyDash) || auth.accessModules.includes(route.path)) {
-      return true
-    }
-    // If access modules are defined but this route isn't in them, deny
-    // unless the user also has the role-based permission
-    if (!route.permissions?.length) return false
-  }
-
-  if (!route.permissions?.length) return auth.role !== 'customer'
-  return auth.hasAnyPermission(route.permissions)
-}
+// The menu, the route guard and the SARA agent router MUST agree with each
+// other, and with the database. They previously did not: this file exported its
+// OWN canAccessRoute that consulted the legacy `auth.accessModules` list and
+// never looked at the granular permission document (`permDoc` / `allowedKeys`).
+// `config/accessControl.js` held the correct precedence model but was dead code
+// — nothing imported it.
+//
+// That is the real cause of "Super Admin granted it but the menu still hides
+// it, and refreshing does not help": Access Control writes to role_permissions /
+// user_permissions, `get_my_permissions()` correctly reported the grant, and the
+// menu then re-derived access from a different table entirely. A refresh re-read
+// the same wrong source, so it never recovered.
+//
+// The fix is to have exactly ONE implementation. navigation.jsx now re-exports
+// it, so every existing import site keeps working unchanged and there is no
+// second decision to drift.
+export { canAccessRoute } from './accessControl.js'

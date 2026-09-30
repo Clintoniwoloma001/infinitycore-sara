@@ -107,6 +107,54 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
+  // -------------------------------------------------------------------------
+  // LIVE PERMISSION PROPAGATION
+  // -------------------------------------------------------------------------
+  // The requirement is that a Super Admin granting or revoking a permission is
+  // visible to the affected user WITHOUT a logout/login round trip.
+  //
+  // Previously the permission document was fetched exactly once per session, so
+  // a grant made while somebody was already signed in simply never reached their
+  // open tab. `refreshPermissions` existed but nothing called it, and there was
+  // no subscription at all.
+  //
+  // Three triggers, all funnelling into the SAME `fetchPermissions`:
+  //   1. a realtime row change on the permission tables,
+  //   2. the tab regaining focus after being backgrounded (covers a laptop that
+  //      was asleep, or a device that dropped the socket),
+  //   3. the session token being refreshed.
+  // Re-fetching the whole document (rather than patching one key) is deliberate:
+  // it is the same call the database authorizes with, so the client can never
+  // drift into a state the server would not agree with.
+  useEffect(() => {
+    if (!user) return
+
+    const refresh = () => { fetchPermissions(user).catch(() => {}) }
+
+    const channel = supabase
+      .channel('permission-propagation')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'user_permissions', filter: `user_id=eq.${user.id}` },
+        refresh,
+      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'role_permissions' }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_roles' }, refresh)
+      .subscribe()
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+      supabase.removeChannel(channel)
+    }
+  }, [user])
+
   const signIn = async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error

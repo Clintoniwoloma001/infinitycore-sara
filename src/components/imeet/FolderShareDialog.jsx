@@ -8,7 +8,6 @@
 // ===========================================================================
 import React, { useCallback, useEffect, useState } from 'react'
 import { X, UserPlus, Loader2, ShieldOff, Check, AlertTriangle } from 'lucide-react'
-import { supabase } from '../../supabaseClient'
 import imeetService from '../../services/imeetService'
 
 export default function FolderShareDialog({ folder, onClose }) {
@@ -38,19 +37,17 @@ export default function FolderShareDialog({ folder, onClose }) {
   useEffect(() => { loadMembers() }, [loadMembers])
 
   // Candidate people, loaded once and filtered locally: a folder can have many
-  // meetings but the staff list is small and stable.
+  // meetings but the staff list is small and stable. This goes through the
+  // `imeet_shareable_people` RPC rather than reading `profiles` directly, which
+  // would either trip over profiles' own RLS or expose the whole staff
+  // directory to any signed-in user.
   useEffect(() => {
     if (!isOwner) return
-    supabase
-      .from('profiles')
-      .select('id, full_name, email, role, department')
-      .eq('status', 'active')
-      .order('full_name')
-      .then(({ data, error: e }) => {
-        if (e) setError(e.message)
-        else setPeople(data || [])
-      })
-  }, [isOwner])
+    imeetService
+      .listShareablePeople(folder.id)
+      .then(setPeople)
+      .catch((e) => setError(e.message))
+  }, [isOwner, folder.id])
 
   const existing = new Set(members.map((m) => m.user_id))
   const filtered = people.filter((p) => {

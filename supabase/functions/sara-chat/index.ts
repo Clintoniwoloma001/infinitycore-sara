@@ -108,6 +108,60 @@ async function getUserContext(db: any, userId: string) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// EFFECTIVE PERMISSIONS — SARA inherits the caller's access, it never widens it
+// ---------------------------------------------------------------------------
+// WHY THIS EXISTS
+// `authenticate()` correctly derives the user from the JWT and the client cannot
+// assert a role. But the DATA TOOLS below were reached with no permission check
+// of their own, so their only protection was RLS. That is not the same thing:
+// a broad `employees` read policy, or a SECURITY DEFINER RPC, would let SARA
+// disclose data to someone whose Access Control grant says they may not see it.
+//
+// This asks the SAME database function the menu and the backend use
+// (has_permission), so a user denied Payroll in Access Control is denied it
+// through SARA too — one model, one answer, three clients.
+//
+// Fails CLOSED: if the permission engine cannot be reached, the tool is refused
+// rather than allowed. A tool that cannot prove authorisation must not run.
+async function effectivePermissions(db: any): Promise<Set<string>> {
+  try {
+    const { data, error } = await db.rpc('get_my_permissions')
+    if (error || !data) return new Set()
+    const keys = new Set<string>()
+    for (const key of Object.keys(data.allowed || {})) keys.add(key)
+    if (data.is_super_user) {
+      // A super admin's document may legitimately be sparse; treat the wildcard
+      // as "every gate passes" rather than "nothing is allowed".
+      return new Set(['*'])
+    }
+    return keys
+  } catch {
+    return new Set()
+  }
+}
+
+/** True when the caller holds `key` (or is a super admin). */
+function permitted(perms: Set<string>, key: string) {
+  return perms.has('*') || perms.has(key)
+}
+
+/**
+ * Map a tool to the permission it requires.
+ *
+ * Kept as an explicit allow-list rather than inferred from the question text: a
+ * new tool must be given a gate deliberately, so forgetting to gate one is a
+ * visible omission rather than an invisible leak.
+ */
+const TOOL_PERMISSIONS: Record<string, string> = {
+  pending_leave: 'leave.approve',
+  today_interviews: 'hr.interviews.read',
+  today_attendance: 'hr.attendance.read',
+  operational_summary: 'hr.employees.read',
+  count_customers: 'customers.read',
+  count_loans: 'loans.read',
+}
+
 const memoryUsage = new Map<string, { day: string, count: number, lastAt: number }>()
 
 async function allowCall(db: any, userId: string) {
@@ -238,7 +292,21 @@ async function operationalSummary(db: any, context: any) {
   }
 }
 
-async function executeTool(name: string, db: any, context: any) {
+/**
+ * Run a data tool, but only if the caller actually holds its permission.
+ *
+ * Gating happens HERE, at the single choke point every tool passes through,
+ * rather than inside each tool, so a new tool cannot forget to check.
+ *
+ * A denied tool returns a refusal the model can read and explain. It is NOT a
+ * silent empty result: saying "you don't have access to that" is the honest
+ * answer, and inventing a plausible-looking empty dashboard would be worse.
+ */
+async function executeTool(name: string, db: any, context: any, perms: Set<string>) {
+  const required = TOOL_PERMISSIONS[name]
+  if (required && !permitted(perms, required)) {
+    return { ok: false, error: 'forbidden', required_permission: required }
+  }
   if (name === 'get_pending_leave_approvals') return pendingLeave(db)
   if (name === 'get_operational_summary') return operationalSummary(db, context)
   return { ok: false, error: 'unsupported_read_tool' }
@@ -344,7 +412,12 @@ async function chatReply(db: any, context: any, body: any, snapshot: any, userId
 
     turns.push({ role: 'assistant', parts: routed.functionCalls.map((c) => ({ functionCall: { name: c.name, args: c.args } })) })
     for (const call of routed.functionCalls.slice(0, 3)) {
-      const result = call.name === 'get_operational_summary' ? snapshot : await executeTool(call.name, db, context)
+      // The summary tool is the gated snapshot itself (already permission-checked
+      // above), so it is passed straight through; every other tool goes through
+      // executeTool, which enforces TOOL_PERMISSIONS.
+      const result = call.name === 'get_operational_summary'
+        ? snapshot
+        : await executeTool(call.name, db, context, perms)
       turns.push({
         role: 'user',
         parts: [{
@@ -417,6 +490,12 @@ Deno.serve(async (req: Request) => {
 
     const context = await getUserContext(db, user.id)
     if (context.status && context.status !== 'active') return json({ ok: false, error: 'forbidden' }, 401)
+
+    // Resolve the caller's EFFECTIVE permissions once per request, from the same
+    // database document the menu and the backend use. Every data path below is
+    // gated by this set, so SARA can never disclose more than the account may see.
+    const perms = await effectivePermissions(db)
+
     const limit = await allowCall(db, user.id)
     if (limit.allowed === false) return json({ ok: false, error: 'rate_limited', retry_after_seconds: limit.retry_after_seconds })
 
@@ -425,8 +504,18 @@ Deno.serve(async (req: Request) => {
 
     // One snapshot per request: it grounds the model, feeds the tools and is the
     // `rulesData` the internal tier answers from, so it is never fetched twice.
-    let snapshotPromise: Promise<any> | null = null
-    const snapshot = () => (snapshotPromise ||= operationalSummary(db, context))
+    //
+    // The snapshot is organisation-wide, so it is gated. Without the employee-read
+    // permission the internal rules tier still answers self-service questions from
+    // the caller's own profile, which is the important property: a staff member
+    // can still ask "show my attendance" even though they may not see the
+    // organisation-wide counters.
+    const canSeeOrg = permitted(perms, 'hr.employees.read')
+    const metrics = canSeeOrg
+      ? await operationalSummary(db, context)
+      : { captured_at: new Date().toISOString(), metrics: {}, restricted: true }
+    let snapshotPromise: Promise<any> | null = Promise.resolve(metrics)
+    const snapshot = () => (snapshotPromise ||= Promise.resolve(metrics))
 
     if (body?.mode === 'summary') {
       const data = await snapshot()

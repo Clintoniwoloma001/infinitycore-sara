@@ -328,7 +328,19 @@ begin
   v_path := v_rec.audio_path;
   v_secs := least(greatest(coalesce(p_expires_seconds, 300), 30), 900);
 
-  select public.create_signed_url('i-meet-audio', v_path, v_secs) into v_url;
+  -- `storage.` is the correct schema: there is NO public.create_signed_url, and
+  -- because this function is SECURITY DEFINER with search_path = public, an
+  -- unqualified call fails at RUNTIME with SQLSTATE 42883 ("function
+  -- public.create_signed_url(unknown, text, integer) does not exist"), breaking
+  -- every Download / Save / Share audio action. Migration 20260930000001 called
+  -- it correctly; this re-issue regressed it. Migration 20260930000003 re-issues
+  -- the function again with the fix, for databases where 20260930000002 has
+  -- already been applied.
+  select storage.create_signed_url(
+           'i-meet-audio'::text,
+           v_path::text,
+           v_secs::integer
+         ) into v_url;
   if v_url is null then raise exception 'Could not sign audio URL'; end if;
 
   return jsonb_build_object(
