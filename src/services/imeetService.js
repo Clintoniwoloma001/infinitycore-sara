@@ -139,13 +139,6 @@ const imeetService = {
    *
    * Deliberately not part of [getMeeting]: a meeting with a long history would
    * otherwise transfer every transcript just to render a list.
-   */
-  async loadTranscript(recordingId) {
-  /**
-   * Load one recording's transcript on demand.
-   *
-   * Deliberately not part of [getMeeting]: a meeting with a long history would
-   * otherwise transfer every transcript just to render a list.
    *
    * The transcript is a column ON the recording, not a side table, so it is
    * structurally impossible to hold two competing transcripts for one audio
@@ -159,6 +152,54 @@ const imeetService = {
       .maybeSingle()
     if (error) throw error
     return data?.transcript ?? null
+  },
+
+  /**
+   * Upload a captured blob into the PRIVATE `i-meet-audio` bucket.
+   *
+   * The path convention is `<owner>/<meeting>/<recording>.<ext>` and is NOT
+   * arbitrary: the storage INSERT policy requires the FIRST path segment to
+   * equal `auth.uid()`, so a recording can only ever be written under the
+   * caller's own id. Mobile uses the identical layout, which is what lets a
+   * file recorded on the phone be listed and downloaded from the web.
+   *
+   * Uploaded AFTER `addRecording` so the recording id (which we do not choose —
+   * the database does) is already known and becomes the final path segment.
+   */
+  async uploadAudio({ blob, ownerId, meetingId, recordingId, mime }) {
+    // The extension is derived from the recorder's own MIME type rather than
+    // from the blob's name (a Blob has none), defaulting to m4a.
+    const ext =
+      mime && mime.includes('webm') ? '.webm'
+      : mime && mime.includes('ogg') ? '.ogg'
+      : mime && (mime.includes('mpeg') || mime.includes('mp3')) ? '.mp3'
+      : mime && mime.includes('wav') ? '.wav'
+      : '.m4a'
+    const path = `${ownerId}/${meetingId}/${recordingId}${ext}`
+    const { error } = await supabase.storage
+      .from('i-meet-audio')
+      .upload(path, blob, { contentType: mime || 'audio/mp4', upsert: true })
+    if (error) throw error
+    return path
+  },
+
+  /**
+   * Write the stored audio location onto the recording.
+   *
+   * Mirrors the mobile `_attachAudioPath`. The audio is already durable at this
+   * point, so a failure here is reported but never destroys the capture.
+   */
+  async attachAudioPath(recordingId, path, bytes, mime) {
+    const { error } = await supabase
+      .from('imeet_recordings')
+      .update({
+        audio_path: path,
+        audio_mime: mime || 'audio/mp4',
+        audio_bytes: bytes ?? null,
+        upload_status: 'uploaded',
+      })
+      .eq('id', recordingId)
+    if (error) throw error
   },
 
   /**

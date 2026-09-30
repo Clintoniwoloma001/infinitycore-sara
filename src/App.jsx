@@ -23,6 +23,7 @@ import AuditLogs from './pages/AuditLogs'
 import Users from './pages/Users'
 import CustomerDashboard from './pages/CustomerDashboard'
 import MyWork from './pages/MyWork'
+import IMeet from './pages/IMeet'
 import HRDashboard from './pages/HRDashboard'
 import Employees from './pages/Employees'
 import Recruitment from './pages/Recruitment'
@@ -96,6 +97,7 @@ const pageComponents = {
   AuditLogs,
   Users,
   MyWork,
+  IMeet,
   HRDashboard,
   Employees,
   Recruitment,

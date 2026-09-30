@@ -48,6 +48,7 @@
     "test:name-enquiry": "node tests/bankoneNameEnquiry.test.mjs",
     "test:messages-identity": "node tests/messagesIdentity.test.mjs",
     "test:imeet": "node tests/imeetMeetingIntelligence.test.mjs",
+    "test:imeet-crossplatform": "node tests/imeetCrossPlatform.test.mjs",
     "test:leave-entitlements": "node tests/leaveEntitlements.test.mjs",
     "test:area-offer-leave": "node tests/areaManagerOfferLeave.test.mjs",
     "test:terminal-geofence-review": "node tests/terminalGeofenceHrReview.test.mjs",

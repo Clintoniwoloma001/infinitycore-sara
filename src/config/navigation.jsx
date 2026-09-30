@@ -37,6 +37,7 @@ import {
   GraduationCap,
   Gauge,
   Crown,
+  Mic,
 } from 'lucide-react'
 import { PERMISSIONS } from '../constants/permissions'
 import { DEPARTMENTS } from './navigationConfig'
@@ -139,6 +140,7 @@ export const routeConfig = [
       { label: 'Attendance', path: '/attendance', icon: Clock3, element: 'Attendance', permissions: [PERMISSIONS.HR_ATTENDANCE_SELF] },
       { label: 'Work Management', path: '/work-management', icon: Target, element: 'WorkManagement', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'My Training', path: '/my-training', icon: GraduationCap, element: 'MyTraining', permissions: [] },
+      { label: 'I-Meet', path: '/imeet', icon: Mic, element: 'IMeet', permissions: [] },
     ],
   },
 ]
