@@ -37,6 +37,22 @@
  */
 export function canAccessRoute(route, auth) {
   if (!auth?.user || !auth?.profile) return false
+
+  // Employee Tracking is authorized DYNAMICALLY. The static `tracking.view` key
+  // is granted to the Super Admin by the baseline, but it cannot express a
+  // time-boxed grant to one person or one role, so consulting it alone would
+  // either hide the menu from legitimate grantees or show it to everyone. The
+  // server already answers this question exactly — employee_tracking_access() —
+  // and useAuth caches that answer as `trackingAccess`.
+  //
+  // It is consulted BEFORE the generic steps below because those steps reason
+  // about the granular document, which knows nothing about tracking grants. A
+  // `null` probe (still loading, or the RPC failed) means "not authorized":
+  // failing closed keeps the menu hidden rather than flashing it open.
+  if (route.trackingGate) {
+    return auth.trackingAccess?.can_view === true
+  }
+
   if (auth.role === 'super_admin') return true
 
   const required = route.permissions || []

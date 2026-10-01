@@ -11,7 +11,7 @@
  * safe to apply; the client only reports what needs a human.
  */
 import * as XLSX from 'xlsx';
-import supabase from './supabaseService';
+import { supabase } from '../supabaseClient';
 import {
   buildExistingIndex, groupWorkbookRows, classifyPerson,
   findStaffIdConflicts, isSafeIdentity,

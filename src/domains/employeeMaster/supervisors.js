@@ -25,6 +25,7 @@ export const MATCH_TIER = {
   TOKEN_PERMUTATION: 'token_permutation',
   TOKEN_PREFIX_SET: 'token_prefix_set',
   TOKEN_AFFIX: 'token_affix',
+  TOKEN_MAJORITY: 'token_majority',
   TOKEN_SUBSET: 'token_subset',
   TYPO_VARIANT: 'typo_variant',
   AMBIGUOUS: 'ambiguous',
@@ -90,6 +91,42 @@ export function isOrgBody(value, extraBodies = []) {
  * Resolve one supervisor label against the roster.
  * @returns {{tier:string, resolved:object|null, candidates:Array, label:string}}
  */
+/**
+ * Token-majority candidates: at least MIN_MATCH of the label's tokens match a
+ * token of the same employee (prefix or substring).
+ *
+ * This is what catches the real-world workbook defects:
+ *   "UGUTE FEJIRO"        -> UGUTE EVELYN OGHENEFEJIRO   (FEJIRO inside OGHENEFEJIRO)
+ *   "OBILOR IFEANYIN"     -> OBILOR IFEANYI SAMSON        (typo)
+ *   "OZIOKO COSMOS"       -> OZIOKO COSMAS IKECHUKWU     (typo)
+ *
+ * Deliberately NOT auto-applied: every one of those is a fuzzy match, and a
+ * supervisory relationship is an approval authority. The single best candidate
+ * is surfaced for HR to confirm with one click, which also stores a permanent
+ * mapping so it never has to be judged again.
+ */
+/**
+ * One token matches another when it is equal, a prefix/substring of it, or
+ * within a SINGLE character edit. The last case is what catches the workbook's
+ * single-character typos: IFEANYI -> IFEANYIN, COSMAS -> COSMOS.
+ */
+function tokenMatches(labelToken, employeeToken) {
+  if (employeeToken === labelToken) return true;
+  if (employeeToken.startsWith(labelToken) || employeeToken.includes(labelToken)) return true;
+  return editDistance(labelToken, employeeToken, 1) <= 1;
+}
+
+function tokenMajorityCandidates(index, labelNorm, minMatch = 2) {
+  const tokens = labelNorm.split(' ').filter(Boolean);
+  if (tokens.length < minMatch) return [];
+  return index.list.map(e => {
+    const matched = tokens.filter(t => e._tokens.some(x => tokenMatches(t, x))).length;
+    return { emp: strip(e), matched };
+  }).filter(r => r.matched >= minMatch)
+    .sort((a, b) => b.matched - a.matched || a.emp._norm - b.emp._norm);
+}
+
+/** A label is a duplicated / misspelled form of a name the roster contains. */
 export function resolveSupervisorLabel(label, index, opts = {}) {
   const raw = String(label == null ? '' : label).trim();
   const out = { label: raw, tier: MATCH_TIER.UNRESOLVED, resolved: null, candidates: [] };
@@ -143,6 +180,19 @@ export function resolveSupervisorLabel(label, index, opts = {}) {
   const typo = typoCandidates(index, n);
   if (typo.length === 1) { out.tier = MATCH_TIER.TYPO_VARIANT; out.candidates = typo; return out; }
   if (typo.length > 1) { out.tier = MATCH_TIER.AMBIGUOUS; out.candidates = typo; return out; }
+
+  // Last resort before giving up: a candidate matching most of the label's
+  // tokens. Only a clear single winner is offered, and only for review.
+  const maj = tokenMajorityCandidates(index, n, Math.min(2, n.split(' ').filter(Boolean).length));
+  if (maj.length) {
+    const top = maj[0];
+    const tied = maj.filter(m => m.matched === top.matched).length === 1;
+    out.tier = tied ? MATCH_TIER.TOKEN_MAJORITY : MATCH_TIER.AMBIGUOUS;
+    out.candidates = maj.slice(0, 5).map(m => m.emp);
+    out.score = `${top.matched}/${n.split(' ').filter(Boolean).length}`;
+    if (tied) out.suggestion = top.emp;
+    return out;
+  }
 
   return out;
 }

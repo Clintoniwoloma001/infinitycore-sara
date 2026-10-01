@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { supabase } from '../supabaseClient'
 import { ROLES, ROLE_METADATA, ROLE_MODULES, ROLE_PERMISSIONS, isExecutiveViewerRole } from '../constants/roles'
 import { canTerminateEmployee, canArchiveEmployee, canDeleteEmployee } from '../services/terminationAuthorization'
@@ -15,23 +15,68 @@ export function AuthProvider({ children }) {
   const [viewingAsRole, setViewingAsRole] = useState(null)
   const [accessModules, setAccessModules] = useState([])
   const [permDoc, setPermDoc] = useState(null)
+  // Employee Tracking is authorized DYNAMICALLY by employee_tracking_access(),
+  // not by a static permission key: the menu must appear for the Super Admin and
+  // for anyone holding a LIVE grant, and for nobody else. The server's answer is
+  // cached here so the sidebar and the page can never disagree with each other or
+  // with the database. `null` means "not resolved yet", which is treated as
+  // "do not show" rather than "show everyone".
+  const [trackingAccess, setTrackingAccess] = useState(null)
+
+  // Called after login and exposed so a page can re-confirm on entry. Uses a
+  // stable identity so an effect may safely depend on it without re-running.
+  const fetchTrackingAccess = useCallback(async (sessionUser) => {
+    const uid = sessionUser === undefined ? user?.id : sessionUser?.id
+    if (!uid) {
+      setTrackingAccess(null)
+      return null
+    }
+    try {
+      const { data, error } = await supabase.rpc('employee_tracking_access')
+      if (error) throw error
+      const next = data || null
+      setTrackingAccess(next)
+      return next
+    } catch {
+      // Never crash the shell on this. A failed probe means "not authorized",
+      // which is the safe direction: the menu stays hidden.
+      setTrackingAccess(null)
+      return null
+    }
+  }, [user?.id])
+
+  // Re-read the live decision. The server is the only authority: a grant that
+  // expired or was revoked while this tab sat open must not keep the menu.
+  const refreshTrackingAccess = useCallback(
+    () => fetchTrackingAccess(undefined).catch(() => null),
+    [fetchTrackingAccess],
+  )
 
   const fetchPermissions = async (sessionUser) => {
     if (!sessionUser) {
       setPermDoc(null)
+      await fetchTrackingAccess(null)
       return null
     }
-    try {
-      const { data, error } = await supabase.rpc('get_my_permissions')
-      if (error) throw error
-      setPermDoc(data || null)
-      return data || null
-    } catch {
-      // The granular engine may not be deployed yet (or offline) —
-      // fall back to the legacy role-permission matrix, never crash.
-      setPermDoc(null)
-      return null
-    }
+    // Both documents are read together so the sidebar never renders from one
+    // and the page from a stale version of the other.
+    const [doc] = await Promise.all([
+      (async () => {
+        try {
+          const { data, error } = await supabase.rpc('get_my_permissions')
+          if (error) throw error
+          setPermDoc(data || null)
+          return data || null
+        } catch {
+          // The granular engine may not be deployed yet (or offline) —
+          // fall back to the legacy role-permission matrix, never crash.
+          setPermDoc(null)
+          return null
+        }
+      })(),
+      fetchTrackingAccess(sessionUser),
+    ])
+    return doc
   }
 
   const fetchProfile = async (sessionUser) => {
@@ -200,6 +245,7 @@ export function AuthProvider({ children }) {
     setProfileError(null)
     setViewingAsRole(null)
     setPermDoc(null)
+    setTrackingAccess(null)
   }
 
   const actualRole = profile?.role || ROLES.STAFF
@@ -276,6 +322,10 @@ export function AuthProvider({ children }) {
     forgotPassword,
     refreshProfile,
     refreshPermissions,
+    // Re-reads the live employee-tracking decision. Used by the tracking page on
+    // entry so a grant that expired or was revoked while the tab was open stops
+    // being served from cache.
+    refreshTrackingAccess,
     signOut,
 
     actualRole,
@@ -299,6 +349,13 @@ export function AuthProvider({ children }) {
     permissionEpoch: permDoc?.epoch ?? null,
     deniedKeys: permDoc?.denied || {},
     allowedKeys: permDoc?.allowed || {},
+    // Employee Tracking's live authorization decision, straight from
+    // employee_tracking_access(). The sidebar reads this so the menu option
+    // itself is shown only to the Super Admin and to live grantees.
+    trackingAccess,
+    // Convenience flags, so no screen has to re-derive the decision.
+    canViewTracking: trackingAccess?.can_view === true,
+    canManageTracking: trackingAccess?.can_manage === true,
     // Personnel lifecycle flags at the TOP level as well — several pages
     // destructure canTerminate/canArchive/canDelete straight off useAuth().
     canTerminate: canTerminateEmployee(actualRole),

@@ -49,6 +49,32 @@ export default function Layout({ children }) {
     .map((group) => ({ ...group, items: group.items.filter((item) => canAccessRoute(item, auth)) }))
     .filter((group) => group.items.length > 0)
 
+  // A time-boxed tracking grant must stop showing the menu the moment it lapses,
+  // not only on the next sign-in. Schedule a re-probe for the exact expiry the
+  // server reported, and also refresh when the tab regains focus, because a grant
+  // can be revoked from another device while this one sits idle. The Super Admin
+  // has no expiry and is unaffected.
+  useEffect(() => {
+    const access = auth.trackingAccess
+    if (!access?.can_view) return undefined
+
+    const timers = []
+    const expiry = access.expires_at ? new Date(access.expires_at).getTime() : null
+    if (expiry && Number.isFinite(expiry)) {
+      // +1s so we re-probe after the boundary, not on it, avoiding a race with
+      // the server's `expires_at > now()` comparison.
+      const delay = Math.max(0, expiry - Date.now()) + 1000
+      if (delay < 2 ** 31 - 1) timers.push(setTimeout(() => auth.refreshTrackingAccess(), delay))
+    }
+
+    const onFocus = () => auth.refreshTrackingAccess()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      timers.forEach(clearTimeout)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [auth.trackingAccess, auth.refreshTrackingAccess])
+
   const logout = async () => {
     await signOut()
     navigate('/login')
@@ -178,7 +204,6 @@ export default function Layout({ children }) {
           <button onClick={() => setOpen(true)} className="lg:hidden text-slate-600 dark:text-slate-300 mr-3"><Menu className="w-6 h-6" /></button>
           <div>
             <h1 className="font-semibold text-slate-800 dark:text-slate-100">InfinityCore Operations</h1>
-            <p className="text-xs text-slate-400 dark:text-slate-500">AUTH STATUS: {email ? 'Authenticated' : 'Not authenticated'}</p>
           </div>
           <div className="ml-auto flex items-center gap-1">
             <button

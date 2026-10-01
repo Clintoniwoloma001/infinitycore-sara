@@ -29,6 +29,16 @@ const map = read('src/components/tracking/TrackingMap.jsx')
 const summary = read('src/components/tracking/MovementSummary.jsx')
 const geocode = read('src/services/reverseGeocodeService.js')
 
+// ---------------------------------------------------------------------------
+// The access-control fix (migration 20261101000005) and the frontend wiring.
+// ---------------------------------------------------------------------------
+const m5 = read('supabase/migrations/20261101000005_tracking_access_single_decision.sql')
+const page = read('src/pages/EmployeeTracking.jsx')
+const layout = read('src/components/Layout.jsx')
+const nav = read('src/config/navigation.jsx')
+const accessControl = read('src/config/accessControl.js')
+const useAuth = read('src/hooks/useAuth.jsx')
+
 let passed = 0
 const check = (name, fn) => {
   try { fn(); passed += 1; console.log(`  ok  ${name}`) }
@@ -183,6 +193,127 @@ check('the grid shows the measured distance, not a bare "Outside"', () => {
   assert.match(service, /formatDistance/)
   assert.ok(!/Outside registered locations/.test(live),
     'the grid must not fall back to the old bare wording')
+})
+
+console.log('\nAuthorization is about the CALLER, never the subject')
+check('history authorizes the caller, not the employee being viewed', () => {
+  const b = body(m5, 'employee_location_history')
+  // The call must take NO argument, so it resolves to auth.uid().
+  assert.match(b, /employee_tracking_access\(\)/,
+    'the access call must pass no id so it resolves to the caller')
+  assert.ok(!/employee_tracking_access\(p_\w+\)/.test(b),
+    'the subject employee id must NEVER be passed to the access function')
+  // The employee id is still used to SELECT rows.
+  assert.match(b, /where le\.employee_id = p_employee_id/)
+})
+
+check('readers read can_view, not the never-returned key `allowed`', () => {
+  for (const fn of ['employee_location_history', 'employee_current_locations', 'list_tracked_employees']) {
+    const b = body(m5, fn)
+    assert.match(b, /->> 'can_view'/, `${fn} must gate on can_view`)
+    assert.ok(!/->> 'allowed'/.test(b), `${fn} must not gate on 'allowed'`)
+  }
+})
+
+check('`allowed` is published as an explicit alias of can_view', () => {
+  const b = body(m5, 'employee_tracking_access')
+  assert.match(b, /'can_view', true, 'allowed', true/)
+  assert.match(b, /'can_view', false, 'allowed', false/)
+})
+
+check('a passed argument cannot widen access (the whole defect class)', () => {
+  const b = body(m5, 'employee_tracking_access')
+  // The decision must come from auth.uid(), never from the parameter.
+  assert.match(b, /v_uid uuid := auth\.uid\(\)/,
+    'the decision must be the caller, read from the JWT')
+  assert.ok(!/v_uid uuid := coalesce\(p_user_id/.test(b),
+    'the parameter must not be able to override the caller identity')
+  assert.match(b, /g\.target_user_id = v_uid/)
+})
+
+check('the ungated current-locations bypass is now gated', () => {
+  const b = body(m5, 'employee_current_locations')
+  assert.match(b, /employee_tracking_access\(\)/,
+    'employee_current_locations had no access gate at all')
+  assert.match(m5, /revoke all on function public\.employee_current_locations\(text, uuid, integer\) from public/)
+})
+check('every tracking reader is closed to PUBLIC and opened to authenticated', () => {
+  for (const sig of [
+    'employee_tracking_access(uuid)',
+    'employee_location_history(uuid, date, time, time, text)',
+    'employee_current_locations(text, uuid, integer)',
+    'list_tracked_employees(integer, text, uuid)',
+  ]) {
+    const esc = sig.replace(/[()]/g, '\\$&')
+    assert.match(m5, new RegExp(`revoke all on function public\\.${esc} from public`),
+      `${sig} must be revoked from PUBLIC`)
+    assert.match(m5, new RegExp(`grant execute on function public\\.${esc} to authenticated`),
+      `${sig} must be granted to authenticated`)
+  }
+})
+
+check('grants fail closed: expired and revoked never count', () => {
+  const b = body(m5, 'employee_tracking_access')
+  assert.match(b, /g\.revoked_at is null/)
+  assert.match(b, /g\.expires_at is null or g\.expires_at > now\(\)/)
+})
+
+check('a grantee can view but never re-share (can_manage is Super Admin only)', () => {
+  const b = body(m5, 'employee_tracking_access')
+  assert.match(b, /'can_manage', true[\s\S]*?'via', 'super_admin'/)
+  assert.match(b, /'can_manage', false[\s\S]*?'via', 'delegated:/)
+})
+
+check('the migration ships a deployment guard for future regressions', () => {
+  assert.match(m5, /pg_get_functiondef/)
+  assert.match(m5, /tracking_access_gate_violation/)
+  assert.match(m5, /begin;/)
+  assert.match(m5, /commit;/)
+})
+
+check('the migration is idempotent (drops before recreating the renamed signature)', () => {
+  // The deployed signature is (p_employee_id uuid) and CREATE OR REPLACE cannot
+  // rename a parameter, so the drop is load-bearing, not cosmetic.
+  assert.match(m5, /drop function if exists public\.employee_tracking_access\(uuid\)/)
+  assert.ok(!/@@APPEND@@|MIGRATION_CHUNK_MARKER/.test(m5),
+    'no build sentinels may be left in the migration')
+})
+
+console.log('\nThe frontend follows the database decision, and fails closed')
+check('the menu is gated on the live decision, not a static permission', () => {
+  assert.match(nav, /path: '\/employee-tracking'[\s\S]*?trackingGate: true/)
+  assert.match(accessControl, /if \(route\.trackingGate\)/)
+  assert.match(accessControl, /return auth\.trackingAccess\?\.can_view === true/,
+    'the gate must compare strictly to true so null/loading means "no"')
+})
+
+check('useAuth caches the decision and exposes view/manage flags', () => {
+  assert.match(useAuth, /supabase\.rpc\('employee_tracking_access'\)/)
+  assert.match(useAuth, /canViewTracking: trackingAccess\?\.can_view === true/)
+  assert.match(useAuth, /canManageTracking: trackingAccess\?\.can_manage === true/)
+})
+
+check('the page reads the shared decision instead of re-probing', () => {
+  assert.match(page, /trackingAccess: access/)
+  assert.ok(!/trackingService\.myAccess\(\)/.test(page),
+    'the page must not issue a second, possibly divergent access probe')
+})
+
+check('delegated viewers cannot reach the sharing controls', () => {
+  assert.match(page, /access\.can_manage \? \[\{ id: 'access'/,
+    'the Shared access tab must be rendered only for a manager')
+  assert.match(page, /tab === 'access' && access\.can_manage && <SharedAccess \/>/,
+    'and the tab must not render its component without can_manage')
+})
+
+check('an expired grant is re-probed so the menu disappears without a refresh', () => {
+  assert.match(layout, /refreshTrackingAccess/)
+  assert.match(layout, /expires_at/)
+  assert.match(layout, /addEventListener\('focus'/)
+})
+
+check('the debug AUTH STATUS text is gone from the shell', () => {
+  assert.ok(!/AUTH STATUS/.test(layout), 'no debug auth text may be rendered')
 })
 
 console.log('\nAccess control is unchanged')

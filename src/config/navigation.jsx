@@ -83,6 +83,7 @@ export const routeConfig = [
     items: [
       { label: 'HR Dashboard', path: '/hr-dashboard', icon: BriefcaseBusiness, element: 'HRDashboard', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'HR Organisation', path: '/hr-organisation', icon: Network, element: 'HROrganisation', permissions: [PERMISSIONS.HR_ORG_MANAGE] },
+      { label: 'Employee Master', path: '/employee-master', icon: Users, element: 'EmployeeMasterReconciliation', permissions: [PERMISSIONS.HR_ORG_MANAGE] },
       { label: 'Recruitment', path: '/recruitment', icon: Users, element: 'Recruitment', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'Applications', path: '/applications', icon: Users, element: 'ApplicationManagement', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'Interviews', path: '/interviews', icon: CalendarCheck, element: 'Interviews', permissions: [PERMISSIONS.HR_INTERVIEWS_SCHEDULE] },
@@ -114,7 +115,7 @@ export const routeConfig = [
     items: [
       { label: 'Reports', path: '/reports', icon: BarChart3, element: 'Reports', permissions: [PERMISSIONS.REPORTS_READ] },
       { label: 'Audit Logs', path: '/audit-logs', icon: ScrollText, element: 'AuditLogs', permissions: [PERMISSIONS.ADMIN_VIEW_AUDIT] },
-      { label: 'Employee Tracking', path: '/employee-tracking', icon: MapPin, element: 'EmployeeTracking', permissions: [PERMISSIONS.TRACKING_VIEW] },
+      { label: 'Employee Tracking', path: '/employee-tracking', icon: MapPin, element: 'EmployeeTracking', permissions: [PERMISSIONS.TRACKING_VIEW], trackingGate: true },
       { label: 'User Management', path: '/users', icon: UserCog, element: 'Users', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
       { label: 'Access & Privileges', path: '/privileges', icon: ShieldCheck, element: 'PrivilegeManagement', permissions: [PERMISSIONS.PRIVILEGES_MANAGE] },
       { label: 'Platform Reset', path: '/platform-reset', icon: Eraser, element: 'PlatformReset', permissions: [PERMISSIONS.ADMIN_PLATFORM_RESET] },

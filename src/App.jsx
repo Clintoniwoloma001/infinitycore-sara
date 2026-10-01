@@ -81,6 +81,7 @@ import ActivateAccount from './pages/ActivateAccount'
 import PrivilegeManagement from './pages/PrivilegeManagement'
 import EmployeeTracking from './pages/EmployeeTracking'
 import LeaveSchedulePlanner from './pages/LeaveSchedulePlanner'
+import EmployeeMasterReconciliation from './pages/EmployeeMasterReconciliation'
 
 const pageComponents = {
   Dashboard,
@@ -89,6 +90,7 @@ const pageComponents = {
   AutomationCommandCentre,
   EmployeeTracking,
   LeaveSchedulePlanner,
+  EmployeeMasterReconciliation,
   Customers,
   Loans,
   Repayments,

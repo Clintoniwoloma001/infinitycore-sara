@@ -10,32 +10,30 @@
 // which is why this page can never disagree with the clock-in screen.
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  MapPin, ShieldCheck, Share2, History, RefreshCw,
-  Clock, Lock, AlertTriangle, Check, X, Map as MapIcon,
+  MapPin, ShieldCheck, Share2, History,
+  Lock,
 } from 'lucide-react'
-import {
-  trackingService, describeFreshness, formatCoord, formatClockTime, buildMovementTimeline,
-} from '../services/employeeTrackingService'
-import { ROLES } from '../constants/roles'
+import { describeFreshness, formatCoord, formatClockTime, buildMovementTimeline } from '../services/employeeTrackingService'
 import { useAuth } from '../hooks/useAuth'
-import { LoadingState, EmptyState, ErrorState, AccessDenied } from '../components/PageStates'
+import { LoadingState, ErrorState, AccessDenied } from '../components/PageStates'
 import LivePositions from '../components/tracking/LivePositions'
 import MovementHistory from '../components/tracking/MovementHistory'
 import SharedAccess from '../components/tracking/SharedAccess'
 
 export default function EmployeeTracking() {
-  const { profile } = useAuth()
-  const [access, setAccess] = useState(null)
-  const [accessError, setAccessError] = useState(null)
+  // The ONE authorization answer, already resolved by useAuth for the sidebar.
+  // Reading it here instead of calling the RPC a second time guarantees the menu
+  // and this page can never disagree, and there is no second round-trip.
+  const { trackingAccess: access, refreshTrackingAccess } = useAuth()
   const [tab, setTab] = useState('live')
   const [loading, setLoading] = useState(true)
+  const [accessError, setAccessError] = useState(null)
 
   useEffect(() => {
     let alive = true
     ;(async () => {
       try {
-        const a = await trackingService.myAccess()
-        if (alive) setAccess(a)
+        await refreshTrackingAccess()
       } catch (e) {
         if (alive) setAccessError(e.message)
       } finally {
@@ -43,7 +41,7 @@ export default function EmployeeTracking() {
       }
     })()
     return () => { alive = false }
-  }, [])
+  }, [refreshTrackingAccess])
 
   if (loading) return <LoadingState label="Checking tracking access..." />
   if (accessError) return <ErrorState title="Unable to check access" message={accessError} />
