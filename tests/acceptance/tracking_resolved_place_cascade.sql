@@ -31,6 +31,13 @@ create table if not exists public.profiles (
 -- reads p.timezone, so the column must exist for the read path to work.
 alter table public.profiles add column if not exists timezone text;
 
+-- profiles.id references auth.users in the real schema. auth is not available
+-- here, so the same constraint is satisfied by this stand-in table. Without it
+-- the profile fixture is rejected by the foreign key.
+create table if not exists public.users (
+  id uuid primary key default gen_random_uuid()
+);
+
 create table if not exists public.employees (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references public.profiles(id) on delete set null,
@@ -206,6 +213,12 @@ delete from public.attendance_geofences
  where id = '22222222-2222-2222-2222-222222222222';
 delete from public.branches
  where id = '11111111-1111-1111-1111-111111111111';
+
+-- Satisfy the profiles -> users foreign key before inserting the profiles.
+insert into public.users (id) values
+  ('33333333-3333-3333-3333-333333333333'),
+  ('66666666-6666-6666-6666-666666666666')
+on conflict (id) do nothing;
 
 insert into public.branches (id, branch_name)
 values ('11111111-1111-1111-1111-111111111111', 'Head Office');
