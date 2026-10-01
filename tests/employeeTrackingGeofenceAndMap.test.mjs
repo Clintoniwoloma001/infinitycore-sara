@@ -201,7 +201,10 @@ check('history authorizes the caller, not the employee being viewed', () => {
   // The call must take NO argument, so it resolves to auth.uid().
   assert.match(b, /employee_tracking_access\(\)/,
     'the access call must pass no id so it resolves to the caller')
-  assert.ok(!/employee_tracking_access\(p_\w+\)/.test(b),
+  // Strip `--` comments first: the migration deliberately QUOTES the old buggy
+  // call in its explanatory comments, and that must not be mistaken for code.
+  const code = b.split('\n').filter((l) => !l.trimStart().startsWith('--')).join('\n')
+  assert.ok(!/employee_tracking_access\(p_\w+\)/.test(code),
     'the subject employee id must NEVER be passed to the access function')
   // The employee id is still used to SELECT rows.
   assert.match(b, /where le\.employee_id = p_employee_id/)
