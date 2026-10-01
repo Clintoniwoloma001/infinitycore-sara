@@ -48,6 +48,10 @@ create index if not exists idx_location_events_resolved_place
 -- Narrow on purpose: it may only fill in resolved_place, and only for a row the
 -- caller is already authorised to see. It can never move a point inside a
 -- fence, rename a location, or touch a coordinate.
+-- The caller identity comes from the JWT. Supabase exposes it either as
+-- auth.uid() (the wrapper) or current_setting('request.jwt.claim.sub', true).
+-- Reading the claim directly is what makes this function testable with
+-- set_config('request.jwt.claims', ...) and identical under Supabase.
 create or replace function public.set_employee_location_resolved_place(
   p_event_id uuid,
   p_place text
@@ -57,6 +61,7 @@ security definer
 set search_path = public
 as $$
 declare
+  v_uid uuid;
   v_employee uuid;
 begin
   -- Trimmed and length-capped: this is a display label from a third-party
@@ -66,11 +71,22 @@ begin
     p_place := left(p_place, 160);
   end if;
 
+  v_uid := coalesce(
+    nullif(current_setting('request.jwt.claim.sub', true), '')::uuid,
+    (select nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid
+  );
+
+  if v_uid is null then
+    -- No authenticated caller: refuse rather than let an anonymous session
+    -- attribute a place to somebody.
+    return false;
+  end if;
+
   select e.id into v_employee
     from public.employee_location_events le
     join public.employees e on e.id = le.employee_id
    where le.id = p_event_id
-     and e.user_id = auth.uid()
+     and e.user_id = v_uid
    limit 1;
 
   if not found then
@@ -194,7 +210,10 @@ create or replace function public.employee_location_history(
   p_inside_only text default 'all'
 ) returns jsonb
 language plpgsql
-stable
+-- DELIBERATELY NOT `stable`. This function writes an audit row on every call,
+-- and PostgreSQL refuses an INSERT inside a stable function. It is also the
+-- honest classification: a call has a side effect, so its result must not be
+-- folded into a snapshot by the planner.
 security definer
 set search_path = public
 as $$
@@ -242,7 +261,10 @@ begin
 
   insert into public.audit_logs (action, entity_type, entity_id, user_name, details, severity)
   values ('EMPLOYEE_LOCATION_HISTORY_QUERIED', 'Employee', p_employee_id::text,
-          (select full_name from public.profiles where id = auth.uid()),
+          (select full_name from public.profiles where id = coalesce(
+             nullif(current_setting('request.jwt.claim.sub', true), '')::uuid,
+             (select nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid
+           )),
           jsonb_build_object('date', p_date, 'points',
                              coalesce(jsonb_array_length(v_points), 0), 'success', true)::text,
           'info');

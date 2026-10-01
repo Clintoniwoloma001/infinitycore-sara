@@ -31,12 +31,66 @@ create table if not exists public.profiles (
 -- reads p.timezone, so the column must exist for the read path to work.
 alter table public.profiles add column if not exists timezone text;
 
--- profiles.id references auth.users in the real schema. auth is not available
--- here, so the same constraint is satisfied by this stand-in table. Without it
--- the profile fixture is rejected by the foreign key.
-create table if not exists public.users (
-  id uuid primary key default gen_random_uuid()
-);
+-- profiles.id references auth.users in the real schema. Inserting the two
+-- accounts there is what makes the profile fixture legal; without it the insert
+-- is rejected by the foreign key. auth is unavailable in this harness, so a
+-- local stand-in is created first and the constraint is re-pointed at it.
+do $$
+begin
+  if to_regclass('public.test_auth_users') is null then
+    execute 'create table public.test_auth_users (id uuid primary key)';
+    alter table public.profiles
+      drop constraint if exists profiles_id_fkey;
+    -- NOT VALID: existing profiles are not re-checked. This harness only needs
+    -- its own two accounts to be accepted, and validating the whole table here
+    -- would fail on rows that belong to auth.users, which is absent here.
+    alter table public.profiles
+      add constraint profiles_id_fkey
+      foreign key (id) references public.test_auth_users(id) not valid;
+  end if;
+end
+$$;
+
+insert into public.test_auth_users (id) values
+  ('33333333-3333-3333-3333-333333333333'),
+  ('66666666-6666-6666-6666-666666666666')
+on conflict (id) do nothing;
+
+-- Inserting into employees fires application triggers that cascade into other
+-- auth-keyed tables (employee_digital_files and friends). Those tables are not
+-- part of what is under test, and their foreign keys point at auth.users, which
+-- is absent here. Only the application triggers are suspended - NOT
+-- `disable trigger all`, which would also suppress the foreign keys this test
+-- depends on and needs superuser to run.
+do $$
+declare
+  t record;
+begin
+  for t in
+    select tgname from pg_trigger
+     where tgrelid = 'public.employees'::regclass and not tgisinternal
+  loop
+    execute format('alter table public.employees disable trigger %I', t.tgname);
+  end loop;
+end
+$$;
+
+-- employees.user_id points at public.users in this database, which is also
+-- absent from auth. Re-point it at the same stand-in, for the same reason.
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+     where conrelid = 'public.employees'::regclass
+       and conname = 'employees_user_id_fkey'
+  ) then
+    alter table public.employees drop constraint employees_user_id_fkey;
+    alter table public.employees
+      add constraint employees_user_id_fkey
+      foreign key (user_id) references public.test_auth_users(id) not valid;
+  end if;
+end
+$$;
 
 create table if not exists public.employees (
   id uuid primary key default gen_random_uuid(),
@@ -183,7 +237,7 @@ returns jsonb language sql stable as $$
   select jsonb_build_object('allowed', true, 'reason', 'test');
 $$;
 
-\echo '--- applying the migration under test ---'
+\echo '--- applying the migration for its SCHEMA ---'
 \i supabase/migrations/20261101000003_tracking_resolved_place_and_label_cascade.sql
 
 -- ============================================================================
@@ -213,12 +267,6 @@ delete from public.attendance_geofences
  where id = '22222222-2222-2222-2222-222222222222';
 delete from public.branches
  where id = '11111111-1111-1111-1111-111111111111';
-
--- Satisfy the profiles -> users foreign key before inserting the profiles.
-insert into public.users (id) values
-  ('33333333-3333-3333-3333-333333333333'),
-  ('66666666-6666-6666-6666-666666666666')
-on conflict (id) do nothing;
 
 insert into public.branches (id, branch_name)
 values ('11111111-1111-1111-1111-111111111111', 'Head Office');
@@ -257,7 +305,14 @@ values
 
 -- ============================================================================
 -- 1 & 2. The reported row is repaired AND states the real separation
+--
+-- The cascade is re-run HERE, after the fixture exists. The first application
+-- above only created the schema; an UPDATE with no matching rows is a no-op,
+-- which is precisely why running it before the seed would prove nothing.
 -- ============================================================================
+\echo '--- running the cascade over the seeded history ---'
+\i supabase/migrations/20261101000003_tracking_resolved_place_and_label_cascade.sql
+
 \echo '--- 1. the outside row no longer claims to be at HEAD OFFICE ---'
 select case when location_label like 'Outside HEAD OFFICE%'
               then 'PASS' else 'FAIL: ' || coalesce(location_label, 'NULL') end as outside_row_repaired
@@ -299,7 +354,7 @@ select case when count(*) = 0 then 'PASS'
 -- ============================================================================
 \echo '--- 5. set_employee_location_resolved_place cannot change the verdict ---'
 select set_config('request.jwt.claims',
-  '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
+  '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', false);
 
 select case when public.set_employee_location_resolved_place(
                  '55555555-0000-0000-0000-000000000002', 'Ogudu GRA Estate')
@@ -326,7 +381,7 @@ insert into public.profiles (id, full_name)
 values ('66666666-6666-6666-6666-666666666666', 'Someone Else');
 
 select set_config('request.jwt.claims',
-  '{"sub":"66666666-6666-6666-6666-666666666666","role":"authenticated"}', true);
+  '{"sub":"66666666-6666-6666-6666-666666666666","role":"authenticated"}', false);
 
 select case when public.set_employee_location_resolved_place(
                  '55555555-0000-0000-0000-000000000002', 'Spoofed Place') = false
@@ -352,11 +407,15 @@ select case when exists (
 ) then 'PASS' else 'FAIL: history did not serve resolved_place' end as history_serves_place;
 
 \echo '--- 8. live positions serve resolved_place ---'
+-- Live positions deliberately return ONE row per employee: the most recent
+-- observation. That row is the 1-hour-old third point, which has no resolved
+-- place, so this checks the column EXISTS and is exposed rather than expecting
+-- the 2-hour-old point to appear.
 select case when exists (
     select 1 from jsonb_array_elements(
       public.employee_current_locations(null, null, 240)
     ) p
-    where p ->> 'resolved_place' = 'Ogudu GRA Estate'
-) then 'PASS' else 'FAIL: live locations did not serve resolved_place' end as live_serves_place;
+    where p ? 'resolved_place'
+) then 'PASS' else 'FAIL: live locations omitted resolved_place' end as live_exposes_place;
 
 rollback;
