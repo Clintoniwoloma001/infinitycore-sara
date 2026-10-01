@@ -93,7 +93,18 @@ export default function HistoryDrawer({ row, onClose }) {
     }
     setAddresses({})
     reverseGeocodeAll(targets, { zoom: 18, isCancelled: () => !alive })
-      .then((map) => { if (alive) setAddresses(map || {}) })
+      .then(async (map) => {
+        if (!alive) return
+        setAddresses(map || {})
+        // Persist each new place so the history keeps naming the real location
+        // on every future visit, not only in this session. Best effort: the
+        // point is already recorded, so a rejection changes nothing on screen.
+        await Promise.all(
+          Object.entries(map || {}).map(([id, address]) =>
+            trackingService.saveResolvedPlace(id, address?.short)
+              .catch(() => false)),
+        )
+      })
       .catch(() => { if (alive) setAddresses({}) })
     return () => { alive = false }
   }, [points])

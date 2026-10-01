@@ -72,6 +72,24 @@ export const trackingService = {
     return unwrap(data, error, { geofences: [] }).geofences || []
   },
 
+  /**
+   * Remember the real place for one of the caller's own tracking points.
+   *
+   * Fire-and-forget persistence for the reverse-geocoded label: the point is
+   * already recorded either way, so a failure here must never surface to the
+   * user. The server refuses any row the caller does not own and cannot change
+   * inside_geofence or any coordinate.
+   */
+  async saveResolvedPlace(eventId, place) {
+    if (!eventId || !place) return false
+    const { data, error } = await supabase.rpc('set_employee_location_resolved_place', {
+      p_event_id: eventId,
+      p_place: place,
+    })
+    if (error) return false
+    return data === true
+  },
+
   /** All shares the Super Admin can see, with an explicit status per row. */
   async listGrants() {
     const { data, error } = await supabase.rpc('list_tracking_access_grants')
