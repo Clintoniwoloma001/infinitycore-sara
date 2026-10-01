@@ -11,11 +11,12 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { X, Map as MapIcon, Filter, RotateCcw } from 'lucide-react'
 import {
   trackingService, formatCoord, formatClockTime, buildMovementTimeline,
-  describeGeofenceStatus,
+  describeGeofenceStatus, outsidePoints,
 } from '../../services/employeeTrackingService'
 import { LoadingState, ErrorState } from '../PageStates'
 import TrackingMap from './TrackingMap'
 import MovementSummary from './MovementSummary'
+import { reverseGeocodeAll } from '../../services/reverseGeocodeService'
 
 const PRESETS = [
   { id: 'all', label: 'Whole day', from: '', to: '' },
@@ -34,6 +35,11 @@ export default function HistoryDrawer({ row, onClose }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [active, setActive] = useState(null)
+  // Real place names for points OUTSIDE every registered geofence, keyed by
+  // point id. Without these the timeline can only say "Outside HEAD OFFICE
+  // (9.2 km away)", which names a fence the person was never at. Inside points
+  // are never geocoded: the registered location is a verified fact.
+  const [addresses, setAddresses] = useState({})
 
   // Geofence circles come from the engine's own registry, fetched once.
   useEffect(() => {
@@ -68,7 +74,29 @@ export default function HistoryDrawer({ row, onClose }) {
     return () => { alive = false }
   }, [row.employee_id, date, fromTime, toTime, insideOnly])
 
-  const timeline = useMemo(() => buildMovementTimeline(points), [points])
+  const timeline = useMemo(
+    () => buildMovementTimeline(points, addresses),
+    [points, addresses],
+  )
+
+  // Resolve the real place for every outside point, oldest first, through the
+  // shared rate-limited queue. Purely cosmetic: a failure leaves the honest
+  // "X km away" label in place and never blocks the timeline. The selection of
+  // which points to look up lives in the service, so the drawer never reshapes
+  // the authorised point list itself.
+  useEffect(() => {
+    let alive = true
+    const targets = outsidePoints(points)
+    if (targets.length === 0) {
+      setAddresses({})
+      return () => { alive = false }
+    }
+    setAddresses({})
+    reverseGeocodeAll(targets, { zoom: 18, isCancelled: () => !alive })
+      .then((map) => { if (alive) setAddresses(map || {}) })
+      .catch(() => { if (alive) setAddresses({}) })
+    return () => { alive = false }
+  }, [points])
 
   const applyPreset = useCallback((preset) => {
     setFromTime(preset.from)
@@ -203,6 +231,11 @@ export default function HistoryDrawer({ row, onClose }) {
                           </p>
                           {t.transition && (
                             <p className="text-xs text-slate-500">{t.transition}</p>
+                          )}
+                          {!t.insideGeofence && t.placeLabel && (
+                            <p className="text-xs text-slate-500">
+                              Outside every registered location
+                            </p>
                           )}
                         </div>
                       </li>

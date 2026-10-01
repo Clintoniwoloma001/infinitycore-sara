@@ -201,15 +201,53 @@ export function formatClockTime(value) {
 }
 
 /**
+ * The points that need a real place name: those OUTSIDE every registered
+ * geofence.
+ *
+ * This is a presentation-side selector, NOT a filter on the audited result set.
+ * It never removes a point from what is drawn - the drawer still renders every
+ * point the server authorised. Its only effect is to decide which coordinates
+ * are worth a reverse-geocode lookup. A point inside a fence already has a
+ * verified name, so looking one up would be a paid request for a worse answer.
+ *
+ * It lives here, next to the other point helpers, so the drawer never contains
+ * a `points.filter(...)` of its own. That keeps the original guarantee literal
+ * and auditable: the client does not reshape the authorised point list.
+ */
+export function outsidePoints(points = []) {
+  if (!Array.isArray(points)) return []
+  return points.filter((p) => !p.inside_geofence)
+}
+
+/**
  * Movement timeline derived strictly from consecutive recorded points. The
  * "left geofence" / "entered" wording is computed by comparing each point's
  * inside_geofence flag to the previous one - it describes what the recorded
  * data says, it does not infer a route.
+ *
+ * `addresses` is an optional map of point id -> { short } from
+ * reverseGeocodeService. It ONLY affects points that are outside every
+ * registered geofence: those are the points whose stored label names the
+ * nearest fence ("Outside HEAD OFFICE (9.2 km away)"), which is true but not
+ * what a reader wants to know when asking "where was this person?". A point
+ * that IS inside a fence is always labelled with that fence's name, because
+ * that is a verified fact - an address never replaces it.
  */
-export function buildMovementTimeline(points = []) {
+export function buildMovementTimeline(points = [], addresses = {}) {
   if (!Array.isArray(points)) return []
   return points.map((p, i) => {
     const prev = i > 0 ? points[i - 1] : null
+    const id = p.id ?? `${p.latitude},${p.longitude}`
+    const place = addresses?.[id]?.short
+
+    // The headline a reader sees for this observation.
+    //   inside  -> the registered location (authoritative)
+    //   outside -> the real place from the map, e.g. "Ogudu GRA Estate"
+    //   outside with no address -> the honest "X km away" label
+    const label = p.inside_geofence
+      ? (p.location_label || 'Registered location')
+      : (place || p.location_label || 'Outside registered locations')
+
     let transition = null
     if (prev && prev.inside_geofence !== p.inside_geofence) {
       transition = p.inside_geofence
@@ -218,13 +256,18 @@ export function buildMovementTimeline(points = []) {
     } else if (i === 0) {
       transition = p.inside_geofence
         ? `At ${p.location_label || 'registered location'}`
-        : 'Outside any registered location'
+        : (place ? `At ${place} (outside every registered location)` : 'Outside any registered location')
     }
+
     return {
       id: p.id,
       time: formatClockTime(p.recorded_at),
       recordedAt: p.recorded_at,
-      label: p.location_label || (p.inside_geofence ? 'Registered location' : 'Outside registered locations'),
+      label,
+      // The registered-location wording is kept separately so the sub-line can
+      // still say how far outside the point was, even when the headline shows
+      // the real address.
+      placeLabel: p.inside_geofence ? null : place || null,
       insideGeofence: !!p.inside_geofence,
       accuracy: p.accuracy,
       latitude: p.latitude,
