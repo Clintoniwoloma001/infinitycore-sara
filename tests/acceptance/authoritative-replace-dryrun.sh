@@ -12,7 +12,7 @@
 # generated value files and then supabase/manual/20261101000008 yourself in the
 # Supabase SQL editor. That script lives OUTSIDE supabase/migrations so it can
 # never be picked up by `supabase db push`, and it additionally refuses to run
-# unless `hr.authoritative_replace_confirmed` is set in the session. This script
+# unless its v_confirm gate is changed to 'YES'. This script
 # never touches production.
 # ============================================================================
 set -e
@@ -30,6 +30,38 @@ run() {
 
 query() {
   docker exec -i "$CONTAINER" psql -U postgres -d "$DB" -v ON_ERROR_STOP=1 -At -c "$1"
+}
+
+# --- static lint -------------------------------------------------------
+# The Supabase SQL Editor understands plain SQL only. psql meta-commands
+# (\echo, \i, \set, ...) are a SYNTAX ERROR there, and `set local` is silently
+# discarded under autocommit, so a guard built on it behaves differently in the
+# editor than in psql. Both classes of bug shipped once already; this catches
+# them before anyone reaches the editor.
+lint() {
+  _fail=0
+  for f in "$@"; do
+    if grep -nE '^[[:space:]]*\\(echo|i|set|pset|connect|o|timing|gexec)' "$f" >/dev/null 2>&1; then
+      echo "FAIL: $(basename "$f") contains psql meta-commands (\\echo, \\i, \\set ...)" >&2
+      grep -nE '^[[:space:]]*\\(echo|i|set|pset|connect|o|timing|gexec)' "$f" | head -3 >&2
+      _fail=1
+    fi
+    # "on commit drop" temp tables vanish under autocommit, breaking the next
+    # statement. See the hr_branch_* tables in the replace script.
+    if grep -niE 'create[[:space:]]+(temp|temporary)[[:space:]]+table.*on[[:space:]]+commit[[:space:]]+drop' "$f" >/dev/null 2>&1; then
+      echo "FAIL: $(basename "$f") uses 'on commit drop' on a temp table (breaks under autocommit)" >&2
+      _fail=1
+    fi
+    if grep -nE '^[[:space:]]*(begin|commit);[[:space:]]*$' "$f" >/dev/null 2>&1; then
+      echo "FAIL: $(basename "$f") issues its own BEGIN/COMMIT (the SQL Editor already wraps runs)" >&2
+      _fail=1
+    fi
+    if grep -n "current_setting('hr.authoritative" "$f" >/dev/null 2>&1; then
+      echo "FAIL: $(basename "$f") gates on a session setting (set local is a no-op under autocommit)" >&2
+      _fail=1
+    fi
+  done
+  return $_fail
 }
 
 # One reusable row-count vector, so the baseline and the post-rollback state are
@@ -52,21 +84,23 @@ BASELINE=$(counts)
 echo "== baseline (employees|archived|files|supervisors|brchAsgn|branches|attendance|profiles) =="
 echo "$BASELINE"
 
-# The staging tables are defined by the replace script, but the generated value
-# files must load into them FIRST, so they are created here. `create table if not
-# exists` makes this safe whether or not the replace script has run yet.
-echo "== 1/5  creating staging tables (idempotent) =="
-docker exec -i "$CONTAINER" psql -U postgres -d "$DB" -v ON_ERROR_STOP=1 -q -c "
-create table if not exists public.stg_hr_employee_source (
-  staff_id text primary key, full_name text not null, first_name text,
-  last_name text, email text, position text, department text, gender text,
-  confirmation_status text, source_row jsonb);
-create table if not exists public.stg_hr_employee_branch_source (
-  staff_id text not null, branch_label text not null);
-create unique index if not exists uq_stg_branch
-  on public.stg_hr_employee_branch_source (staff_id, branch_label);
-create table if not exists public.stg_hr_employee_supervisor_source (
-  staff_id text primary key, supervisor_1 text, supervisor_2 text, supervisor_3 text);"
+# Uses the REAL staging file that production runs, not a copy of the DDL, so
+# this dry run cannot pass against a schema production would reject.
+echo "== 0/5  lint: SQL-Editor compatibility of the four production files =="
+STAGING="$DIR/supabase/manual/20261101000007a_authoritative_staging_schema.sql"
+if lint "$STAGING" "$REPLACE" \
+        "$DIR/supabase/migrations/generated/employee_source_values.sql" \
+        "$DIR/supabase/migrations/generated/employee_branch_values.sql" \
+        "$DIR/supabase/migrations/generated/employee_supervisor_values.sql"; then
+  echo "PASS: no psql-only syntax (no \\echo, no BEGIN/COMMIT, no on-commit-drop temp tables)"
+else
+  echo "FAIL: fix the reported SQL-Editor incompatibilities before running in production" >&2
+  exit 1
+fi
+
+echo
+echo "== 1/5  creating staging tables from the real staging file =="
+cat "$DIR/supabase/manual/20261101000007a_authoritative_staging_schema.sql" | run
 
 echo
 echo "== 2/5  staging load dry run (load, report, ROLLBACK) =="
@@ -91,12 +125,12 @@ echo "== 3/5  GUARD: replace must ABORT without the confirmation flag =="
 if {
   echo "begin;"
   cat "$DIR/supabase/migrations/generated/employee_source_values.sql"
-  sed '$d' "$REPLACE"
+  cat "$REPLACE"
   echo "rollback;"
 } | run 2>&1 | grep -q "ABORTED"; then
-  echo "PASS: refused without hr.authoritative_replace_confirmed (no writes)"
+  echo "PASS: refused while the v_confirm gate is 'NO' (no writes)"
 else
-  echo "FAIL: the replace script ran WITHOUT the confirmation flag" >&2
+  echo "FAIL: the replace script ran while the v_confirm gate was still 'NO'" >&2
   exit 1
 fi
 
@@ -104,15 +138,13 @@ echo
 echo "== 4/5  FULL REPLACE dry run (staging + replace, then ROLLBACK) =="
 {
   echo "begin;"
-  # Same flag the production run requires, so this dry run exercises the real
-  # code path rather than the abort path.
-  echo "set local hr.authoritative_replace_confirmed = 'yes';"
   cat "$DIR/supabase/migrations/generated/employee_source_values.sql"
   cat "$DIR/supabase/migrations/generated/employee_branch_values.sql"
   cat "$DIR/supabase/migrations/generated/employee_supervisor_values.sql"
-  # Take the replace script up to (but excluding) its final COMMIT, so the
-  # verification report runs and then the transaction is rolled back.
-  sed '$d' "$REPLACE"
+  # Flip the literal confirmation gate to 'YES' exactly as an operator would in
+  # the file, so this exercises the real code path rather than the abort path.
+  # The committed file keeps 'NO', so the guard test above stays meaningful.
+  sed "s|v_confirm constant text := 'NO'|v_confirm constant text := 'YES'|" "$REPLACE"
   echo "rollback;"
 } | run
 

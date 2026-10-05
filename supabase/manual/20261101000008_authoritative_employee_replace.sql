@@ -45,22 +45,34 @@
 --   a.shittu@infinitymfb.com  two different people share this email
 --
 -- ---------------------------------------------------------------------------
--- HOW TO RUN
+-- HOW TO RUN — IN THIS EXACT ORDER, IN THE SUPABASE SQL EDITOR
 -- ---------------------------------------------------------------------------
---   1. Take a Supabase backup FIRST (Dashboard -> Database -> Backups / or
---      `supabase db dump`). This script is one transaction, but a backup is
---      the only safety net if it is run against the wrong environment.
---   2. Run the three generated value files:
+--   Each step is its own "Run" button press. Do not combine them.
+--
+--   0. BACK UP FIRST (Dashboard -> Database -> Backups, or `supabase db dump`).
+--      A backup is the only safety net if this is run against the wrong project.
+--
+--   1. Run  20261101000007a_authoritative_staging_schema.sql
+--      Creates the three stg_* tables. It MUST run before the value files,
+--      because those files are plain INSERTs against tables that do not exist
+--      yet in a fresh production database. Safe to re-run.
+--
+--   2. Run the three generated value files, in any order:
 --        employee_source_values.sql
 --        employee_branch_values.sql
 --        employee_supervisor_values.sql
---   3. Run this file — it ABORTS IMMEDIATELY unless the session confirmation
---      flag is set, so start the transaction yourself:
---        begin;
---        set local hr.authoritative_replace_confirmed = 'yes';
---        \i 20261101000008_authoritative_employee_replace.sql
---   4. Read the verification report at the end — it prints counts and every
---      unresolved item. Do not declare success until you have read it.
+--      Expect "INSERT 0 209", "INSERT 0 218" and "INSERT 0 208".
+--
+--   3. Run THIS file. Before you do, open it and change the ONE constant on the
+--      line marked  <== change to 'YES' to run  from 'NO' to 'YES'. Until that is
+--      done the script aborts on its first statement and writes nothing at all.
+--      Then paste the whole file into the editor and run it.
+--
+--      Do NOT add begin; / commit; yourself — the SQL Editor already wraps every
+--      run in a transaction, so a nested BEGIN would be rejected.
+--
+--   4. Read the verification report at the end of the output — it returns one
+--      result set per CHECK. Do not declare success until you have read them.
 --
 -- This file lives in supabase/manual/ on purpose: it is NOT in supabase/migrations,
 -- so `supabase db push` can never apply it unattended. The flag above is a second,
@@ -74,33 +86,36 @@
 --   npm run hr:authoritative:build
 -- ============================================================================
 
-begin;
+-- The Supabase SQL Editor already wraps every run in a transaction, so this file
+-- deliberately does NOT issue its own begin;/commit; — a nested BEGIN would be
+-- rejected as "there is already a transaction in progress". Everything below is
+-- therefore atomic for free: if any statement fails, the editor rolls the whole
+-- run back and nothing is written.
 
 -- ---------------------------------------------------------------------------
 -- 0. RUN CONFIRMATION GATE (deliberate hard stop).
 --
---    The expected headcount is asserted before anything is written, and the
---    operator must ALSO set the session flag below in the SAME session:
+--    Edit the one constant below from 'NO' to 'YES' to authorise this run.
+--    It is a literal in this file rather than a session setting on purpose:
+--    `set local` is silently discarded outside an explicit transaction block,
+--    so a session-flag guard would behave differently in the SQL Editor than
+--    in psql. A literal cannot vary by runner.
 --
---      begin;
---      set local hr.authoritative_replace_confirmed = 'yes';
---      \i 20261101000008_authoritative_employee_replace.sql
---
---    Running the file on its own (or via an automated `supabase db push`, which
---    is how this script used to sit) aborts immediately with no writes at all.
---    The count check means an accidental run against a small/staging database is
---    also refused, so the script cannot silently rewrite someone else's data.
+--    Until it is changed, the script aborts on the first statement and writes
+--    nothing at all. The headcount check is a second, independent guard: an
+--    accidental run against a small/staging database is refused too, so this
+--    script cannot silently rewrite someone else's data.
 -- ---------------------------------------------------------------------------
 do $$
 declare
   v_n       int;
-  v_confirm text := current_setting('hr.authoritative_replace_confirmed', true);
+  v_confirm constant text := 'NO';   -- <== change to 'YES' to run
 begin
   select count(*) into v_n from public.employees;
 
-  if coalesce(v_confirm, '') <> 'yes' then
+  if v_confirm <> 'YES' then
     raise exception
-      'authoritative_employee_replace ABORTED: no writes made. Re-run with `set local hr.authoritative_replace_confirmed = ''yes'';` in the same transaction to confirm you are running this against PRODUCTION deliberately.';
+      'authoritative_employee_replace ABORTED: no writes made. Set the v_confirm constant to ''YES'' at the top of this file to confirm you are running this against PRODUCTION deliberately.';
   end if;
 
   if v_n = 0 then
@@ -400,7 +415,13 @@ update public.employees e
 -- employee_branch_assignments.branch_label is NOT NULL and is what the
 -- reconciliation UI displays.
 -- ---------------------------------------------------------------------------
-create temporary table hr_branch_alias (source_label text primary key, target_label text) on commit drop;
+-- The three hr_* tables below are TEMPORARY but deliberately NOT declared
+-- "on commit drop". Under autocommit (running this file statement-by-statement,
+-- as the Supabase SQL Editor does) an "on commit drop" table is destroyed at the
+-- end of its own statement's implicit transaction, so the very next statement
+-- fails with `relation "hr_branch_alias" does not exist`. They are dropped
+-- explicitly at the end of this script instead.
+create temporary table hr_branch_alias (source_label text primary key, target_label text);
 insert into hr_branch_alias (source_label, target_label) values
   ('Ibeju Lekki Two (Ajah)','AJAH'),
   ('Sabo Yaba',             'SABO/YABA'),
@@ -423,8 +444,7 @@ select distinct bs.branch_label as source_label,
 --     code has been agreed with HR, so a fabricated one would be worse than none.
 --     RETURNING into a temp table records exactly which branches this run
 --     created, so CHECK 13 can report them without guessing from timestamps.
-create temporary table hr_branch_created (branch_id uuid primary key, branch_name text)
-  on commit drop;
+create temporary table hr_branch_created (branch_id uuid primary key, branch_name text);
 
 --     An INSERT ... SELECT cannot use RETURNING ... INTO, so the created rows are
 --     captured through a data-modifying CTE instead.
@@ -469,8 +489,8 @@ select e.id,
   ) b on true
 on conflict do nothing;
 
-drop table if exists hr_branch_resolved;
-drop table if exists hr_branch_alias;
+-- hr_branch_created is NOT dropped here: CHECK 13 still reads it further down.
+-- All three are dropped explicitly at the very end of this script.
 
 -- employees.branch holds only the PRIMARY branch, so it is set from the
 -- assignment marked primary (or the first available assignment).
@@ -580,11 +600,11 @@ select
 -- ---------------------------------------------------------------------------
 -- 11. VERIFICATION REPORT — read this before declaring success.
 -- ---------------------------------------------------------------------------
-\echo ''
-\echo '=========== AUTHORITATIVE EMPLOYEE REPLACE — VERIFICATION ==========='
+--
+-- =========== AUTHORITATIVE EMPLOYEE REPLACE — VERIFICATION ===========
 
-\echo ''
-\echo '-- headcount --'
+--
+-- headcount --
 select
   (select count(*) from public.employees)                                 as employees_total,
   (select count(*) from public.stg_hr_employee_source)                   as source_expected,
@@ -593,69 +613,69 @@ select
   (select count(*) from public.employees where coalesce(is_archived,false)) as archived,
   (select count(*) from public.hr_employee_archive)                      as snapshot_rows;
 
-\echo ''
-\echo '-- CHECK 1: every source person exists (expect NO rows) --'
+--
+-- CHECK 1: every source person exists (expect NO rows) --
 select s.staff_id, s.full_name
   from public.stg_hr_employee_source s
   left join public.employees e on e.staff_id = s.staff_id
  where e.id is null;
 
-\echo ''
-\echo '-- CHECK 2: duplicate staff_id among active rows (expect NO rows) --'
+--
+-- CHECK 2: duplicate staff_id among active rows (expect NO rows) --
 select staff_id, count(*) from public.employees
  where coalesce(is_archived,false) = false and staff_id is not null
  group by staff_id having count(*) > 1;
 
-\echo ''
-\echo '-- CHECK 3: duplicate email among active rows (expect NO rows) --'
+--
+-- CHECK 3: duplicate email among active rows (expect NO rows) --
 select lower(email) as email, count(*) from public.employees
  where coalesce(is_archived,false) = false and email is not null and email <> ''
  group by lower(email) having count(*) > 1;
 
-\echo ''
-\echo '-- CHECK 4: profile re-link (unlinked_profiles should be 0) --'
+--
+-- CHECK 4: profile re-link (unlinked_profiles should be 0) --
 select (select count(*) from public.profiles)                                as profiles_total,
        (select count(*) from public.profiles where employee_id is not null) as linked_profiles,
        (select count(*) from public.profiles where employee_id is null)     as unlinked_profiles;
 
-\echo ''
-\echo '-- CHECK 5: auth identities missing from auth.users (expect NO rows) --'
+--
+-- CHECK 5: auth identities missing from auth.users (expect NO rows) --
 select p.id, p.email, p.role from public.profiles p
  where not exists (select 1 from auth.users u where u.id = p.id);
 
-\echo ''
-\echo '-- CHECK 6: attendance with no employee (expect orphan_attendance = 0) --'
+--
+-- CHECK 6: attendance with no employee (expect orphan_attendance = 0) --
 select count(*) as orphan_attendance from public.attendance_records a
  where a.employee_id is null;
 
-\echo ''
-\echo '-- CHECK 7: attendance preserved vs step-2 snapshot (all three equal) --'
+--
+-- CHECK 7: attendance preserved vs step-2 snapshot (all three equal) --
 select (select count(*) from public.hr_attendance_restore)             as snapshotted,
        (select count(*) from public.attendance_records)                as still_present,
        (select count(*) from public.hr_attendance_restore r
           join public.attendance_records a on a.id = r.attendance_id) as restored_ok;
-\echo ''
-\echo '-- CHECK 8: preserved row counts (documents/hierarchy must NOT be zeroed) --'
+--
+-- CHECK 8: preserved row counts (documents/hierarchy must NOT be zeroed) --
 select 'employee_digital_files' as tbl, count(*) from public.employee_digital_files
 union all select 'employee_supervisors', count(*) from public.employee_supervisors
 union all select 'employee_branch_assignments', count(*) from public.employee_branch_assignments;
 
-\echo ''
-\echo '-- CHECK 9: multi-branch coverage (expect 7 people with >1 branch) --'
+--
+-- CHECK 9: multi-branch coverage (expect 7 people with >1 branch) --
 select e.staff_id, e.full_name, count(*) as branches
   from public.employees e
   join public.employee_branch_assignments ba on ba.employee_id = e.id
  group by e.staff_id, e.full_name having count(*) > 1 order by branches desc;
 
-\echo ''
-\echo '-- CHECK 10: hierarchy coverage --'
+--
+-- CHECK 10: hierarchy coverage --
 select (select count(*) from public.employees where coalesce(is_archived,false)=false) as active_people,
        (select count(*) from public.employees where supervisor_1st_id is not null)     as has_1st_level,
        (select count(*) from public.employees where supervisor_2nd_id is not null)     as has_2nd_level,
        (select count(*) from public.employees where supervisor_3rd_id is not null)     as has_3rd_level;
 
-\echo ''
-\echo '-- CHECK 11: UNRESOLVED supervisors (HR review queue, not failures) --'
+--
+-- CHECK 11: UNRESOLVED supervisors (HR review queue, not failures) --
 select s.staff_id as employee_staff_id, s.supervisor_1, s.supervisor_2, s.supervisor_3
   from public.stg_hr_employee_supervisor_source s
   join public.employees e on e.staff_id = s.staff_id
@@ -663,30 +683,37 @@ select s.staff_id as employee_staff_id, s.supervisor_1, s.supervisor_2, s.superv
     or (s.supervisor_2 is not null and s.supervisor_2 <> '' and e.supervisor_2nd_id is null)
     or (s.supervisor_3 is not null and s.supervisor_3 <> '' and e.supervisor_3rd_id is null);
 
-\echo ''
-\echo '-- CHECK 12: archived, pending HR decision (NOT deleted) --'
+--
+-- CHECK 12: archived, pending HR decision (NOT deleted) --
 select staff_id, full_name, coalesce(email,'-') as email, archive_reason
   from public.employees
  where coalesce(is_archived, false) = true
  order by staff_id nulls last;
 
-\echo ''
-\echo '-- CHECK 13: BRANCHES AUTO-CREATED from workbook labels (HR should rename/confirm) --'
+--
+-- CHECK 13: BRANCHES AUTO-CREATED from workbook labels (HR should rename/confirm) --
 select c.branch_name,
        (select count(*) from public.employee_branch_assignments ba
          where ba.branch_id = c.branch_id) as staff_assigned
   from hr_branch_created c
  order by c.branch_name;
 
-\echo ''
-\echo '-- CHECK 14: branch assignments created vs source rows (both must be 218) --'
+--
+-- CHECK 14: branch assignments created vs source rows (both must be 218) --
 select (select count(*) from public.employee_branch_assignments
          where source_sheet = 'IT AUTOMATION LIST REVIEWED-3') as assignments_created,
        (select count(*) from public.stg_hr_employee_branch_source) as source_rows;
 
-\echo ''
-\echo '============================ END VERIFICATION ============================'
-\echo 'Once committed, ROLLBACK is no longer available. Restore from'
-\echo 'public.hr_employee_archive / hr_profile_link_archive, or replay a backup.'
+--
+-- ============================ END VERIFICATION ============================
+-- Once committed, ROLLBACK is no longer available. Restore from
+-- public.hr_employee_archive / hr_profile_link_archive, or replay a backup.
 
-commit;
+-- Scratch tables are dropped last, after every CHECK has read them.
+drop table if exists hr_branch_created;
+drop table if exists hr_branch_resolved;
+drop table if exists hr_branch_alias;
+
+-- Everything above ran inside the editor's own transaction, so the changes are
+-- already durable. If you are running this from psql instead, wrap the file in
+-- begin; ... commit; yourself.
