@@ -325,4 +325,52 @@ check('no new surface bypasses the gate', () => {
   assert.match(m2, /revoke all on function public\.employee_location_history/)
 })
 
+// ---------------------------------------------------------------------------
+// REGRESSION for the "no location recorded yet" screen that showed while the
+// database held real, authorised positions.
+//
+// The server was never broken. list_tracked_employees() returns a BARE jsonb
+// array of rows, but the service unwrapped `.employees` off the result - a key
+// that does not exist - so every authorised row was discarded and the UI fell
+// through to its honest empty state. These checks pin each reader's unwrapping
+// to the shape its SQL actually returns, so a mismatch fails loudly here instead
+// of silently rendering an empty map in production.
+// ---------------------------------------------------------------------------
+console.log('\nRPC payload shapes match what the service unwraps')
+check('a bare-array RPC is not unwrapped as an object', () => {
+  assert.ok(
+    !/\}\s*\)\.employees/.test(service),
+    'livePositions must not read `.employees` off a bare-array response',
+  )
+  assert.match(service, /unwrap\(data, error, \[\]\)/,
+    'livePositions must unwrap to an array fallback')
+  assert.match(service, /Array\.isArray\(result\)/,
+    'a shape change must be raised, not rendered as "no locations"')
+})
+
+check('the empty-state copy is only reachable from a genuinely empty array', () => {
+  assert.match(live, /No locations recorded yet/)
+  // The rows it renders come straight from the service result - nothing filters
+  // the authorised set down to nothing on the client.
+  assert.match(live, /setRows\(await trackingService\.livePositions/)
+  assert.ok(!/rows\.filter\(.*points_in_window/.test(live),
+    'points_in_window is an activity signal, never a visibility filter')
+})
+
+check('object-shaped RPCs keep reading their own key', () => {
+  // list_tracking_geofences -> { ok, geofences, default_radius }
+  assert.match(body(m3, 'list_tracking_geofences'), /jsonb_build_object\('ok', true, 'geofences'/)
+  assert.match(service, /\.geofences \|\| \[\]/)
+  // employee_location_history -> { ok, date, points, point_count }
+  assert.match(service, /\{ points: \[\], point_count: 0 \}/)
+})
+
+check('the deployed SQL returns an array, proving the object unwrap was wrong', () => {
+  const b = body(m5, 'list_tracked_employees')
+  assert.match(b, /coalesce\(jsonb_agg\(to_jsonb\(x\)/,
+    'list_tracked_employees aggregates into a bare array')
+  assert.ok(!/jsonb_build_object\('ok'/.test(b),
+    'so the service must never expect an `employees` key')
+})
+
 console.log(`\n${passed} checks passed`)

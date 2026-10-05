@@ -43,7 +43,19 @@ export const trackingService = {
       p_department: department,
       p_branch_id: branchId,
     })
-    return unwrap(data, error, { employees: [] }).employees || []
+    // list_tracked_employees() returns a BARE jsonb array of rows - NOT an object
+    // with an `employees` key. Unwrapping `.employees` here silently discarded every
+    // authorised row and rendered the honest empty state ("No locations recorded
+    // yet") even while the server was returning real positions. Accept only the
+    // documented array; anything else is a contract change, so surface it rather
+    // than quietly showing an empty map.
+    const result = unwrap(data, error, [])
+    if (!Array.isArray(result)) {
+      throw new Error(
+        'Tracking data could not be read: the server returned an unexpected shape.',
+      )
+    }
+    return result
   },
 
   /**
