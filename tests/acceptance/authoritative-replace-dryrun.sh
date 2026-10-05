@@ -88,7 +88,8 @@ echo "$BASELINE"
 # this dry run cannot pass against a schema production would reject.
 echo "== 0/5  lint: SQL-Editor compatibility of the four production files =="
 STAGING="$DIR/supabase/manual/20261101000007a_authoritative_staging_schema.sql"
-if lint "$STAGING" "$REPLACE" \
+PREFLIGHT="$DIR/supabase/manual/20261101000009_authoritative_preflight_readonly.sql"
+if lint "$STAGING" "$REPLACE" "$PREFLIGHT" \
         "$DIR/supabase/migrations/generated/employee_source_values.sql" \
         "$DIR/supabase/migrations/generated/employee_branch_values.sql" \
         "$DIR/supabase/migrations/generated/employee_supervisor_values.sql"; then
@@ -97,6 +98,13 @@ else
   echo "FAIL: fix the reported SQL-Editor incompatibilities before running in production" >&2
   exit 1
 fi
+
+# The pre-flight is advertised as READ-ONLY, so hold it to that: no write verbs.
+if grep -qiE '^[[:space:]]*(insert|update|delete|drop|create|alter|truncate|grant|revoke)[[:space:]]' "$PREFLIGHT"; then
+  echo "FAIL: the pre-flight file contains a write statement; it must stay read-only" >&2
+  exit 1
+fi
+echo "PASS: pre-flight file is genuinely read-only"
 
 echo
 echo "== 1/5  creating staging tables from the real staging file =="

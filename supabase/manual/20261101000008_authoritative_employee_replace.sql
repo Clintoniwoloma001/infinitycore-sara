@@ -102,9 +102,16 @@
 --    in psql. A literal cannot vary by runner.
 --
 --    Until it is changed, the script aborts on the first statement and writes
---    nothing at all. The headcount check is a second, independent guard: an
---    accidental run against a small/staging database is refused too, so this
---    script cannot silently rewrite someone else's data.
+--    nothing at all.
+--
+--    The ONLY automatic guard is that `employees` must be non-empty, i.e. a real
+--    HR database rather than a blank one. There is deliberately NO hardcoded
+--    headcount: an earlier version required exactly 430 rows, but 430 was the
+--    LOCAL DEV figure, which included 215 synthetic `IMFB-KH-*` seed rows that
+--    exist only in the development database. Production legitimately holds a
+--    different number (212), so that check aborted a legitimate run. An
+--    environment-specific expectation belongs in a dry run, not in a guard that
+--    runs against production.
 -- ---------------------------------------------------------------------------
 do $$
 declare
@@ -122,12 +129,7 @@ begin
     raise exception 'authoritative_employee_replace ABORTED: employees is empty — wrong environment or wrong project';
   end if;
 
-  if v_n <> 430 then
-    raise exception
-      'authoritative_employee_replace ABORTED: expected 430 employees, found %. Verify you are on the correct project before continuing — this script is built for the 430-row pre-replace baseline.', v_n;
-  end if;
-
-  raise notice 'employees before replace: % (confirmed by hr.authoritative_replace_confirmed)', v_n;
+  raise notice 'employees before replace: %', v_n;
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -602,6 +604,11 @@ select
 -- ---------------------------------------------------------------------------
 --
 -- =========== AUTHORITATIVE EMPLOYEE REPLACE — VERIFICATION ===========
+
+-- Environment note: employee counts differ between environments. Local dev has
+-- 430 rows because it also contains 215 synthetic `IMFB-KH-*` seed rows that do
+-- not exist in production. Judge this run by matched_by_staff_id = 209, not by
+-- employees_total.
 
 --
 -- headcount --
