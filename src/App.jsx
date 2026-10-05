@@ -54,6 +54,7 @@ import BankOneImportCenter from './pages/BankOneImportCenter'
 import BankOneImportReview from './pages/BankOneImportReview'
 import BankOneIntegration from './pages/BankOneIntegration'
 import Performance from './pages/Performance'
+import MprPerformance from './pages/MprPerformance'
 import Reconciliation from './pages/Reconciliation'
 import Settings from './pages/Settings'
 import OnboardingReview from './pages/OnboardingReview'
@@ -127,6 +128,7 @@ const pageComponents = {
   BankOneImportReview,
   BankOneIntegration,
   Performance,
+  MprPerformance,
   Reconciliation,
   Settings,
   OnboardingReview,

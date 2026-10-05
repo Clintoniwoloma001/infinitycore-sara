@@ -78,7 +78,9 @@
     "test:bankone-import": "node tests/bankoneImportFoundation.test.mjs",
     "test:phase70-attendance-leave": "node tests/phase70AttendanceTrackingLeave.test.mjs",
     "test:ai-router": "node tests/saraAiRouter.test.mjs",
-    "test:acceptance-db": "sh tests/acceptance/run.sh"
+    "test:acceptance-db": "sh tests/acceptance/run.sh",
+    "test:mpr-scoring": "node --test tests/performanceScoring.test.mjs",
+    "test:mpr-export": "node --test tests/performanceExport.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

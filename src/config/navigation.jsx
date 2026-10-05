@@ -73,6 +73,7 @@ export const routeConfig = [
     department: DEPARTMENTS.HR,
     items: [
       { label: 'Performance', path: '/performance', icon: TrendingUp, element: 'Performance', permissions: [PERMISSIONS.PERFORMANCE_READ] },
+      { label: 'MPR Report', path: '/mpr-performance', icon: BarChart3, element: 'MprPerformance', permissions: [PERMISSIONS.PERFORMANCE_READ] },
       { label: 'PIP', path: '/performance-improvement-plans', icon: TrendingDown, element: 'PerformanceImprovementPlans', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
       { label: 'Performance Settings', path: '/performance-settings', icon: SlidersHorizontal, element: 'PerformanceSettings', permissions: [PERMISSIONS.PERFORMANCE_MANAGE] },
     ],
