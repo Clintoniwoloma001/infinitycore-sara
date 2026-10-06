@@ -8,6 +8,7 @@
 //
 // An import is an immutable SNAPSHOT. Nothing here overwrites a previous one.
 import { supabase } from '../supabaseClient'
+import { rpcWithRetry } from './rpcHelper'
 import { runImport } from '../domains/bankone/importPipeline'
 
 /** Rows are inserted in chunks; PostgREST caps a single statement. */
