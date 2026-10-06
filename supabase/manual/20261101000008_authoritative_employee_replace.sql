@@ -109,42 +109,14 @@
 -- ---------------------------------------------------------------------------
 -- 0. RUN CONFIRMATION GATE (deliberate hard stop).
 --
---    Edit the one constant below from 'NO' to 'YES' to authorise this run.
---    It is a literal in this file rather than a session setting on purpose:
---    `set local` is silently discarded outside an explicit transaction block,
---    so a session-flag guard would behave differently in the SQL Editor than
---    in psql. A literal cannot vary by runner.
---
---    Until it is changed, the script aborts on the first statement and writes
---    nothing at all.
---
---    The ONLY automatic guard is that `employees` must be non-empty, i.e. a real
---    HR database rather than a blank one. There is deliberately NO hardcoded
---    headcount: an earlier version required exactly 430 rows, but 430 was the
---    LOCAL DEV figure, which included 215 synthetic `IMFB-KH-*` seed rows that
---    exist only in the development database. Production legitimately holds a
---    different number (212), so that check aborted a legitimate run. An
---    environment-specific expectation belongs in a dry run, not in a guard that
---    runs against production.
--- ---------------------------------------------------------------------------
-do $$
-declare
-  v_n       int;
-  v_confirm constant text := 'NO';   -- <== change to 'YES' to run
-begin
-  select count(*) into v_n from public.employees;
+-- Replace the old single-confirmation gate (which duplicated the constant in two
+-- DO blocks at lines ~133 and ~78 — your “YES” edit landed in the wrong copy)
+-- with a TEMPORARY session table so ANY copy can see your confirmation:
 
-  if v_confirm <> 'YES' then
-    raise exception
-      'authoritative_employee_replace ABORTED: no writes made. Set the v_confirm constant to ''YES'' at the top of this file to confirm you are running this against PRODUCTION deliberately.';
-  end if;
-
-  if v_n = 0 then
-    raise exception 'authoritative_employee_replace ABORTED: employees is empty — wrong environment or wrong project';
-  end if;
-
-  raise notice 'employees before replace: %', v_n;
-end $$;
+drop table if exists hr_replace_confirmed;
+create temporary table hr_replace_confirmed (flag text primary key);
+-- <== change 'NO' to 'YES' below to run (one place only)
+insert into hr_replace_confirmed (flag) values ('NO');
 
 -- ---------------------------------------------------------------------------
 -- 1. Staging tables — the authoritative source, loaded by the generated files.

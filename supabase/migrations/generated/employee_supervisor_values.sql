@@ -2,6 +2,14 @@
 -- 208 three-level supervisor assignments (by NAME; resolved to
 -- employees.id at apply time, never guessed). Unresolved names stay NULL and are
 -- reported by the verification report rather than silently dropped.
+-- RUN ORDER: 20261101000007a FIRST, then this file (CREATE TABLE below is a
+-- harmless no-op when the schema file already ran).
+CREATE TABLE IF NOT EXISTS public.stg_hr_employee_supervisor_source (
+  staff_id text primary key,
+  supervisor_1 text,
+  supervisor_2 text,
+  supervisor_3 text
+);
 INSERT INTO stg_hr_employee_supervisor_source (staff_id, supervisor_1, supervisor_2, supervisor_3) VALUES
   ('IMFB/07/0004', 'Olanaoka Olanrewaju Yemisi', 'Adewunmi Gabriel Oludotun', ''),
   ('IMFB/10/0013', 'Adewunmi Gabriel Oludotun', '', ''),

@@ -7,6 +7,21 @@
 --   IMFB/23/0305 (duplicate staff id IMFB/23/0305)
 --   IMFB/20/0147 (duplicate staff id IMFB/20/0147)
 --   IMFB/20/0147 (duplicate staff id IMFB/20/0147)
+-- RUN ORDER: supabase/manual/20261101000007a_authoritative_staging_schema.sql
+-- FIRST, then this file. The CREATE TABLE below is a harmless no-op when the
+-- schema file already ran, and a safety net when this file runs first.
+CREATE TABLE IF NOT EXISTS public.stg_hr_employee_source (
+  staff_id text primary key,
+  full_name text not null,
+  first_name text,
+  last_name text,
+  email text,
+  position text,
+  department text,
+  gender text,
+  confirmation_status text,
+  source_row jsonb
+);
 INSERT INTO stg_hr_employee_source
   (staff_id, full_name, first_name, last_name, email, position, department, gender, confirmation_status)
 VALUES
