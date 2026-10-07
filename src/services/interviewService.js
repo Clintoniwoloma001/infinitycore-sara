@@ -71,11 +71,27 @@ export function connectZoom(userId) {
 // Create a Google Meet via Edge Function
 export async function createGoogleMeet({ summary, description, startDateTime, endDateTime, attendeeEmail, interviewId }) {
   try {
-    const { data, error } = await supabase.functions.invoke('create-google-meet', {
-      body: { summary, description, startDateTime, endDateTime, attendeeEmail, interviewId },
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) {
+      throw new Error('User must be authenticated to create a Google Meet link')
+    }
+
+    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-google-meet`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify({ summary, description, startDateTime, endDateTime, attendeeEmail, interviewId }),
     })
-    if (error) throw error
-    return data
+
+    if (!response.ok) {
+      const errorData = await response.json()
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`)
+    }
+
+    return await response.json()
   } catch (e) {
     return { status: 'failed', error: e?.message || 'Edge function call failed' }
   }
@@ -84,11 +100,27 @@ export async function createGoogleMeet({ summary, description, startDateTime, en
 // Create a Zoom meeting via Edge Function
 export async function createZoomMeeting({ topic, description, startDateTime, durationMinutes, interviewId }) {
   try {
-    const { data, error } = await supabase.functions.invoke('create-zoom-meeting', {
-      body: { topic, description, startDateTime, durationMinutes, interviewId },
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) {
+      throw new Error('User must be authenticated to create a Zoom meeting')
+    }
+
+    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-zoom-meeting`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify({ topic, description, startDateTime, durationMinutes, interviewId }),
     })
-    if (error) throw error
-    return data
+
+    if (!response.ok) {
+      const errorData = await response.json()
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`)
+    }
+
+    return await response.json()
   } catch (e) {
     return { status: 'failed', error: e?.message || 'Edge function call failed' }
   }
