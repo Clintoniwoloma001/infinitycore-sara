@@ -319,8 +319,10 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, deptS
   const applyFilters = async () => {
     setApplied({ preset, custom: customRange, branchF, areaF, deptF, empF, classF })
     
-    // Explicitly trigger a refresh with the newly applied date parameters
-    // to avoid defaulting to NOW() or an empty view when the active month has passed.
+    // To fix the "No performance results" error for specific dates/previous months,
+    // we must ensure the refresh logic handles timestamp ranges rather than exact dates.
+    // The onRefresh call triggers the load() function in the parent, 
+    // which should be updated to use range-based queries via the services.
     await onRefresh()
   }
   const resetFilters = async () => {

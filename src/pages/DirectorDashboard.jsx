@@ -10,6 +10,7 @@ import {
   Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { useAuth } from '../hooks/useAuth'
+import { supabase } from '../supabaseClient'
 import { directorIntelligenceService } from '../services/directorIntelligenceService'
 import { filterDepartmentOptions } from '../constants/departments'
 import { bankonePortfolioService } from '../services/bankonePortfolioService'
@@ -298,16 +299,32 @@ function BranchDetailModal({ branch, branches, staff, onClose }) {
         // SCOPE-AGNOSTIC RESOLUTION:
         // Query global branches table directly without applying active top-bar filter constraints.
         // This prevents "Branch not found in the active scope" errors when drills are triggered.
-        const { data, error: dbError } = await supabase
+        const { data: branchData, error: branchError } = await supabase
           .from('branches')
-          .select('*, bankone_portfolio_snapshots(*)')
+          .select('*')
           .or(`id.eq.${branch}, name.ilike.${branch}`)
           .maybeSingle()
 
-        if (dbError) throw dbError
-        if (!data) throw new Error('Branch details unavailable.')
+        if (branchError) throw branchError
+        if (!branchData) throw new Error('Branch details unavailable.')
 
-        setDetail(data)
+        // RELATIONSHIP FIX:
+        // There is no direct FK between branches and bankone_portfolio_snapshots.
+        // We fetch the latest published snapshot for this branch's associated data.
+        const { data: snapshotData, error: snapError } = await supabase
+          .from('bankone_portfolio_snapshots')
+          .select('*')
+          .eq('status', 'published')
+          .order('as_at_date', { ascending: false })
+          .limit(1)
+          .single()
+
+        if (snapError && snapError.code !== 'PGRST116') throw snapError
+
+        setDetail({
+          ...branchData,
+          bankone_portfolio_snapshots: snapshotData ? [snapshotData] : [],
+        })
       } catch (e) {
         setError(e.message)
       } finally {

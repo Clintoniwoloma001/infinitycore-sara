@@ -175,9 +175,15 @@ export const performanceService = {
   },
 
   // ---- Get stored results ----
-  async getResults({ periodLabel, employeeId, metricId } = {}) {
+  async getResults({ periodLabel, startDate, endDate, employeeId, metricId } = {}) {
     let query = supabase.from('performance_results').select('*').order('calculated_at', { ascending: false })
-    if (periodLabel) query = query.eq('period_label', periodLabel)
+    
+    if (periodLabel) {
+      query = query.eq('period_label', periodLabel)
+    } else if (startDate && endDate) {
+      query = query.gte('period_start', startDate).lte('period_end', endDate)
+    }
+    
     if (employeeId) query = query.eq('employee_id', employeeId)
     if (metricId) query = query.eq('metric_id', metricId)
     const { data, error } = await query
