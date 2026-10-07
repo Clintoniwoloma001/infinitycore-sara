@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Activity, ArrowDownRight, ArrowRight, ArrowUpRight, BriefcaseBusiness,
@@ -12,7 +12,10 @@ import {
 import { useAuth } from '../hooks/useAuth'
 import { directorIntelligenceService } from '../services/directorIntelligenceService'
 import { filterDepartmentOptions } from '../constants/departments'
+import { bankonePortfolioService } from '../services/bankonePortfolioService'
+import { subscribeSnapshotRefresh } from '../lib/snapshotSync'
 import { ErrorState, LoadingState } from '../components/PageStates'
+import DatePicker, { toIsoDate } from '../components/DatePicker'
 import PersonAvatar from '../components/messages/PersonAvatar'
 import { formatCurrency, formatDate } from '../lib/utils'
 
@@ -57,6 +60,21 @@ const Delta = ({ value, suffix = ' pts' }) => value == null ? <span className="t
 
 const panel = 'rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,.03)] dark:border-slate-800 dark:bg-slate-900/70'
 const input = 'h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none transition focus:border-[#009944] focus:ring-2 focus:ring-[#009944]/10 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200'
+// Same control without the stretch-to-parent width (used by the fixed-width
+// date triggers, which must not blow out the flex row).
+const inputTrigger = input.replace(' w-full', '')
+
+// The executive RPC returns PLURAL option buckets (departments/areas/roles/…);
+// looking them up by the singular filter key is why every dropdown except
+// branch rendered an empty "All …" list.
+const OPTION_KEY = {
+  department: 'departments', branchId: 'branches', area: 'areas',
+  role: 'roles', designationId: 'designations', employeeId: 'employees',
+}
+const FILTER_LABEL = {
+  department: 'Department', branchId: 'Branch', area: 'Area',
+  role: 'Role', designationId: 'Designation', employeeId: 'Employee',
+}
 
 function MetricStrip({ snapshot }) {
   const s = snapshot.summary || {}
@@ -72,9 +90,39 @@ function MetricStrip({ snapshot }) {
 }
 
 function FilterBar({ filters, setFilters, options }) {
+  const [startOpen, setStartOpen] = useState(false)
+  const [endOpen, setEndOpen] = useState(false)
+  const startBtnRef = useRef(null)
+  const endBtnRef = useRef(null)
   const set = (key, value) => setFilters((f) => ({ ...f, [key]: value || '' }))
-  const select = (key) => <select aria-label={key} className={`${input} min-w-36`} value={filters[key]} onChange={(e) => set(key,e.target.value)}><option value="">All {label(key.replace('Id',''))}</option>{(options?.[key === 'branchId' ? 'branches' : key] || []).map((o) => <option key={o.id} value={o.id}>{o.name || o.title}</option>)}</select>
-  return <div className={`${panel} p-3`}><div className="flex items-center gap-2 overflow-x-auto pb-1"><div className="flex shrink-0 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">{PERIODS.map((p) => <button key={p} onClick={() => setFilters((f)=>({...f,period:p}))} className={`rounded-md px-3 py-1.5 text-[11px] font-semibold capitalize transition ${filters.period===p?'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white':'text-slate-500'}`}>{p}</button>)}</div>{select('department')}{select('branchId')}{select('area')}{select('role')}{select('designationId')}{select('employeeId')}{filters.period === 'custom' && <><input type="date" aria-label="Start date" className={input} value={filters.startDate} onChange={(e)=>set('startDate',e.target.value)}/><input type="date" aria-label="End date" className={input} value={filters.endDate} onChange={(e)=>set('endDate',e.target.value)}/></>}<button onClick={() => setFilters({...EMPTY_FILTERS})} className="shrink-0 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Reset</button></div></div>
+  const select = (key) => <select aria-label={FILTER_LABEL[key]} className={`${input} min-w-36`} value={filters[key]} onChange={(e) => set(key,e.target.value)}><option value="">All {FILTER_LABEL[key]}</option>{(options?.[OPTION_KEY[key]] || []).map((o) => <option key={o.id} value={o.id}>{o.name || o.title}</option>)}</select>
+  // Custom opens a real calendar instead of the inline inputs that were
+  // clipped out of the horizontally scrolling filter bar, and seeds a working
+  // range so the query re-runs immediately with a valid window.
+  const openCustom = () => {
+    const now = new Date()
+    const today = iso(now)
+    const monthStart = iso(new Date(now.getFullYear(), now.getMonth(), 1))
+    setFilters((f) => ({ ...f, period: 'custom', startDate: f.startDate || monthStart, endDate: f.endDate || today }))
+    setStartOpen(true)
+    setEndOpen(false)
+  }
+  const closePickers = () => { setStartOpen(false); setEndOpen(false) }
+  const onPeriod = (p) => { closePickers(); p === 'custom' ? openCustom() : setFilters((f) => ({ ...f, period: p })) }
+  return <div className={`${panel} p-3`}><div className="flex items-center gap-2 overflow-x-auto pb-1"><div className="flex shrink-0 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">{PERIODS.map((p) => <button key={p} onClick={() => onPeriod(p)} className={`rounded-md px-3 py-1.5 text-[11px] font-semibold capitalize transition ${filters.period===p?'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white':'text-slate-500'}`}>{p}</button>)}</div>{select('department')}{select('branchId')}{select('area')}{select('role')}{select('designationId')}{select('employeeId')}{filters.period === 'custom' && <>
+    <button type="button" ref={startBtnRef} onClick={() => { setEndOpen(false); setStartOpen((v) => !v) }} className={`${inputTrigger} w-36 shrink-0 cursor-pointer text-left`} aria-label="Start date">{filters.startDate || 'Start date'}</button>
+    <button type="button" ref={endBtnRef} onClick={() => { setStartOpen(false); setEndOpen((v) => !v) }} className={`${inputTrigger} w-36 shrink-0 cursor-pointer text-left`} aria-label="End date">{filters.endDate || 'End date'}</button>
+    <DatePicker isOpen={startOpen} targetRef={startBtnRef} title="Select start date" selectedDate={filters.startDate}
+      onChange={(d) => {
+        const v = d ? toIsoDate(d) : ''
+        setFilters((f) => ({ ...f, startDate: v, endDate: v && (!f.endDate || f.endDate < v) ? v : f.endDate }))
+        if (d) { setStartOpen(false); setEndOpen(true) } else setStartOpen(false)
+      }}
+      onClose={() => setStartOpen(false)} />
+    <DatePicker isOpen={endOpen} targetRef={endBtnRef} title="Select end date" selectedDate={filters.endDate}
+      onChange={(d) => set('endDate', d ? toIsoDate(d) : '')}
+      onClose={() => setEndOpen(false)} />
+  </>}<button onClick={() => { closePickers(); setFilters({...EMPTY_FILTERS}) }} className="shrink-0 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Reset</button></div></div>
 }
 
 function ExecutiveTrend({ data }) {
@@ -90,9 +138,9 @@ function DepartmentTable({ rows, onSelect }) {
       {!rows.length && <tr><td colSpan="8" className="px-5 py-12 text-center text-sm text-slate-400">No departments match this scope.</td></tr>}
     </tbody></table></div></div>
 }
-function OrganizationTable({ title, rows, type }) {
+function OrganizationTable({ title, rows, type, onSelect }) {
   if (!rows?.length) return null
-  return <div className={`${panel} overflow-hidden`}><div className="border-b border-slate-100 px-5 py-4 dark:border-slate-800"><p className="text-xs font-bold uppercase tracking-[.18em] text-[#009944]">Organization</p><h3 className="mt-1 font-semibold text-slate-900 dark:text-white">{title}</h3></div><div className="divide-y divide-slate-100 dark:divide-slate-800">{rows.slice(0,8).map(r=><div key={r.id} className="grid grid-cols-[1fr_auto] gap-3 px-5 py-3 text-sm sm:grid-cols-[1fr_.45fr_.55fr_.55fr_.45fr] sm:items-center"><span className="font-medium text-slate-700 dark:text-slate-200">{r.name}</span><span className="text-xs text-slate-400">{r.total_staff} staff</span><span className="text-xs">Attendance {pct(r.attendance_rate)}</span><span className="text-xs">KPI {pct(r.kpi_completion)}</span><span className="text-xs text-[#009944]">{r.on_leave} on leave</span></div>)}</div></div>
+  return <div className={`${panel} overflow-hidden`}><div className="border-b border-slate-100 px-5 py-4 dark:border-slate-800"><p className="text-xs font-bold uppercase tracking-[.18em] text-[#009944]">Organization</p><h3 className="mt-1 font-semibold text-slate-900 dark:text-white">{title}</h3></div><div className="divide-y divide-slate-100 dark:divide-slate-800">{rows.slice(0,8).map(r=><div key={r.id} className="grid grid-cols-[1fr_auto] gap-3 px-5 py-3 text-sm sm:grid-cols-[1fr_.45fr_.55fr_.55fr_.45fr] sm:items-center cursor-pointer" onClick={()=>onSelect?.(r)}><span className="font-medium text-slate-700 dark:text-slate-200">{r.name}</span><span className="text-xs text-slate-400">{r.total_staff} staff</span><span className="text-xs">Attendance {pct(r.attendance_rate)}</span><span className="text-xs">KPI {pct(r.kpi_completion)}</span><span className="text-xs text-[#009944]">{r.on_leave} on leave</span></div>)}</div></div>
 }
 
 function RolePerformance({ rows }) {
@@ -147,8 +195,18 @@ export default function DirectorDashboard() {
   const [filters,setFilters] = useState({...EMPTY_FILTERS}); const [snapshot,setSnapshot] = useState(null)
   const [loading,setLoading] = useState(true); const [error,setError] = useState(''); const [employeeId,setEmployeeId] = useState(null)
   const [tab,setTab] = useState('overview'); const [department,setDepartment] = useState(null)
-  const load = async () => { setLoading(true); setError(''); try { const range=dateWindow(filters.period,filters); setSnapshot(await directorIntelligenceService.getSnapshot({...filters,...range})) } catch(e) { setError(e.message||'Director intelligence is unavailable. Apply the latest database migration.') } finally { setLoading(false) } }
+  // Department / branch drill-down panels
+  const [departmentSnapshots, setDepartmentSnapshots] = useState([])
+  const [isDepartmentDrillOpen, setIsDepartmentDrillOpen] = useState(false)
+  const [isBranchDrillOpen, setIsBranchDrillOpen] = useState(false)
+  const [departmentDrillName, setDepartmentDrillName] = useState('')
+  const [branchDrillName, setBranchDrillName] = useState('')
+  const load = async () => { setLoading(true); setError(''); try { const range=dateWindow(filters.period,filters); setSnapshot(await directorIntelligenceService.getSnapshot({...filters,...range})); setDepartmentSnapshots(await bankonePortfolioService.listLatestDepartmentSnapshots()) } catch(e) { setError(e.message||'Director intelligence is unavailable. Apply the latest database migration.') } finally { setLoading(false) } }
   useEffect(()=>{ const t=setTimeout(load,180); return ()=>clearTimeout(t) },[filters.period,filters.department,filters.branchId,filters.area,filters.role,filters.designationId,filters.employeeId,filters.startDate,filters.endDate])
+  const loadRef = useRef(load)
+  useEffect(() => { loadRef.current = load })
+  // Published snapshots (same session or another user) refresh the cards live.
+  useEffect(() => subscribeSnapshotRefresh(() => loadRef.current()), [])
   const range=useMemo(()=>dateWindow(filters.period,filters),[filters]); const staff=useMemo(()=>department?(snapshot?.staff||[]).filter(s=>s.department===department):snapshot?.staff||[],[snapshot,department])
   // Executive titles (MD/CEO, Chairman, Director…) are roles, never departments.
   const filterOptions=useMemo(()=>({...(snapshot?.filters||{}),departments:filterDepartmentOptions(snapshot?.filters?.departments||[])}),[snapshot])
@@ -164,7 +222,7 @@ export default function DirectorDashboard() {
     <BusinessRibbon summary={snapshot.summary}/>
     <div className="flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-800">{tabs.map(([id,name])=><button key={id} onClick={()=>{setTab(id);setDepartment(null)}} className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-semibold transition ${tab===id?'border-[#009944] text-[#009944]':'border-transparent text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>{name}</button>)}</div>
     {department&&<div className={`${panel} flex items-center justify-between px-5 py-3`}><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#009944]">Department intelligence</p><h2 className="font-semibold text-slate-900 dark:text-white">{department}</h2></div><button onClick={()=>setDepartment(null)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-4 w-4"/></button></div>}
-    {tab==='overview'&&<><DepartmentTable rows={departmentRollup} onSelect={(d)=>{setDepartment(d.name);setTab('attendance')}}/><div className="grid gap-5 xl:grid-cols-[1.45fr_1fr]"><ExecutiveTrend data={snapshot.trend}/><RolePerformance rows={snapshot.roles}/></div><div className="mt-5 grid gap-5 xl:grid-cols-2"><OrganizationTable title="Branch performance" rows={snapshot.branches}/><OrganizationTable title="Area performance" rows={snapshot.areas}/></div></>}
+    {tab==='overview'&&<><DepartmentTable rows={departmentRollup} onSelect={(d)=>{setDepartment(d.name);setIsDepartmentDrillOpen(true)}}/><div className="grid gap-5 xl:grid-cols-[1.45fr_1fr]"><ExecutiveTrend data={snapshot.trend}/><RolePerformance rows={snapshot.roles}/></div><div className="mt-5 grid gap-5 xl:grid-cols-2"><OrganizationTable title="Branch performance" rows={snapshot.branches} onSelect={(r)=>{setBranchDrillName(r.name);setIsBranchDrillOpen(true)}}/><OrganizationTable title="Area performance" rows={snapshot.areas}/></div><DepartmentDrillDownModal department={departmentDrillName} snapshots={departmentSnapshots} staff={snapshot?.staff||[]} onClose={()=>{setIsDepartmentDrillOpen(false)}}/><BranchDetailModal branch={branchDrillName} branches={snapshot?.branches||[]} staff={snapshot?.staff||[]} onClose={()=>{setIsBranchDrillOpen(false)}}/></>}
     {tab==='attendance'&&<><AttendanceView staff={staff}/><div className="mt-5"><StaffTable rows={staff} onEmployee={setEmployeeId}/></div></>}
     {tab==='leave'&&<LeaveView rows={snapshot.leave} onEmployee={setEmployeeId}/>} 
     {tab==='performance'&&<><div className="grid gap-5 xl:grid-cols-[1.45fr_1fr]"><ExecutiveTrend data={snapshot.trend}/><RolePerformance rows={snapshot.roles}/></div><div className="mt-5"><StaffTable rows={staff} onEmployee={setEmployeeId}/></div></>}
@@ -173,4 +231,94 @@ export default function DirectorDashboard() {
   </div>
 }
 
+function DepartmentDrillDownModal({ department, snapshots, staff, onClose }) {
+  const rows = (snapshots || []).filter(s => String(s.department || '').toLowerCase() === String(department || '').toLowerCase())
+  const totalOut = rows.reduce((a, r) => a + Number(r.total_outstanding || 0), 0)
+  const totalDisb = rows.reduce((a, r) => a + Number(r.total_disbursed || 0), 0)
+  const totalRep = rows.reduce((a, r) => a + Number(r.total_repaid || 0), 0)
+  const totalLoans = rows.reduce((a, r) => a + Number(r.loan_count || 0), 0)
+  const nonPerf = rows.reduce((a, r) => a + Number(r.non_performing_outstanding || 0), 0)
+  const avgPar = rows.length ? rows.reduce((a, r) => a + Number(r.par_ratio || 0), 0) / rows.length : null
+  const performing = Number.isFinite(totalOut) && totalOut > 0 ? totalOut - nonPerf : 0
+  const perfPct = totalOut > 0 ? (performing / totalOut) * 100 : 0
+  const naPct = totalOut > 0 ? (nonPerf / totalOut) * 100 : 0
+  const deptStaff = (staff || []).filter(s => String(s.department || '').toLowerCase() === String(department || '').toLowerCase())
+  const scored = (deptStaff || []).map(s => { const w = Number(s.attendance_rate || 0) * 0.4 + Number(s.kpi_completion || 0) * 0.3 + Number(s.target_completion || 0) * 0.3; return { ...s, score: w } }).sort((x, y) => y.score - x.score)
+  const top5 = scored.slice(0, 5)
+  const bottom5 = scored.slice(-5).reverse()
+  return (
+    <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/50 backdrop-blur-sm" onMouseDown={onClose}>
+      <aside onMouseDown={(e) => e.stopPropagation()} className="h-full w-full max-w-5xl overflow-y-auto bg-white shadow-2xl dark:bg-slate-900">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 px-6 py-4 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+          <div><p className="text-[10px] font-bold uppercase tracking-[.2em] text-[#009944]">Department intelligence</p><h2 className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{department}</h2></div>
+          <button onClick={onClose} aria-label="Close" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="p-5">
+          {rows.length === 0 ? (
+            <div className="text-center py-10"><p className="text-sm text-slate-500">No published portfolio data for this department. Run a PAR import via Portfolio Import Review, then re-open this view.</p></div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Total Loan Portfolio</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{formatCurrency(totalOut)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Total Disbursed</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{formatCurrency(totalDisb)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Total Repaid</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{formatCurrency(totalRep)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Avg PAR %</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{avgPar != null ? avgPar.toFixed(2) : '—'}%</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Active Loans</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{totalLoans}</p></div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="rounded-xl bg-emerald-50 p-3 dark:bg-emerald-900/20"><p className="text-[10px] uppercase tracking-wider text-emerald-600">Performing ({perfPct.toFixed(1)}%)</p><p className="mt-1 text-sm font-semibold text-emerald-800 dark:text-emerald-200">{formatCurrency(performing)}</p></div>
+                <div className="rounded-xl bg-amber-50 p-3 dark:bg-amber-900/20"><p className="text-[10px] uppercase tracking-wider text-amber-600">PAR > 30d ({naPct.toFixed(1)}%)</p><p className="mt-1 text-sm font-semibold text-amber-800 dark:text-amber-200">{formatCurrency(nonPerf)}</p></div>
+              </div>
+              <div className="mt-5"><p className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">Staff ranking (attendance · KPI · target)</p>
+                {deptStaff.length === 0 ? <p className="text-sm text-slate-500">No staff recorded for this department.</p> :
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div><p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Top 5 — raising the department up</p><div className="space-y-1">{top5.map(s => <div key={s.id} className="flex justify-between text-sm"><span className="font-medium text-slate-700">{s.full_name}</span><span className="text-slate-500">{pct(s.score)}</span></div>)}</div></div>
+                    <div><p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Bottom 5 — drawing it down</p><div className="space-y-1">{bottom5.map(s => <div key={s.id} className="flex justify-between text-sm"><span className="font-medium text-slate-700">{s.full_name}</span><span className="text-slate-500">{pct(s.score)}</span></div>)}</div></div>
+                  </div>}
+              </div>
+            </>
+          )}
+        </div>
+      </aside>
+    </div>
+  )
+}
+function BranchDetailModal({ branch, branches, staff, onClose }) {
+  const b = (branches || []).find(x => String(x.name || '').toLowerCase() === String(branch || '').toLowerCase())
+  const branchStaff = (staff || []).filter(s => String(s.branch_name || '').toLowerCase() === String(branch || '').toLowerCase())
+  return (
+    <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/50 backdrop-blur-sm" onMouseDown={onClose}>
+      <aside onMouseDown={(e) => e.stopPropagation()} className="h-full w-full max-w-4xl overflow-y-auto bg-white shadow-2xl dark:bg-slate-900">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 px-6 py-4 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+          <div><p className="text-[10px] font-bold uppercase tracking-[.2em] text-[#009944]">Branch intelligence</p><h2 className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{branch}</h2></div>
+          <button onClick={onClose} aria-label="Close" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="p-5">
+          {!b ? (
+            <div className="text-center py-10"><p className="text-sm text-slate-500">Branch not found in the active scope.</p></div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Staff</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{Number(b.total_staff || 0)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Active</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{Number(b.active_staff || 0)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Attendance</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{pct(b.attendance_rate)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">KPI completion</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{pct(b.kpi_completion)}</p></div>
+              </div>
+              <div className="mt-4">
+                <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">Staff under this branch</p>
+                {branchStaff.length === 0 ? <p className="text-sm text-slate-500">No staff assigned to this branch in the current filter.</p> :
+                  <div className="max-h-64 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-slate-50"><tr className="text-left text-xs text-slate-400"><th className="px-2 py-1">Employee</th><th className="px-2 py-1">Role</th><th className="px-2 py-1">Designation</th></tr></thead>
+                      <tbody className="divide-y divide-slate-100">{branchStaff.map(s => <tr key={s.id}><td className="px-2 py-1 font-medium text-slate-800">{s.full_name}</td><td className="px-2 py-1 text-slate-500">{s.position || '—'}</td><td className="px-2 py-1 text-slate-500">{s.designation_title || '—'}</td></tr>)}</tbody>
+                    </table>
+                  </div>}
+              </div>
+            </>
+          )}
+        </div>
+      </aside>
+    </div>
+  )
+}
 // End of Director executive workspace.

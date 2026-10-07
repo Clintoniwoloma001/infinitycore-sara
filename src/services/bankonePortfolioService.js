@@ -295,6 +295,41 @@ export const bankonePortfolioService = {
     return rpcWithRetry(() => supabase.rpc('bankone_publish_snapshot', { p_batch_id: batchId }))
   },
 
+  /**
+   * Department rows of the NEWEST published snapshot (the rollup the
+   * Performance page renders next to its employee-derived scorecards).
+   *
+   * Optional enrichment, so it degrades instead of throwing: before the
+   * department-rollup migration is applied, or for a viewer without read
+   * access, it returns [] and the caller keeps its client-side rollup.
+   */
+  async listLatestDepartmentSnapshots() {
+    // Department rows only exist for published PAR snapshots, so prefer the
+    // newest PAR snapshot and walk backwards until one actually has rows —
+    // a newer disbursement snapshot must never hide the department data.
+    const { data: snaps, error: snapErr } = await supabase
+      .from('bankone_portfolio_snapshots')
+      .select('id, report_type, as_at_date, published_at')
+      .eq('status', 'published')
+      .order('as_at_date', { ascending: false })
+      .order('published_at', { ascending: false })
+      .limit(20)
+    if (snapErr) return []
+    const ordered = [...(snaps || [])].sort(
+      (a, b) => (a.report_type === 'par' ? 0 : 1) - (b.report_type === 'par' ? 0 : 1)
+    )
+    for (const snap of ordered) {
+      const { data, error } = await supabase
+        .from('bankone_department_snapshots')
+        .select('*')
+        .eq('snapshot_id', snap.id)
+        .order('total_outstanding', { ascending: false })
+      if (error) return []
+      if (data && data.length) return data
+    }
+    return []
+  },
+
   // --- §9/§19 resolution actions (all audited, all role-gated) ------------
 
   /** Confirm which employee a BankOne officer name refers to. */

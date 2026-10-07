@@ -1073,3 +1073,149 @@ must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
   profile is auto-promoted to `md_ceo`/`chairman`, and the Flutter/mobile client
   lives outside this repo — it must recognise `md_ceo`/`chairman` and route them
   to the executive workspace instead of the standard dashboard.
+
+## Phase — Portal DatePicker + Director filters + Performance defaults + publish→refresh hooks
+Frontend-only (Tasks 1–4 of the dashboard/period plan). No SQL migration in this
+phase — the data-side migration
+`supabase/migrations/20261102000001_bankone_publish_rollup_and_executive_sync.sql`
+(snapshot aggregate columns, `bankone_department_snapshots`, rollup RPC, publish
+re-issue, backfill, director RPC re-issue) is authored in the companion phase
+entry below and must be run in the Supabase SQL Editor; every
+consumer below degrades gracefully until it exists.
+- `src/components/DatePicker.jsx` (new) — calendar popover rendered through
+  `createPortal(..., document.body)` with `position: fixed` (repo portal
+  convention, same as `MessageBubble.jsx`; no `#portal-root` exists). Anchors to
+  a `targetRef` button rect with flip/clamp, month/year selects + chevron nav,
+  Today/Clear shortcuts, outside-mousedown + Escape dismissal, scroll/resize
+  reposition, min/max range; exports `toIsoDate` / `fromIsoDate`.
+- `src/lib/snapshotSync.js` (new) — refresh bus for "a snapshot was published":
+  window `CustomEvent` (`bankone:snapshot_published`) + Supabase Realtime
+  broadcast channel `bankone:snapshot-sync` (ref-counted `removeChannel`,
+  wrapper-per-subscription Set so differing callback identities don't dedupe).
+  `postgres_changes` was rejected: RLS `can_manage_bankone()` would filter out
+  MD/CEO subscribers. `notifySnapshotPublished(snapshot)` publishes both.
+- `src/pages/BankOneImportReview.jsx` — calls `notifySnapshotPublished(res)`
+  immediately after `publish(activeBatch)` resolves.
+- `src/pages/DirectorDashboard.jsx`:
+  - **Option-key fix**: RPC returns PLURAL buckets (`filters.departments`,
+    `branches`, `areas`, `roles`, `designations`, `employees` — all `{id,name}`);
+    the dropdowns looked them up by the singular filter key, so only Branch ever
+    rendered options. New `OPTION_KEY` / `FILTER_LABEL` maps drive every select.
+  - Custom period now uses two `DatePicker`s (start/end triggers, fixed-width
+    `inputTrigger` class without the flex `w-full`) instead of inline inputs that
+    were clipped by the horizontally scrolling bar; picking a start auto-opens
+    the end picker and coerces `endDate >= startDate`; seeds a working range
+    (month-start → today) so the query re-runs immediately with a valid window.
+  - `subscribeSnapshotRefresh(() => loadRef.current())` → re-fetch on publish.
+- `src/pages/Performance.jsx` + `src/domains/performance/periodDefaults.js` (new):
+  - Period now derives from data on load (`deriveDefaultPeriod(results, now)` —
+    `month` / `prevMonth` / `custom` bounded to the latest result month, incl.
+    Dec→Jan rollover) instead of the hardcoded `preset:null` that showed an
+    empty custom range. `applied` starts `null`; the page always renders
+    `applied ?? derived-default` (`active` memo), so opening the page shows real
+    rows with no button press.
+  - **Apply/Reset re-query**: both are async and `await onRefresh()`; Reset
+    clears to the derived default (`setApplied(null)`, localStorage `perf_preset`
+    retired).
+  - **Department Scorecards** in the dashboard: reads
+    `listLatestDepartmentSnapshots()` (new method on `bankonePortfolioService` —
+    newest `status='published'` portfolio snapshot → `bankone_department_snapshots`,
+    returns `[]` silently pre-migration/RLS denial). `par_ratio` is stored as
+    percent×100 (publish SQL `round(...,4)`) → displayed raw with `%`, never
+    ×100. Row click applies a department filter immediately.
+  - Branch row clicks now apply the branch filter immediately (previously
+    updated state without re-querying).
+  - Empty states rewritten: two buttons — **Import BankOne Data** (`onImport`)
+    and **Portfolio Import Review** (`#/bankone-portfolio-review`) — plus a
+    distinct "no employees match the current filters" notice when
+    `assessed===0 && empAgg.length>0`.
+  - Subscribes to snapshot refresh and re-runs `load()` after publish.
+- Tests: `npm run test:snapshot-refresh` — `tests/snapshotPublishRefresh.test.mjs`
+  (pure-module tests for `deriveDefaultPeriod`/`rowPeriodBounds`/`isoDate` plus
+  content assertions for the DatePicker portal, sync bus, publish hook, Director
+  option keys/pickers/subscription, Performance derived period/Apply/Reset/
+  scorecards/empty states). Regressions green:
+  `test:director-intelligence`, `test:bankone-import`, `test:mpr-scoring`,
+  `test:mpr-export`, `test:rules-builder`. `npm run build` passes.
+- Explicitly out of scope: MPR module, Performance Settings metrics (scorecards
+  use ONLY published snapshot + Performance Settings metrics — no seeding), and
+  the native `type="date"` inputs kept for Performance Custom From/To (DatePicker
+  used only in Director per plan).
+
+## Phase — BankOne publish rollup: department snapshots + snapshot-sourced director financials
+- SQL migration: `supabase/migrations/20261102000001_bankone_publish_rollup_and_executive_sync.sql`
+  — run in Supabase SQL Editor AFTER `20260931000002` (authoritative publish body;
+  the 20260931000002/8 originals are never edited). Idempotent/additive,
+  `begin; … commit;`.
+  - Adds `bankone_portfolio_snapshots.loan_count integer`,
+    `total_disbursed numeric`, `total_repaid numeric` (repaid =
+    `sum(greatest(loan_amount − total_outstanding, 0))`) + backfill of every
+    published snapshot from its `bankone_import_rows`.
+  - New `bankone_department_snapshots` (snapshot_id FK cascade, department,
+    loan_count, totals, NPA counts, percent `par_ratio`, unique
+    `(snapshot_id, department)`); RLS `for select to authenticated using
+    (can_manage_bankone() or has_permission('performance.read'))`, no writes.
+  - `public.bankone_rollup_departments(p_snapshot_id)` SECURITY DEFINER:
+    **PAR-only** (`if v_report <> 'par' then return 0` — disbursement batches
+    have no honest outstanding/status), officer-less rows → `'Unattributed'`,
+    NPA statuses `('PASS AND WATCH','SUB STANDARD','DOUBTFUL','LOST')`,
+    `par_ratio` percent ×100 already applied; role gate skips when `auth.uid()`
+    is null so SQL-Editor backfills work. EXECUTE revoked from public/anon.
+  - Backfill DO-block rollups published PAR snapshots missing dept rows (once,
+    audited `DEPARTMENT_ROLLUP_BACKFILLED`) — re-runs are no-ops.
+  - `bankone_publish_snapshot(uuid)` re-issued: byte-identical header/gates/
+    return keys (`can_manage_bankone()` … `revoke … from anon` preserved for
+    `test:bankone-parity`), plus the three aggregate columns and
+    `perform public.bankone_rollup_departments(v_snap_id)` after the officer
+    PAR update.
+  - `get_director_executive_snapshot` re-issued: picks the source snapshot
+    **par-first** (`order by (s.report_type <> 'par'), as_at_date desc,
+    published_at desc`, ≤ end date), new `booked` CTE filters that batch by
+    `disbursementDate`, and the financial summary keys
+    `loans_disbursed/previous_loans_disbursed/loan_portfolio/repayments/
+    previous_repayments` + the `loans.*` blocks are
+    `case when v_snap_id is null then <legacy expr> else <booked expr> end`
+    (legacy preserved for a pre-migration DB). Semantics: period
+    disbursed/repaid = loans BOOKED inside the window; portfolio/outstanding =
+    point-in-time at window end (from the PAR snapshot). Everything else
+    (role gate + `has_permission`, `20::int expected_days`,
+    `resolved_employee_id`, `to_jsonb(x)` aggregates, filters/staff/leave/trend
+    payloads, 8-param signature, grants) unchanged. No data DELETE.
+- `src/services/bankonePortfolioService.js` `listLatestDepartmentSnapshots()`
+  now fetches up to 20 published snapshots, stable-sorts PAR first, and walks
+  until it finds one with department rows (a newer disbursement snapshot can
+  no longer hide them); `[]` on any error keeps the pre-migration degrade path.
+- Tests:
+  - `npm run test:bankone-rollup` — `scripts/test-bankone-rollup.sh` applies
+    20260931000002 then 20261102000001 (both idempotent) and replays
+    `tests/acceptance/bankoneDepartmentRollup.sql` (23 assertions, ends in
+    ROLLBACK): publish aggregates + percent PAR, the 3 dept rows incl.
+    Unattributed + NPA, dept↔portfolio loan-count reconciliation, rollup
+    idempotency, a **live** `get_director_executive_snapshot` call (jwt-impersonated
+    super_admin) proving loan_portfolio/disbursed/repaid come from the snapshot,
+    the disbursement PAR gate, and supersede-on-republish. The fixture
+    self-repairs `profiles_id_fkey`/`employees_user_id_fkey` inside its
+    transaction in case a stand-in `test_auth_users` repoint was ever committed.
+    Local docker only (`PG_CONTAINER` to override).
+  - `npm run test:snapshot-refresh` section 7 asserts the migration content
+    (columns/table/index/RLS, PAR gate, publish gate within 1400 chars + revoke
+    literal, rollup invocation, backfill par guard, director par-first pick +
+    `v_snap_id is null` fallbacks, `20::int`/`resolved_employee_id`/`to_jsonb(x)`).
+  - NOTE: `npm run test:bankone-e2e` re-applies 20260931000002, temporarily
+    reverting publish to the pre-rollup body — re-run `test:bankone-rollup`
+    afterwards to restore it locally.
+- Local-docker environment repair (recorded): an earlier tracking acceptance
+  run had committed `profiles_id_fkey`/`employees_user_id_fkey` repointed at a
+  `public.test_auth_users` stand-in, which broke `handle_new_user()` (masked as
+  "control reached end of trigger") and therefore BOTH BankOne e2e suites.
+  Repaired: orphan fixture profiles deleted, orphan `employees.user_id` nulled,
+  FKs restored to `auth.users` (profiles `on delete cascade`, employees
+  `on delete set null`), `test_auth_users` dropped, `trg_enforce_role_change`
+  re-enabled. `test:bankone-e2e` passes again.
+- Manual action: run `20261102000001_…sql` in the Supabase SQL Editor (hosted),
+  then publish (or re-publish) a PAR batch; Performance Department Scorecards
+  and the Director financial cards fill from the published snapshot.
+- Verified: `test:bankone-rollup`, `test:snapshot-refresh`,
+  `test:bankone-parity`, `test:bankone-import`, `test:bankone-e2e`,
+  `test:director-intelligence`, `test:mpr-scoring`, `test:mpr-export`,
+  `test:rules-builder`, `npm run build` — all green.

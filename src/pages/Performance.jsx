@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -15,6 +15,9 @@ import { performanceService, PERFORMANCE_STATUS_LABELS, DEFAULT_GRADING_BANDS } 
 import { performanceConfigService } from '../services/performanceConfigService'
 import { employeeService } from '../services/employeeService'
 import { reconciliationService } from '../services/reconciliationService'
+import bankonePortfolioService from '../services/bankonePortfolioService'
+import { subscribeSnapshotRefresh } from '../lib/snapshotSync'
+import { deriveDefaultPeriod } from '../domains/performance/periodDefaults'
 
 const STATUS_COLORS = {
   exceeds_target: '#009944',
@@ -117,15 +120,17 @@ function rowInRange(r, range) {
   return true
 }
 
-function DashboardView({ results, metrics, employees, config, caseMetrics, onRefresh, onCalculate, onImport }) {
-  const [preset, setPreset] = useState(localStorage.getItem('perf_preset') || 'month')
+function DashboardView({ results, metrics, employees, config, caseMetrics, deptSnapshots, onRefresh, onCalculate, onImport }) {
+  const [preset, setPreset] = useState('month')
   const [customRange, setCustomRange] = useState({ from: '', to: '' })
   const [branchF, setBranchF] = useState('')
   const [areaF, setAreaF] = useState('')
   const [deptF, setDeptF] = useState('')
   const [empF, setEmpF] = useState('')
   const [classF, setClassF] = useState('')
-  const [applied, setApplied] = useState({ preset: null, custom: null, branchF, areaF, deptF, empF, classF })
+  // null = "no explicit filter applied yet" → the active period is derived
+  // from the stored rows (never hard-coded to This Month).
+  const [applied, setApplied] = useState(null)
   const [branchDrill, setBranchDrill] = useState('')
   const [sortKey, setSortKey] = useState('avgScore')
   const [sortDir, setSortDir] = useState('desc')
@@ -165,7 +170,28 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, onRef
   const isMonetary = (r) => metricsByMetricId[r.metric_id]?.metric_type === 'monetary'
   const isCount = (r) => metricsByMetricId[r.metric_id]?.metric_type === 'quantity'
 
-  const activeRange = applied.preset ? periodRange(applied.preset, applied.custom) : null
+  // The active period comes from the DATA: latest stored period = this month
+  // → "This Month", last month → "Previous Month", otherwise a custom range
+  // bounded to that period. This is what stopped the dashboard opening on an
+  // empty "Awaiting Data" view whenever the snapshot month ≠ system month.
+  const derived = useMemo(() => deriveDefaultPeriod(results), [results])
+  const active = useMemo(
+    () => applied ?? {
+      preset: derived.preset,
+      custom: derived.custom,
+      branchF: '', areaF: '', deptF: '', empF: '', classF: '',
+    },
+    [applied, derived]
+  )
+  // Keep the visible Period controls in step with the derived default until
+  // the user applies (or resets to) an explicit filter.
+  useEffect(() => {
+    if (applied) return
+    setPreset(derived.preset)
+    setCustomRange(derived.custom || { from: '', to: '' })
+  }, [derived, applied])
+
+  const activeRange = active.preset ? periodRange(active.preset, active.custom) : null
 
   // Merge employee attributes onto each result row.
   const enrichedRows = useMemo(() => {
@@ -237,14 +263,14 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, onRef
   // Filters (applied only)
   const visible = useMemo(() => {
     return empAgg.filter((e) => {
-      if (applied.branchF && e.branch !== applied.branchF) return false
-      if (applied.areaF && e.area !== applied.areaF) return false
-      if (applied.deptF && e.dept !== applied.deptF) return false
-      if (applied.empF && e.employeeId !== applied.empF) return false
-      if (applied.classF && e.cls !== applied.classF) return false
+      if (active.branchF && e.branch !== active.branchF) return false
+      if (active.areaF && e.area !== active.areaF) return false
+      if (active.deptF && e.dept !== active.deptF) return false
+      if (active.empF && e.employeeId !== active.empF) return false
+      if (active.classF && e.cls !== active.classF) return false
       return true
     })
-  }, [empAgg, applied])
+  }, [empAgg, active])
 
   const visibleRows = useMemo(() => {
     const ids = new Set(visible.map((e) => e.employeeId))
@@ -290,15 +316,17 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, onRef
     setBranchSort((bs) => ({ key: k, dir: bs.key === k && bs.dir === 'desc' ? 'asc' : 'desc' }))
   }
 
-  const applyFilters = () => {
+  const applyFilters = async () => {
     setApplied({ preset, custom: customRange, branchF, areaF, deptF, empF, classF })
-    localStorage.setItem('perf_preset', preset)
+    // Re-query the database — a snapshot may have been published since mount.
+    await onRefresh()
   }
-  const resetFilters = () => {
-    setPreset('month'); setCustomRange({ from: '', to: '' })
+  const resetFilters = async () => {
     setBranchF(''); setAreaF(''); setDeptF(''); setEmpF(''); setClassF(''); setBranchDrill('')
-    setApplied({ preset: 'month', custom: null, branchF: '', areaF: '', deptF: '', empF: '', classF: '' })
-    localStorage.removeItem('perf_preset')
+    // Back to the data-derived default period (the sync effect above then
+    // restores the matching preset/custom range in the controls).
+    setApplied(null)
+    await onRefresh()
   }
 
   const exportCsv = () => {
@@ -324,7 +352,7 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, onRef
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `performance_report_${applied.preset || 'custom'}.csv`
+    a.download = `performance_report_${active.preset || 'custom'}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -352,6 +380,43 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, onRef
     if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * d
     return String(av || '').localeCompare(String(bv || '')) * d
   })
+
+  // Department rollup (E2). Always available from the employee rows; enriched
+  // with the PUBLISHED department snapshot metrics (outstanding / disbursed /
+  // repaid / PAR) once the rollup migration has been applied.
+  const deptSnapshotMap = useMemo(() => {
+    const map = {}
+    ;(deptSnapshots || []).forEach((d) => {
+      if (d?.department) map[String(d.department).trim().toLowerCase()] = d
+    })
+    return map
+  }, [deptSnapshots])
+
+  const deptData = (visible.length ? [...new Set(visible.map((e) => e.dept).filter(Boolean))].sort() : ['—']).map((d) => {
+    const list = visible.filter((e) => (d === '—' ? true : e.dept === d))
+    const avg = list.length ? Math.round((list.reduce((s, e) => s + e.avg, 0) / list.length) * 100) / 100 : 0
+    const snap = d === '—' ? null : deptSnapshotMap[String(d).trim().toLowerCase()] || null
+    const num = (v) => (v == null || v === '' ? null : Number(v))
+    return {
+      dept: d,
+      employees: list.length,
+      transactions: list.reduce((s, e) => s + (e.hasCountMetric ? e.txnCount : 0), 0),
+      value: list.reduce((s, e) => s + (e.hasValueMetric ? e.txnValue : 0), 0),
+      avgScore: avg,
+      pass: list.filter((e) => e.cls === 'PASS').length,
+      watch: list.filter((e) => e.cls === 'WATCH').length,
+      sub: list.filter((e) => e.cls === 'SUBSTANDARD').length,
+      grade: list.length ? gradeFor(avg).letter : '—',
+      outstanding: num(snap?.total_outstanding),
+      disbursed: num(snap?.total_disbursed),
+      repaid: num(snap?.total_repaid),
+      par: num(snap?.par_ratio),
+    }
+  }).sort((a, b) => b.avgScore - a.avgScore)
+
+  // Snapshot columns only appear when the rollup actually produced them —
+  // no columns full of "—" before the migration exists.
+  const hasDeptSnapshots = deptData.some((d) => d.outstanding != null || d.disbursed != null || d.repaid != null)
 
   // Distribution (C) — PASS / WATCH / SUBSTANDARD
   const distData = [
@@ -443,11 +508,11 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, onRef
             <>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">From</label>
-                <input type="date" className={inputCls} value={customRange.from} onChange={(e) => setCustomRange({ ...customRange, from: e.target.value })} />
+                <input type="date" className={inputCls} value={customRange.from} onChange={(e) => { setCustomRange({ ...customRange, from: e.target.value }); setPreset('custom'); }} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">To</label>
-                <input type="date" className={inputCls} value={customRange.to} onChange={(e) => setCustomRange({ ...customRange, to: e.target.value })} />
+                <input type="date" className={inputCls} value={customRange.to} onChange={(e) => { setCustomRange({ ...customRange, to: e.target.value }); setPreset('custom'); }} />
               </div>
             </>
           )}
@@ -516,19 +581,32 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, onRef
           <BarChart3 className="w-14 h-14 text-slate-300 mb-4" />
           <h3 className="text-xl font-semibold text-slate-900">Performance Intelligence Awaiting Data</h3>
           <p className="text-sm text-slate-500 max-w-md mt-2">
-            Import a BankOne performance export to populate this dashboard. Transaction, financial and
-            case-load figures appear here once normalized records exist.
+            Publish a BankOne import — Portfolio At Risk and Disbursement files flow straight into
+            employee, branch and department scorecards using the metrics configured in Performance
+            Settings. No separate calculation step is needed.
           </p>
-          <button onClick={onImport} className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
-            <Download className="w-4 h-4" /> Import BankOne Data
-          </button>
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+            <button onClick={onImport} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#009944] text-white text-sm font-medium hover:bg-[#007a36]">
+              <Download className="w-4 h-4" /> Import BankOne Data
+            </button>
+            <a href="#/bankone-portfolio-review" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg border border-slate-300 text-sm font-medium text-slate-600 hover:bg-slate-50">
+              <BadgeCheck className="w-4 h-4" /> Portfolio Import Review
+            </a>
+          </div>
         </div>
       )}
 
       {assessed === 0 && empAgg.length === 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 flex items-start gap-3 print:hidden">
           <AlertTriangle className="w-5 h-5 shrink-0" />
-          <span>No performance results for the selected period. Configure metrics & targets, then run a BankOne calculation — or adjust the period filter.</span>
+          <span>No performance results for the selected period. Publish a BankOne import from Portfolio Import Review — or adjust the period filter.</span>
+        </div>
+      )}
+
+      {assessed === 0 && empAgg.length > 0 && (
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600 flex items-start gap-3 print:hidden">
+          <Filter className="w-5 h-5 shrink-0 text-slate-400" />
+          <span>No employees match the current Branch / Area / Department / Employee / Status filters. Adjust them or press Reset Filters.</span>
         </div>
       )}
 
@@ -625,7 +703,7 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, onRef
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {branchData.map((b) => (
-                    <tr key={b.branch} onClick={() => { setBranchDrill(b.branch); setBranchF(b.branch) }} className={`hover:bg-slate-50 cursor-pointer ${branchDrill === b.branch ? 'bg-[#009944]/5' : ''}`}>
+                    <tr key={b.branch} onClick={() => { setBranchDrill(b.branch); setBranchF(b.branch); setApplied({ ...active, branchF: b.branch }) }} className={`hover:bg-slate-50 cursor-pointer ${branchDrill === b.branch ? 'bg-[#009944]/5' : ''}`}>
                       <td className="px-4 py-3 font-medium text-slate-800 flex items-center gap-1.5"><Building2 className="w-3.5 h-3.5 text-slate-400" />{b.branch}</td>
                       <td className="px-4 py-3 text-slate-600">{b.area || '—'}</td>
                       <td className="px-4 py-3 text-slate-600">{b.employees}</td>
@@ -637,6 +715,58 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, onRef
                       <td className="px-4 py-3 text-amber-600">{b.watch}</td>
                       <td className="px-4 py-3 text-rose-600">{b.sub}</td>
                       <td className="px-4 py-3 font-semibold">{b.grade}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* ---------- E2. DEPARTMENT SCORECARDS ---------- */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-semibold text-slate-700">Department Scorecards</h4>
+                <p className="text-xs text-slate-400 mt-0.5">Click a department to filter the employee table below</p>
+              </div>
+              {hasDeptSnapshots && <span className="text-xs text-slate-400">Includes published snapshot portfolio</span>}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-left">
+                  <tr>
+                    {[
+                      ['dept', 'Department'], ['employees', 'Employees'], ['transactions', 'Transactions'],
+                      ['value', 'Financial Value'], ['avgScore', 'Avg Score'], ['pass', 'Pass'],
+                      ['watch', 'Watch'], ['sub', 'Substandard'], ['grade', 'Grade'],
+                      ...(hasDeptSnapshots
+                        ? [['outstanding', 'Outstanding'], ['disbursed', 'Disbursed'], ['repaid', 'Repaid'], ['par', 'PAR %']]
+                        : []),
+                    ].map(([k, h]) => (
+                      <th key={h} className="px-4 py-3 font-medium whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {deptData.map((d) => (
+                    <tr key={d.dept} onClick={() => { setDeptF(d.dept); setApplied({ ...active, deptF: d.dept }) }} className={`hover:bg-slate-50 cursor-pointer ${deptF === d.dept ? 'bg-[#009944]/5' : ''}`}>
+                      <td className="px-4 py-3 font-medium text-slate-800 flex items-center gap-1.5"><Building2 className="w-3.5 h-3.5 text-slate-400" />{d.dept}</td>
+                      <td className="px-4 py-3 text-slate-600">{d.employees}</td>
+                      <td className="px-4 py-3 text-slate-600">{d.transactions || '—'}</td>
+                      <td className="px-4 py-3 text-slate-600">{d.value ? money(d.value) : '—'}</td>
+                      <td className="px-4 py-3 font-medium">{d.avgScore.toFixed(1)}</td>
+                      <td className="px-4 py-3 text-[#009944]">{d.pass}</td>
+                      <td className="px-4 py-3 text-amber-600">{d.watch}</td>
+                      <td className="px-4 py-3 text-rose-600">{d.sub}</td>
+                      <td className="px-4 py-3 font-semibold">{d.grade}</td>
+                      {hasDeptSnapshots && (
+                        <>
+                          <td className="px-4 py-3 text-slate-600">{d.outstanding != null ? money(d.outstanding) : '—'}</td>
+                          <td className="px-4 py-3 text-slate-600">{d.disbursed != null ? money(d.disbursed) : '—'}</td>
+                          <td className="px-4 py-3 text-slate-600">{d.repaid != null ? money(d.repaid) : '—'}</td>
+                          <td className="px-4 py-3 text-slate-600">{d.par != null ? `${d.par.toFixed(2)}%` : '—'}</td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -834,6 +964,7 @@ export default function Performance() {
   const [employees, setEmployees] = useState([])
   const [pConfig, setPConfig] = useState(null)
   const [caseMetrics, setCaseMetrics] = useState(null)
+  const [deptSnapshots, setDeptSnapshots] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showAddMetric, setShowAddMetric] = useState(false)
@@ -853,6 +984,7 @@ export default function Performance() {
       try { setEmployees(await employeeService.list()) } catch { /* enrichment optional */ }
       try { setPConfig(await performanceConfigService.list()) } catch { /* config optional */ }
       try { setCaseMetrics(await reconciliationService.getDashboardMetrics({})) } catch { /* reconciliation optional */ }
+      try { setDeptSnapshots(await bankonePortfolioService.listLatestDepartmentSnapshots()) } catch { /* pre-migration: [] */ }
     } catch (e) {
       setError(e?.message || 'Failed to load performance data')
     } finally {
@@ -861,6 +993,11 @@ export default function Performance() {
   }
 
   useEffect(() => { load() }, [])
+  const loadRef = useRef(load)
+  useEffect(() => { loadRef.current = load })
+  // A published BankOne snapshot (same session or another user) re-queries this
+  // page immediately, so results/grade/scorecards update without a manual refresh.
+  useEffect(() => subscribeSnapshotRefresh(() => loadRef.current()), [])
 
   const calculate = async () => {
     if (!calcPeriod || !calcStart || !calcEnd) { setError('Period label, start and end dates are required.'); return }
@@ -905,6 +1042,7 @@ export default function Performance() {
           employees={employees}
           config={pConfig}
           caseMetrics={caseMetrics}
+          deptSnapshots={deptSnapshots}
           onRefresh={load}
           onCalculate={() => setTab('calculate')}
           onImport={() => { window.location.hash = '#/bankone-imports' }}
@@ -975,7 +1113,7 @@ export default function Performance() {
       {tab === 'results' && (
         <div>
           {loading && <div className="text-sm text-slate-500">Loading…</div>}
-          {!loading && results.length === 0 && <EmptyState title="No performance results" description="Run a calculation to generate results from BankOne transactions." />}
+          {!loading && results.length === 0 && <EmptyState title="No performance results" description="Published BankOne snapshots appear here automatically. Manual calculations are optional and add results for periods outside an import." />}
           {!loading && results.length > 0 && (
             <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
               <table className="w-full text-sm">

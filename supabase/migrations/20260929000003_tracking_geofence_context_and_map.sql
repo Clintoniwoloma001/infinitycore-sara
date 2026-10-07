@@ -190,7 +190,7 @@ begin
       when v_nearest_name is null then 'Outside registered locations'
       when v_nearest_distance >= 1000
         then 'Outside ' || v_nearest_name || ' ('
-             || trim(trailing '.' from trim(trailing '0' from round(v_nearest_distance / 1000.0)::text))) || ' km away)'
+             || trim(trailing '.' from trim(trailing '0' from round(v_nearest_distance / 1000.0)::text)) || ' km away)'
       else 'Outside ' || v_nearest_name || ' ('
            || round(v_nearest_distance)::text || ' m away)'
     end);
@@ -552,10 +552,14 @@ update public.employee_location_events le
                               end
   from (
     select le2.id as id,
-           nullif(x.nearest_location_name, '') as nearest_location_name,
-           nullif(x.nearest_distance, '')::numeric as nearest_distance,
-           nullif(x.nearest_radius, '')::numeric as nearest_radius,
-           x.outside_label as outside_label
+           -- resolve_employee_location() returns jsonb, so the lateral alias is
+           -- a jsonb value: field access is `x ->> '…'`, not `x.…`. The dotted
+           -- form raised "column x.nearest_location_name does not exist" and
+           -- aborted this migration after the functions above it were created.
+           nullif(x ->> 'nearest_location_name', '') as nearest_location_name,
+           nullif(x ->> 'nearest_distance', '')::numeric as nearest_distance,
+           nullif(x ->> 'nearest_radius', '')::numeric as nearest_radius,
+           x ->> 'outside_label' as outside_label
       from public.employee_location_events le2
       cross join lateral public.resolve_employee_location(
              le2.latitude::float, le2.longitude::float, 'track', null) x

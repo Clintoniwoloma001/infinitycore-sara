@@ -11,6 +11,7 @@ import { Upload, Loader2, AlertTriangle } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import bankonePortfolioService from '../services/bankonePortfolioService'
 import { readWorkbook } from '../utils/readWorkbook'
+import { notifySnapshotPublished } from '../lib/snapshotSync'
 import { useAuth } from '../hooks/useAuth'
 import { LoadingState, ErrorState } from '../components/PageStates'
 import EmployeeReview from '../components/bankone/EmployeeReview'
@@ -128,6 +129,9 @@ export default function BankOneImportReview() {
     setPublishing(true); setError(null)
     try {
       const res = await bankonePortfolioService.publish(activeBatch)
+      // Wake every open page that reads this data (Director cards,
+      // Performance scorecards) the moment the snapshot commits.
+      notifySnapshotPublished(res)
       setNotice({
         kind: 'ok',
         text: `Published ${res.parsed_rows} loan(s). ${res.officer_decisions_pending} officer(s) remain unattributed and are excluded from officer performance.`,

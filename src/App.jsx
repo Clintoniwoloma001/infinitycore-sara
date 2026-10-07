@@ -81,6 +81,7 @@ import CertificateVerification from './pages/CertificateVerification'
 import ActivateAccount from './pages/ActivateAccount'
 import PrivilegeManagement from './pages/PrivilegeManagement'
 import EmployeeTracking from './pages/EmployeeTracking'
+import GeofenceSettings from './pages/GeofenceSettings'
 import LeaveSchedulePlanner from './pages/LeaveSchedulePlanner'
 import EmployeeMasterReconciliation from './pages/EmployeeMasterReconciliation'
 
@@ -90,6 +91,7 @@ const pageComponents = {
   Audit,
   AutomationCommandCentre,
   EmployeeTracking,
+  GeofenceSettings,
   LeaveSchedulePlanner,
   EmployeeMasterReconciliation,
   Customers,

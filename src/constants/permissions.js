@@ -148,3 +148,24 @@ export const PERMISSION_CATEGORIES = {
   tracking: 'Employee Tracking',
   leave_config: 'Leave Configuration',
 }
+
+/**
+ * Roles that may open Geofence Settings / Management — the fence list, the
+ * editor and the "Test My Coverage" tester.
+ *
+ * Mirrors `public.is_geofence_admin()` in
+ * `supabase/migrations/20261102000001_geofence_management_rbac.sql`, which is
+ * the real authority: every geofence RPC calls `require_geofence_admin()` and
+ * raises SQLSTATE 42501 (HTTP 403) for anyone else. `hr_manager` is the legacy
+ * spelling of the Head of HR role and rides along for the same rename-tolerance
+ * reason the database helper accepts it.
+ *
+ * There is deliberately NO granular permission key for this route — seeding one
+ * through Access Control would make the grant visible to roles the server still
+ * refuses. The route carries `roles: GEOFENCE_ADMIN_ROLES` instead.
+ */
+export const GEOFENCE_ADMIN_ROLES = [
+  'super_admin',
+  'head_of_human_resources',
+  'hr_manager',
+]

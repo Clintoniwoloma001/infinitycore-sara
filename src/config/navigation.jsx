@@ -39,7 +39,7 @@ import {
   Crown,
   Mic,
 } from 'lucide-react'
-import { PERMISSIONS } from '../constants/permissions'
+import { PERMISSIONS, GEOFENCE_ADMIN_ROLES } from '../constants/permissions'
 import { DEPARTMENTS } from './navigationConfig'
 
 export const routeConfig = [
@@ -117,6 +117,13 @@ export const routeConfig = [
       { label: 'Reports', path: '/reports', icon: BarChart3, element: 'Reports', permissions: [PERMISSIONS.REPORTS_READ] },
       { label: 'Audit Logs', path: '/audit-logs', icon: ScrollText, element: 'AuditLogs', permissions: [PERMISSIONS.ADMIN_VIEW_AUDIT] },
       { label: 'Employee Tracking', path: '/employee-tracking', icon: MapPin, element: 'EmployeeTracking', permissions: [PERMISSIONS.TRACKING_VIEW], trackingGate: true },
+      // Geofence Settings & Management. Gated on a FIXED role list rather than
+      // a permission key: no granular key exists for it, and seeding one would
+      // make the audience grantable to roles the server still refuses. The
+      // boundary is `require_geofence_admin()` inside every geofence RPC
+      // (SQLSTATE 42501 -> HTTP 403), mirrored by `canManageGeofences()` on
+      // mobile. No `permissions` array on purpose — see canAccessRoute step 1b.
+      { label: 'Geofence Settings', path: '/geofences', icon: Target, element: 'GeofenceSettings', roles: GEOFENCE_ADMIN_ROLES },
       { label: 'User Management', path: '/users', icon: UserCog, element: 'Users', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
       { label: 'Access & Privileges', path: '/privileges', icon: ShieldCheck, element: 'PrivilegeManagement', permissions: [PERMISSIONS.PRIVILEGES_MANAGE] },
       { label: 'Platform Reset', path: '/platform-reset', icon: Eraser, element: 'PlatformReset', permissions: [PERMISSIONS.ADMIN_PLATFORM_RESET] },

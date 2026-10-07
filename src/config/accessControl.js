@@ -17,6 +17,9 @@
 //
 // THE PRECEDENCE MODEL (deterministic, and identical on Web and Flutter)
 //   1. super_admin                    -> allow everything
+//   1b. route.roles allow-list        -> deny     (a fixed audience such as
+//                                          Geofence Settings: Super Admin and
+//                                          Head of HR only)
 //   2. explicit granular DENY         -> deny     (beats every allow below)
 //   3. explicit granular ALLOW        -> allow
 //   4. legacy per-user accessModules  -> fallback, ONLY when permDoc is absent
@@ -26,12 +29,17 @@
 // migration. When `permDoc` IS present it is the document the database itself
 // authorizes with, so the menu must agree with it and must not override it with
 // a hard-coded matrix.
+//
+// A `roles` allow-list is used where the audience is a FIXED set of roles that
+// must not be grantable through Access Control (see GEOFENCE_ADMIN_ROLES). It
+// runs after super_admin so a Super Admin never loses a route it owns, and
+// before the granular steps so no permission document can widen the set.
 // ===========================================================================
 
 /**
  * May `auth` open `route`?
  *
- * @param {{path: string, permissions?: string[]}} route
+ * @param {{path: string, permissions?: string[], roles?: string[], trackingGate?: boolean}} route
  * @param {object} auth the useAuth() context value
  * @returns {boolean}
  */
@@ -54,6 +62,12 @@ export function canAccessRoute(route, auth) {
   }
 
   if (auth.role === 'super_admin') return true
+
+  // 1b. A fixed role audience (Geofence Settings & Management). This is a
+  //     closed list, not a grant: no Access Control key and no granular
+  //     document can widen it. Failing closed for an unknown/absent role is
+  //     what keeps every other employee out of branch-fence configuration.
+  if (route.roles && !route.roles.includes(auth.role)) return false
 
   const required = route.permissions || []
 

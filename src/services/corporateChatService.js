@@ -80,6 +80,14 @@ export function displayName(userId, ident) {
   return 'Unknown User'
 }
 
+// Full staff directory (SECURITY DEFINER RPC). Used by the Super Admin DM
+// Inspection panel to populate the "inspect this user" picker.
+export async function listMessagingDirectory(search = null) {
+  const { data, error } = await supabase.rpc('get_messaging_directory', { p_search: search })
+  if (error) throw error
+  return data || []
+}
+
 // ------------------------------------------------------------------
 // DIRECT MESSAGING (existing, preserved + identity-resolved)
 // ------------------------------------------------------------------
@@ -156,6 +164,19 @@ export const directChat = {
       .eq('message_type', 'direct')
       .order('created_at', { ascending: true })
       .limit(limit)
+    if (error) throw error
+    return data || []
+  },
+
+  // Super Admin DM inspection: list every thread a given user participates in.
+  // Requires the widened "chat_threads read own" RLS (is_super_admin bypass).
+  async listThreadsForUser(userId) {
+    if (!userId) return []
+    const { data, error } = await supabase
+      .from('chat_threads')
+      .select('*')
+      .or(`member_a.eq.${userId},member_b.eq.${userId}`)
+      .order('last_message_at', { ascending: false })
     if (error) throw error
     return data || []
   },

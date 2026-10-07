@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import {
-  ArchiveRestore, BarChart3, Download, Flag, Layers,
+  ArchiveRestore, ArrowLeft, BarChart3, Download, Eye, Flag, FileText, Layers,
   Loader2, RefreshCw, ScrollText, ShieldAlert, X,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
@@ -8,7 +8,7 @@ import {
   channels as channelSvc, getCommunicationStats, listAuditLog, listReports,
   resolveReport, messageActions, listHolds, createHold, releaseHold,
   listRetentionPolicies, setRetentionPolicy, listExports, exportRecords,
-  buildExportFile, resolveDirectory,
+  buildExportFile, resolveDirectory, listMessagingDirectory, directChat,
 } from '../services/corporateChatService'
 
 const ADMIN_ROLES = ['super_admin', 'admin', 'head_of_human_resources', 'hr_officer']
@@ -27,11 +27,14 @@ const SECTIONS = [
   { key: 'audit', label: 'Audit log', icon: ScrollText },
   { key: 'retention', label: 'Retention & Holds', icon: ShieldAlert },
   { key: 'exports', label: 'Exports', icon: Download },
+  // Super Admin only — global DM transparency (spec Part 2).
+  { key: 'dm_inspection', label: 'DM Inspection', icon: Eye, superOnly: true },
 ]
 
 export default function CommunicationAdmin() {
   const { profile } = useAuth()
   const isAdmin = ADMIN_ROLES.includes(profile?.role)
+  const isSuper = profile?.role === 'super_admin'
   const [section, setSection] = useState('overview')
 
   if (!isAdmin) {
@@ -62,7 +65,7 @@ export default function CommunicationAdmin() {
       </div>
 
       <div className="mb-5 flex flex-wrap gap-1.5 bg-white border border-slate-200 rounded-xl p-1.5 w-fit">
-        {SECTIONS.map((s) => {
+        {SECTIONS.filter((s) => !s.superOnly || isSuper).map((s) => {
           const Icon = s.icon
           const on = section === s.key
           return (
@@ -77,12 +80,12 @@ export default function CommunicationAdmin() {
         })}
       </div>
 
-      <AdminBody section={section} Section={Section} />
+      <AdminBody section={section} Section={Section} isSuper={isSuper} />
     </div>
   )
 }
 
-function AdminBody({ section, Section }) {
+function AdminBody({ section, Section, isSuper }) {
   const [stats, setStats] = useState(null)
 
   useEffect(() => {
@@ -96,6 +99,9 @@ function AdminBody({ section, Section }) {
   if (section === 'moderation') return <ModerationAdmin Section={Section} />
   if (section === 'audit') return <AuditAdmin Section={Section} />
   if (section === 'retention') return <RetentionAdmin Section={Section} />
+  if (section === 'dm_inspection') return isSuper
+    ? <DmInspection Section={Section} />
+    : <Section icon={Eye} label="DM Inspection"><div className="p-5 text-sm text-slate-500">Restricted to the Super Admin role.</div></Section>
   return <ExportsAdmin Section={Section} />
 }
 
@@ -684,3 +690,210 @@ function ExportsAdmin({ Section }) {
     </Section>
   )
 }
+
+// ----------------------------------------------------------------------------
+// Super Admin DM Inspection (spec Part 2 — global transparency).
+// Pick a staff member -> list their DM threads -> open a transcript -> export
+// CSV/JSON/PDF. "Return to My Direct Messages" resets the panel. Read access
+// comes from the widened chat_threads/can_read_message RLS (is_super_admin).
+// ----------------------------------------------------------------------------
+function DmInspection({ Section }) {
+  const { user } = useAuth()
+  const [people, setPeople] = useState([])
+  const [selectedUserId, setSelectedUserId] = useState('')
+  const [threads, setThreads] = useState([])
+  const [activeThreadId, setActiveThreadId] = useState(null)
+  const [messages, setMessages] = useState([])
+  const [identity, setIdentity] = useState({})
+  const [loadingPeople, setLoadingPeople] = useState(true)
+  const [loadingThreads, setLoadingThreads] = useState(false)
+  const [loadingMessages, setLoadingMessages] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    listMessagingDirectory()
+      .then((rows) => { if (active) setPeople((rows || []).filter((r) => r.id !== user?.id)) })
+      .catch((e) => setError(e?.message || 'Could not load the staff directory'))
+      .finally(() => active && setLoadingPeople(false))
+    return () => { active = false }
+  }, [user?.id])
+
+  const nameOf = (id) => identity[id]?.name || people.find((p) => p.id === id)?.full_name || identity[id]?.email || 'Unknown User'
+
+  const loadThreads = async (userId) => {
+    setLoadingThreads(true)
+    setError('')
+    setThreads([])
+    setMessages([])
+    setActiveThreadId(null)
+    try {
+      const list = await directChat.listThreadsForUser(userId)
+      setThreads(list || [])
+      const ids = (list || []).flatMap((t) => [t.member_a, t.member_b])
+      const dir = await resolveDirectory([...ids, userId])
+      setIdentity(dir || {})
+      if ((list || []).length === 0) setError('No direct-message threads found for this user.')
+    } catch (e) {
+      setError(e?.message || 'Could not load threads (RLS may be denying access).')
+    } finally {
+      setLoadingThreads(false)
+    }
+  }
+
+  const onPickPerson = (userId) => {
+    setSelectedUserId(userId)
+    loadThreads(userId)
+  }
+
+  const openThread = async (threadId) => {
+    setActiveThreadId(threadId)
+    setLoadingMessages(true)
+    setError('')
+    try {
+      const rows = await directChat.listMessages(threadId, 500)
+      setMessages(rows || [])
+      const dir = await resolveDirectory((rows || []).map((m) => m.sender_id))
+      setIdentity((prev) => ({ ...prev, ...(dir || {}) }))
+    } catch (e) {
+      setError(e?.message || 'Could not load this transcript.')
+    } finally {
+      setLoadingMessages(false)
+    }
+  }
+
+  const exportTranscript = async (format) => {
+    if (!messages.length) return
+    setExporting(true)
+    try {
+      const rows = messages.map((m) => ({ ...m, sender_label: nameOf(m.sender_id) }))
+      buildExportFile(format, {
+        rows,
+        title: `dm-inspection-${nameOf(selectedUserId).replace(/\s+/g, '-').toLowerCase()}`,
+      })
+      try {
+        await exportRecords({
+          format,
+          scope: 'search',
+          reason: 'Super Admin DM inspection',
+          query: `thread:${activeThreadId}`,
+          filters: { kind: 'dm_inspection', inspected_user: selectedUserId },
+        })
+      } catch (_) { /* recording is best-effort */ }
+    } catch (e) {
+      setError(e?.message || 'Export failed')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const returnToMine = () => {
+    setSelectedUserId('')
+    setThreads([])
+    setMessages([])
+    setActiveThreadId(null)
+    setError('')
+  }
+
+
+  const selectedPerson = people.find((p) => p.id === selectedUserId)
+
+  return (
+    <Section icon={Eye} label="Direct-message inspection (Super Admin)">
+      <div className="p-5 space-y-5">
+        {error && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2">{error}</div>}
+
+        <div className="rounded-xl border border-slate-200 p-4 flex flex-wrap items-end gap-3">
+          <div className="min-w-[240px] flex-1">
+            <label className="text-xs font-medium text-slate-500 block mb-1">Inspect a staff member</label>
+            <select
+              value={selectedUserId}
+              disabled={loadingPeople}
+              onChange={(e) => e.target.value && onPickPerson(e.target.value)}
+              className="w-full h-9 rounded-lg border border-slate-300 px-2 text-sm bg-white"
+            >
+              <option value="">{loadingPeople ? 'Loading directory…' : 'Select a user…'}</option>
+              {people.map((p) => (
+                <option key={p.id} value={p.id}>{p.full_name || p.email || p.id}</option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={returnToMine}
+            disabled={!selectedUserId}
+            className="inline-flex items-center gap-2 h-9 px-4 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+          >
+            <ArrowLeft className="w-4 h-4" /> Return to My Direct Messages
+          </button>
+        </div>
+
+        {selectedUserId && (
+          <div className="grid lg:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-100 bg-slate-50">
+                <p className="text-sm font-semibold text-slate-900">Threads for {selectedPerson?.full_name || nameOf(selectedUserId)}</p>
+              </div>
+              <div className="max-h-[320px] overflow-y-auto divide-y divide-slate-50">
+                {loadingThreads && <div className="px-4 py-6 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline text-slate-300" /></div>}
+                {!loadingThreads && threads.length === 0 && <div className="px-4 py-6 text-center text-slate-400 text-sm">No threads.</div>}
+                {!loadingThreads && threads.map((t) => {
+                  const other = t.member_a === selectedUserId ? t.member_b : t.member_a
+                  const on = activeThreadId === t.id
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => openThread(t.id)}
+                      className={`w-full text-left px-4 py-3 flex items-center justify-between gap-3 ${on ? 'bg-emerald-50' : 'hover:bg-slate-50'}`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block text-sm text-slate-800 truncate">{nameOf(other)}</span>
+                        <span className="block text-xs text-slate-400 truncate">{t.last_message || 'No messages yet'}</span>
+                      </span>
+                      <span className="text-[11px] text-slate-400 whitespace-nowrap">{t.last_message_at ? new Date(t.last_message_at).toLocaleDateString() : ''}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 overflow-hidden flex flex-col">
+              <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-slate-900">Transcript</p>
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => exportTranscript('csv')} disabled={exporting || !messages.length} className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-slate-300 text-xs text-slate-600 hover:bg-white disabled:opacity-40">
+                    {exporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />} CSV
+                  </button>
+                  <button onClick={() => exportTranscript('pdf')} disabled={exporting || !messages.length} className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-slate-300 text-xs text-slate-600 hover:bg-white disabled:opacity-40">
+                    <FileText className="w-3 h-3" /> PDF
+                  </button>
+                </div>
+              </div>
+              <div className="p-4 space-y-3 max-h-[320px] overflow-y-auto">
+                {loadingMessages && <div className="py-6 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline text-slate-300" /></div>}
+                {!loadingMessages && !activeThreadId && <div className="py-6 text-center text-slate-400 text-sm">Select a thread to view its transcript.</div>}
+                {!loadingMessages && activeThreadId && messages.length === 0 && <div className="py-6 text-center text-slate-400 text-sm">No messages in this thread.</div>}
+                {!loadingMessages && messages.map((m) => (
+                  <div key={m.id} className="rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-slate-700">{nameOf(m.sender_id)}</span>
+                      <span className="text-[11px] text-slate-400">{m.created_at ? new Date(m.created_at).toLocaleString() : ''}</span>
+                    </div>
+                    <p className="text-sm text-slate-800 mt-1 whitespace-pre-wrap break-words">{m.body}</p>
+                    {m.restricted_status && m.restricted_status !== 'active' && (
+                      <span className="inline-block mt-1 text-[10px] uppercase tracking-wide text-rose-600 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5">{m.restricted_status}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <p className="text-[11px] text-slate-400">Global DM transparency is reserved to the Super Admin role. Inspection exports are recorded in the audit trail.</p>
+      </div>
+    </Section>
+  )
+}
+
+
