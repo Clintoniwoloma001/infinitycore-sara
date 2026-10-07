@@ -284,8 +284,41 @@ function DepartmentDrillDownModal({ department, snapshots, staff, onClose }) {
   )
 }
 function BranchDetailModal({ branch, branches, staff, onClose }) {
-  const b = (branches || []).find(x => String(x.name || '').toLowerCase() === String(branch || '').toLowerCase())
-  const branchStaff = (staff || []).filter(s => String(s.branch_name || '').toLowerCase() === String(branch || '').toLowerCase())
+  const [detail, setDetail] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let live = true
+    setLoading(true)
+    setError('')
+
+    const fetchDetails = async () => {
+      try {
+        // SCOPE-AGNOSTIC RESOLUTION:
+        // Query global branches table directly without applying active top-bar filter constraints.
+        // This prevents "Branch not found in the active scope" errors when drills are triggered.
+        const { data, error: dbError } = await supabase
+          .from('branches')
+          .select('*, bankone_portfolio_snapshots(*)')
+          .or(`id.eq.${branch}, name.ilike.${branch}`)
+          .maybeSingle()
+
+        if (dbError) throw dbError
+        if (!data) throw new Error('Branch details unavailable.')
+
+        setDetail(data)
+      } catch (e) {
+        setError(e.message)
+      } finally {
+        if (live) setLoading(false)
+      }
+    }
+
+    fetchDetails()
+    return () => { live = false }
+  }, [branch])
+
   return (
     <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/50 backdrop-blur-sm" onMouseDown={onClose}>
       <aside onMouseDown={(e) => e.stopPropagation()} className="h-full w-full max-w-4xl overflow-y-auto bg-white shadow-2xl dark:bg-slate-900">
@@ -294,23 +327,25 @@ function BranchDetailModal({ branch, branches, staff, onClose }) {
           <button onClick={onClose} aria-label="Close" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
         </div>
         <div className="p-5">
-          {!b ? (
-            <div className="text-center py-10"><p className="text-sm text-slate-500">Branch not found in the active scope.</p></div>
+          {loading ? (
+            <div className="flex h-64 items-center justify-center"><LoadingState label="Fetching branch intelligence..." /></div>
+          ) : error ? (
+            <div className="flex h-64 items-center justify-center"><ErrorState title="Branch details unavailable" message={error} /></div>
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Staff</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{Number(b.total_staff || 0)}</p></div>
-                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Active</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{Number(b.active_staff || 0)}</p></div>
-                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Attendance</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{pct(b.attendance_rate)}</p></div>
-                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">KPI completion</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{pct(b.kpi_completion)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Staff</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{Number(detail.total_staff || 0)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Active</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{Number(detail.active_staff || 0)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Attendance</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{pct(detail.attendance_rate)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">KPI completion</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{pct(detail.kpi_completion)}</p></div>
               </div>
               <div className="mt-4">
                 <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">Staff under this branch</p>
-                {branchStaff.length === 0 ? <p className="text-sm text-slate-500">No staff assigned to this branch in the current filter.</p> :
+                {staff.length === 0 ? <p className="text-sm text-slate-500">No staff assigned to this branch in the current filter.</p> :
                   <div className="max-h-64 overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 bg-slate-50"><tr className="text-left text-xs text-slate-400"><th className="px-2 py-1">Employee</th><th className="px-2 py-1">Role</th><th className="px-2 py-1">Designation</th></tr></thead>
-                      <tbody className="divide-y divide-slate-100">{branchStaff.map(s => <tr key={s.id}><td className="px-2 py-1 font-medium text-slate-800">{s.full_name}</td><td className="px-2 py-1 text-slate-500">{s.position || '—'}</td><td className="px-2 py-1 text-slate-500">{s.designation_title || '—'}</td></tr>)}</tbody>
+                      <tbody className="divide-y divide-slate-100">{staff.map(s => <tr key={s.id}><td className="px-2 py-1 font-medium text-slate-800">{s.full_name}</td><td className="px-2 py-1 text-slate-500">{s.position || '—'}</td><td className="px-2 py-1 text-slate-500">{s.designation_title || '—'}</td></tr>)}</tbody>
                     </table>
                   </div>}
               </div>
