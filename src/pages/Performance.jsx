@@ -318,7 +318,9 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, deptS
 
   const applyFilters = async () => {
     setApplied({ preset, custom: customRange, branchF, areaF, deptF, empF, classF })
-    // Re-query the database — a snapshot may have been published since mount.
+    
+    // Explicitly trigger a refresh with the newly applied date parameters
+    // to avoid defaulting to NOW() or an empty view when the active month has passed.
     await onRefresh()
   }
   const resetFilters = async () => {

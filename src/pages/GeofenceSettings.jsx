@@ -66,7 +66,28 @@ function GeofenceSettingsBody({ userName }) {
     setLoading(true)
     setError(null)
     try {
-      setFences(await geofenceService.listBranchGeofences())
+      // Unify initial fetch: Merge canonical geofences with branches that have
+      // coordinates but no canonical fence yet (e.g. Head Office BR-06).
+      const [fencesData, branchesData] = await Promise.all([
+        geofenceService.listBranchGeofences(),
+        geofenceService.list(),
+      ])
+
+      const existingFenceIds = new Set(fencesData.map((f) => f.branchId))
+      const implicitFences = branchesData
+        .filter((b) => !existingFenceIds.has(b.id) && b.latitude != null && b.longitude != null)
+        .map((b) => ({
+          id: null,
+          branchId: b.id,
+          branchName: b.branch_name,
+          branchCode: b.branch_code,
+          latitude: b.latitude,
+          longitude: b.longitude,
+          radiusMeters: b.geofence_radius || 150,
+          isActive: b.geofence_active !== false,
+        }))
+
+      setFences([...fencesData, ...implicitFences])
     } catch (e) {
       setError(geofenceErrorMessage(e))
     } finally {

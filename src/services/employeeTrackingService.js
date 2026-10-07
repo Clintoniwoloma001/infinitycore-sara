@@ -43,19 +43,37 @@ export const trackingService = {
       p_department: department,
       p_branch_id: branchId,
     })
-    // list_tracked_employees() returns a BARE jsonb array of rows - NOT an object
-    // with an `employees` key. Unwrapping `.employees` here silently discarded every
-    // authorised row and rendered the honest empty state ("No locations recorded
-    // yet") even while the server was returning real positions. Accept only the
-    // documented array; anything else is a contract change, so surface it rather
-    // than quietly showing an empty map.
-    const result = unwrap(data, error, [])
-    if (!Array.isArray(result)) {
+
+    const rawData = unwrap(data, error, [])
+    const normalized = Array.isArray(rawData) ? rawData : (rawData?.positions || [])
+
+    if (!Array.isArray(normalized)) {
       throw new Error(
         'Tracking data could not be read: the server returned an unexpected shape.',
       )
     }
-    return result
+
+    return normalized.map(item => ({
+      id: item.id || item.employee_id,
+      employee_id: item.employee_id,
+      latitude: Number(item.latitude || 0),
+      longitude: Number(item.longitude || 0),
+      recorded_at: item.recorded_at || new Date().toISOString(),
+      full_name: item.employee_name || item.employee?.full_name || 'Staff Member',
+      branch_name: item.branch_name || item.employee?.branch?.name || 'Head Office',
+      // Preserve existing flags used by the UI
+      inside_geofence: item.inside_geofence,
+      location_label: item.location_label,
+      nearest_location_name: item.nearest_location_name,
+      nearest_distance: item.nearest_distance,
+      nearest_radius: item.nearest_radius,
+      minutes_ago: item.minutes_ago,
+      last_seen: item.last_seen,
+      accuracy: item.accuracy,
+      employee_number: item.employee_number,
+      position: item.position,
+      department: item.department,
+    }))
   },
 
   /**
