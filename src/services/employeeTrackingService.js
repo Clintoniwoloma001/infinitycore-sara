@@ -46,7 +46,7 @@ export const trackingService = {
    * is what let a two-day-old fix be counted as "recently updated".
    */
   async livePositions({ withinMinutes = 60, department = null, branchId = null } = {}) {
-    const { data, error } = await supabase.rpc('list_tracked_employees', {
+    const { data, error } = await supabase.rpc('employee_live_positions_v2', {
       p_within_minutes: withinMinutes,
       p_department: department,
       p_branch_id: branchId,
@@ -99,7 +99,7 @@ export const trackingService = {
    * a late (backfilled) upload can never be shown out of sequence.
    */
   async history(employeeId, date, { fromTime = null, toTime = null, insideOnly = 'all' } = {}) {
-    const { data, error } = await supabase.rpc('employee_location_history', {
+    const { data, error } = await supabase.rpc('employee_movement_trail_v2', {
       p_employee_id: employeeId,
       p_date: date,
       p_from_time: fromTime,
@@ -110,6 +110,29 @@ export const trackingService = {
     return { ...res, points: sortByRecordedAt(res?.points) }
   },
 
+  /**
+   * Subscribe to new location events on the private tracking:live channel.
+   * The trigger sends ONLY {employee_id, recorded_at} - never coordinates.
+   * The channel is authorized by an RLS policy on realtime.messages that
+   * requires the same Full/Shared tracking access as every other RPC.
+   *
+   * The callback receives nothing useful: the caller refetches the v2 view
+   * after a 2 s debounce so rows are never patched locally.
+   */
+  subscribeLive(onInsert, { debounceMs = 2000 } = {}) {
+    let timer = null
+    const fire = () => { timer = null; onInsert() }
+    const channel = supabase.channel('tracking:live')
+      .on('broadcast', { event: 'message' }, () => {
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(fire, debounceMs)
+      })
+      .subscribe()
+    return { channel, unsubscribe: () => channel.unsubscribe() }
+  },
+
+  /**
+   * ACTIVE registered locations with the radius the engine actually applies, so
   /**
    * ACTIVE registered locations with the radius the engine actually applies, so
    * the map draws exactly the fences that can resolve a clock-in. Read through

@@ -54,6 +54,23 @@ export default function LivePositions() {
 
   useEffect(() => { load() }, [load])
 
+  // Realtime: the AFTER INSERT trigger broadcasts {employee_id, recorded_at}
+  // on the private tracking:live channel. Coordinates are never sent. We
+  // debounce 2 s and refetch the v2 view - rows are never patched locally.
+  useEffect(() => {
+    let sub
+    let timer
+    try {
+      sub = trackingService.subscribeLive(() => {
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(() => { timer = null; load({ silent: true }) }, 2000)
+      })
+    } catch (_) {
+      // Realtime unavailable: the 30 s poll covers it.
+    }
+    return () => { if (timer) clearTimeout(timer); if (sub) sub.unsubscribe() }
+  }, [load])
+
   // Poll while visible + refetch when the tab regains focus.
   useEffect(() => {
     const active = () => document.visibilityState === 'visible'
@@ -76,9 +93,24 @@ export default function LivePositions() {
   const elapsed = fetchedAt ? Math.max(0, now - fetchedAt) : 0
   const counts = useMemo(() => countFreshness(rows, elapsed), [rows, elapsed])
 
-  if (loading && !rows.length) return <LoadingState label="Loading live positions..." />
-  if (error && !rows.length) return <ErrorState title="Unable to load positions" message={error} />
-  if (!rows.length) {
+  // Header chips: clickable filters. Default order is newest-first (the v2
+  // view returns that); the filters re-derive from the same row set.
+  const [activeFilter, setActiveFilter] = useState(null)
+  const visible = useMemo(() => {
+    if (!activeFilter) return rows
+    return rows.filter((r) => {
+      const state = rowFreshness(r, elapsed)
+      if (activeFilter === 'live') return state === FRESHNESS.LIVE
+      if (activeFilter === 'delayed') return state === FRESHNESS.DELAYED
+      if (activeFilter === 'stale') return state === FRESHNESS.STALE || state === FRESHNESS.NONE
+      if (activeFilter === 'no_data') return state === FRESHNESS.NONE
+      return true
+    })
+  }, [rows, elapsed, activeFilter])
+
+  if (loading && !visible.length) return <LoadingState label="Loading live positions..." />
+  if (error && !visible.length) return <ErrorState title="Unable to load positions" message={error} />
+  if (!visible.length) {
     return (
       <EmptyState
         title="No locations recorded yet"
@@ -90,13 +122,24 @@ export default function LivePositions() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-slate-600" data-testid="freshness-counts">
-          <span className="font-semibold text-emerald-700">{counts.live} live</span>
-          {' · '}
-          <span className="font-semibold text-amber-700">{counts.delayed} delayed</span>
-          {' · '}
-          <span className="font-semibold text-slate-700">{counts.stale} stale</span>
-        </p>
+        <div className="flex flex-wrap items-center gap-1.5" data-testid="freshness-counts">
+          {[
+            { key: 'live', label: `${counts.live} Inside`, tone: 'text-emerald-700 bg-emerald-50 ring-emerald-200' },
+            { key: 'delayed', label: `${counts.delayed} Outside`, tone: 'text-amber-700 bg-amber-50 ring-amber-200' },
+            { key: 'stale', label: `${counts.stale} Stale`, tone: 'text-slate-700 bg-slate-100 ring-slate-200' },
+            { key: 'no_data', label: `${counts.none} No data`, tone: 'text-slate-500 bg-slate-50 ring-slate-200' },
+          ].map((c) => (
+            <button
+              key={c.key}
+              onClick={() => setActiveFilter(activeFilter === c.key ? null : c.key)}
+              title={`Filter by ${c.key}`}
+              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 transition ${
+                activeFilter === c.key ? 'bg-slate-800 text-white ring-slate-800' : c.tone
+              }`}>
+              {c.label}
+            </button>
+          ))}
+        </div>
         <button onClick={() => load({ silent: false })}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
           <RefreshCw className="w-4 h-4" />Refresh
@@ -121,7 +164,7 @@ export default function LivePositions() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.map((r) => (
+            {visible.map((r) => (
               <tr key={r.employee_id} className="hover:bg-slate-50">
                 <td className="px-4 py-3">
                   <p className="font-medium text-slate-900">{r.full_name}</p>
@@ -156,7 +199,7 @@ export default function LivePositions() {
         </table>
       </div>
 
-      <MobileRows rows={rows} elapsed={elapsed} onSelect={setSelected} />
+      <MobileRows rows={visible} elapsed={elapsed} onSelect={setSelected} />
 
       {selected && <HistoryDrawer row={selected} onClose={() => setSelected(null)} />}
     </div>
