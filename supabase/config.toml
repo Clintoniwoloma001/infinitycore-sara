@@ -468,3 +468,7 @@ enabled = true
 verify_jwt = true
 import_map = "./functions/bankone-name-enquiry/deno.json"
 entrypoint = "./functions/bankone-name-enquiry/index.ts"
+[functions.oauth-callback]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/oauth-callback/index.ts"

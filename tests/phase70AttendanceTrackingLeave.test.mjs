@@ -212,7 +212,16 @@ check('client forwards the depth parameter it now sends', () => {
 check('stale locations are labelled, never shown as live', () => {
   const page = read('src/components/tracking/LivePositions.jsx')
   assert.match(page, /describeFreshness/)
-  assert.match(page, /is_stale/)
+  // Freshness comes from ONE shared classifier (src/config/trackingFreshness.js),
+  // not from an ad-hoc test on the row inside the component.
+  assert.match(page, /rowFreshness/)
+  assert.match(page, /countFreshness/)
+  assert.match(page, /trackingFreshness/)
+  // An employee with no fix must be shown, not dropped from the roster.
+  assert.match(page, /No location yet/)
+  // Stale wording: a grey chip + "Last known", never a live green Inside pill.
+  assert.match(page, /Last known/)
+  assert.match(page, /Stale/)
 })
 check('movement path is drawn only from recorded points', () => {
   // The old assertion required "no map/tile provider is configured", which was
@@ -221,7 +230,11 @@ check('movement path is drawn only from recorded points', () => {
   // is now asserted against the real map component.
   const p = read('src/components/tracking/TrackingMap.jsx')
   assert.match(p, /valid\.length >= 2/, 'a polyline needs at least two points')
-  assert.match(p, /No route\s*\n?\s*\/\/ between two points is inferred|consecutive recorded observations/i)
+  // Pre-existing assertion drift (fails on HEAD too): the comment in
+  // TrackingMap.jsx wraps the sentence across two lines, so the old pattern
+  // never matched the file it was written for. Re-asserted against the real
+  // wording - the guarantee under test is unchanged.
+  assert.match(p, /No route between\s*\/\/\s*two points is inferred|consecutive RECORDED points only|consecutive recorded observations/i)
   assert.match(p, /openstreetmap\.org/, 'a real basemap is now used')
 })
 check('the map never recomputes inside/outside itself', () => {

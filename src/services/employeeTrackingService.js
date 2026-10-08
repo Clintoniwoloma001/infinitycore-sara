@@ -10,6 +10,10 @@
 // resolve_employee_location() in Postgres so the web app, the mobile app, the
 // clock-in path and the Location Audit can never disagree.
 import { supabase } from '../supabaseClient'
+import {
+  TIMELINE_GAP_MINUTES, LATE_UPLOAD_MINUTES, LOW_ACCURACY_SUFFIX,
+  ageSecondsOf, formatDurationMinutes,
+} from '../config/trackingFreshness'
 
 const unwrap = (data, error, fallback) => {
   if (error) {
@@ -33,9 +37,13 @@ export const trackingService = {
   },
 
   /**
-   * Latest known position per employee. `withinMinutes` only widens the
-   * "points in window" signal used for activity display; it never decides
-   * whether a stale point is shown as live - `is_stale` does that.
+   * Latest known position per employee.
+   *
+   * Freshness is NEVER decided here: the server returns the fix's age against
+   * its own clock (`age_seconds`) and the UI classifies it with the thresholds
+   * in src/config/trackingFreshness.js. Every server field is passed through
+   * verbatim — the previous implementation silently dropped `is_stale`, which
+   * is what let a two-day-old fix be counted as "recently updated".
    */
   async livePositions({ withinMinutes = 60, department = null, branchId = null } = {}) {
     const { data, error } = await supabase.rpc('list_tracked_employees', {
@@ -44,8 +52,8 @@ export const trackingService = {
       p_branch_id: branchId,
     })
 
-    const rawData = unwrap(data, error, [])
-    const normalized = Array.isArray(rawData) ? rawData : (rawData?.positions || [])
+    const result = unwrap(data, error, [])
+    const normalized = Array.isArray(result) ? result : (result?.positions || [])
 
     if (!Array.isArray(normalized)) {
       throw new Error(
@@ -56,30 +64,39 @@ export const trackingService = {
     return normalized.map(item => ({
       id: item.id || item.employee_id,
       employee_id: item.employee_id,
-      latitude: Number(item.latitude || 0),
-      longitude: Number(item.longitude || 0),
-      recorded_at: item.recorded_at || new Date().toISOString(),
-      full_name: item.employee_name || item.employee?.full_name || 'Staff Member',
+      latitude: item.latitude == null ? null : Number(item.latitude),
+      longitude: item.longitude == null ? null : Number(item.longitude),
+      recorded_at: item.recorded_at || item.last_seen || null,
+      full_name: item.employee_name || item.employee?.full_name || item.full_name || 'Staff Member',
       branch_name: item.branch_name || item.employee?.branch?.name || 'Head Office',
       // Preserve existing flags used by the UI
       inside_geofence: item.inside_geofence,
       location_label: item.location_label,
+      resolved_place: item.resolved_place,
       nearest_location_name: item.nearest_location_name,
       nearest_distance: item.nearest_distance,
       nearest_radius: item.nearest_radius,
       minutes_ago: item.minutes_ago,
       last_seen: item.last_seen,
+      uploaded_at: item.uploaded_at,
+      // Server-computed age (now() - recorded_at, in seconds) + the server's
+      // own clock reading. These are what freshness is computed from.
+      age_seconds: item.age_seconds,
+      server_now: item.server_now,
+      is_stale: item.is_stale,
       accuracy: item.accuracy,
       employee_number: item.employee_number,
       position: item.position,
       department: item.department,
+      has_fix: item.has_fix !== false && item.recorded_at != null,
     }))
   },
 
   /**
    * Movement history for one employee on one date. Returns the ACTUAL recorded
-   * points in time order - the map polyline and the timeline are both drawn
-   * from this array, so no route is ever inferred between two points.
+   * points in recorded_at order - the map polyline and the timeline are both
+   * drawn from this array, so no route is ever inferred between two points and
+   * a late (backfilled) upload can never be shown out of sequence.
    */
   async history(employeeId, date, { fromTime = null, toTime = null, insideOnly = 'all' } = {}) {
     const { data, error } = await supabase.rpc('employee_location_history', {
@@ -89,7 +106,8 @@ export const trackingService = {
       p_to_time: toTime,
       p_inside_only: insideOnly,
     })
-    return unwrap(data, error, { points: [], point_count: 0 })
+    const res = unwrap(data, error, { points: [], point_count: 0 })
+    return { ...res, points: sortByRecordedAt(res?.points) }
   },
 
   /**
@@ -166,11 +184,36 @@ export const trackingService = {
 // Presentation helpers (formatting only - no business math, no geofence logic)
 // ---------------------------------------------------------------------------
 
-/** "Last seen 42 minutes ago" - never present a stale point as live. */
-export function describeFreshness(row) {
-  if (!row?.last_seen) return 'No location recorded'
-  const mins = row.minutes_ago
-  if (mins == null) return 'No location recorded'
+/**
+ * Strict recorded_at ascending order. Both the timeline and the map polyline
+ * consume this, so a backfilled row (recorded earlier, uploaded later) can
+ * never be drawn after a fix that was captured after it.
+ */
+export function sortByRecordedAt(points = []) {
+  if (!Array.isArray(points)) return []
+  return [...points].sort((a, b) => {
+    const at = a?.recorded_at ? Date.parse(a.recorded_at) : NaN
+    const bt = b?.recorded_at ? Date.parse(b.recorded_at) : NaN
+    if (Number.isNaN(at) && Number.isNaN(bt)) return 0
+    if (Number.isNaN(at)) return 1
+    if (Number.isNaN(bt)) return -1
+    return at - bt
+  })
+}
+
+/**
+ * "Last seen 42 minutes ago" - never present a stale point as live.
+ *
+ * `elapsedMs` is the time since the server response arrived; the base age is
+ * always the server's own `age_seconds`, so the label keeps counting up between
+ * polls instead of freezing (and a wrong browser clock cannot make an old fix
+ * look fresh).
+ */
+export function describeFreshness(row, elapsedMs = 0) {
+  if (!row) return 'No location yet'
+  const seconds = ageSecondsOf(row, elapsedMs)
+  if (seconds == null) return 'No location yet'
+  const mins = Math.floor(seconds / 60)
   if (mins < 1) return 'Just now'
   if (mins === 1) return 'Last seen 1 minute ago'
   if (mins < 60) return `Last seen ${mins} minutes ago`
@@ -204,9 +247,31 @@ export function formatDistance(meters) {
  * helper additionally surfaces the measured distance and the fence radius, so
  * "outside" is always a checkable statement rather than an assertion.
  */
-export function describeGeofenceStatus(point) {
-  if (!point) return { tone: 'muted', text: 'No location recorded', detail: null }
+/**
+ * A fix whose GPS error is larger than the fence radius cannot, on its own,
+ * prove inside or outside. This never changes the verdict — resolve_employee_location()
+ * owns that — it only says out loud that the reading is imprecise.
+ */
+export function isLowAccuracy(point) {
+  if (!point) return false
+  const accuracy = point.accuracy
+  const radius = point.nearest_radius
+  if (accuracy == null || radius == null) return false
+  const a = Number(accuracy)
+  const r = Number(radius)
+  if (!Number.isFinite(a) || !Number.isFinite(r)) return false
+  return a > r
+}
 
+function withLowAccuracy(detail, low) {
+  if (!low) return detail
+  return detail ? `${detail} · ${LOW_ACCURACY_SUFFIX}` : LOW_ACCURACY_SUFFIX
+}
+
+export function describeGeofenceStatus(point) {
+  if (!point) return { tone: 'muted', text: 'No location recorded', detail: null, lowAccuracy: false }
+
+  const low = isLowAccuracy(point)
   const nearest = point.nearest_location_name
   const distance = point.nearest_distance
   const radius = point.nearest_radius
@@ -215,14 +280,23 @@ export function describeGeofenceStatus(point) {
     return {
       tone: 'inside',
       text: point.location_label || nearest || 'Inside a registered location',
-      detail: distance != null
-        ? `${formatDistance(distance)} from the centre (radius ${formatDistance(radius)})`
-        : null,
+      detail: withLowAccuracy(
+        distance != null
+          ? `${formatDistance(distance)} from the centre (radius ${formatDistance(radius)})`
+          : null,
+        low,
+      ),
+      lowAccuracy: low,
     }
   }
 
   if (!nearest) {
-    return { tone: 'outside', text: 'Outside all registered locations', detail: null }
+    return {
+      tone: 'outside',
+      text: 'Outside all registered locations',
+      detail: withLowAccuracy(null, low),
+      lowAccuracy: low,
+    }
   }
 
   const gap = distance != null && radius != null
@@ -237,7 +311,8 @@ export function describeGeofenceStatus(point) {
     text: distance != null
       ? `${formatDistance(distance)} outside ${nearest}`
       : `Outside ${nearest}`,
-    detail: gap,
+    detail: withLowAccuracy(gap, low),
+    lowAccuracy: low,
   }
 }
 
@@ -311,6 +386,9 @@ export function buildMovementTimeline(points = [], addresses = {}) {
       id: p.id,
       time: formatClockTime(p.recorded_at),
       recordedAt: p.recorded_at,
+      // Kept so the row can say "uploaded late" when a backfilled fix reached
+      // the server long after it was captured (threshold lives in config).
+      uploadedAt: p.uploaded_at,
       label,
       // The registered-location wording is kept separately so the sub-line can
       // still say how far outside the point was, even when the headline shows
@@ -323,4 +401,48 @@ export function buildMovementTimeline(points = [], addresses = {}) {
       transition,
     }
   })
+}
+
+/**
+ * Inserts a "No data for 1h 20m" row wherever two consecutive fixes are more
+ * than TIMELINE_GAP_MINUTES apart, so a long silent stretch is stated instead
+ * of being drawn over as if the person never moved.
+ *
+ * Pure presentation: it reads recorded_at only, never reorders and never
+ * removes a point. The threshold comes from src/config/trackingFreshness.js.
+ */
+export function insertTimelineGaps(timeline = [], gapMinutes = TIMELINE_GAP_MINUTES) {
+  if (!Array.isArray(timeline) || timeline.length === 0) return []
+  const out = []
+  let lastPoint = null
+  let seq = 0
+
+  for (const item of timeline) {
+    if (!item || item.isGap) continue
+    if (lastPoint) {
+      const from = Date.parse(lastPoint.recordedAt)
+      const to = Date.parse(item.recordedAt)
+      const deltaMs = to - from
+      if (Number.isFinite(deltaMs) && deltaMs > gapMinutes * 60000) {
+        out.push({
+          id: `timeline-gap-${seq++}`,
+          isGap: true,
+          gapMinutes: deltaMs / 60000,
+          label: `No data for ${formatDurationMinutes(deltaMs / 60000)}`,
+        })
+      }
+    }
+    out.push(item)
+    lastPoint = item
+  }
+  return out
+}
+
+/** True when the fix reached the server more than LATE_UPLOAD_MINUTES after capture. */
+export function isUploadedLate(recordedAt, uploadedAt, lateMinutes = LATE_UPLOAD_MINUTES) {
+  if (!recordedAt || !uploadedAt) return false
+  const recorded = Date.parse(recordedAt)
+  const uploaded = Date.parse(uploadedAt)
+  if (!Number.isFinite(recorded) || !Number.isFinite(uploaded)) return false
+  return (uploaded - recorded) > lateMinutes * 60000
 }
