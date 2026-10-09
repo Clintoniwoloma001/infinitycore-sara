@@ -45,7 +45,7 @@ export const trackingService = {
     })
 
     const rawData = unwrap(data, error, [])
-    const normalized = Array.isArray(rawData) ? rawData : (rawData?.positions || [])
+    const normalized = Array.isArray(rawData) ? rawData : (rawData?.employees || rawData?.positions || [])
 
     if (!Array.isArray(normalized)) {
       throw new Error(

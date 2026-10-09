@@ -326,12 +326,14 @@ function SessionMeetingPanel({ session, onClose, onRefresh, userId }) {
   const hasMeeting = Boolean(session.meeting_url)
   const connectionFailed = /OAuth|not connected|not_configured/i.test(error || '')
 
-  // Listen for OAuth completion from the popup window.
+  // Listen for OAuth completion from the popup window. After receiving the
+  // message, re-verify the connection server-side.
   useEffect(() => {
-    const onMessage = (event) => {
+    const onMessage = async (event) => {
       if (event.data?.type !== 'oauth_complete' || event.data.provider !== 'google_calendar') return
       if (event.data.success) {
-        setError(''); setNotice('Google account connected. Click Generate Meeting Link to create the meeting.')
+        setError('')
+        setNotice('Google account connected. Click Generate Meeting Link to create the meeting.')
       } else {
         setError(event.data.error || 'Google authorization failed. Please try again.')
       }
@@ -350,8 +352,18 @@ function SessionMeetingPanel({ session, onClose, onRefresh, userId }) {
       setError(connectError || 'Google OAuth is not configured (VITE_GOOGLE_CLIENT_ID is missing).')
       return
     }
-    window.open(url, '_blank', 'width=520,height=640')
+    const popup = window.open(url, '_blank', 'width=520,height=640')
     setNotice('Complete the Google consent in the new window, then click Generate Meeting Link again — or paste a manual link below.')
+    // Fallback: if postMessage doesn't fire, poll for popup closure.
+    if (popup) {
+      const poll = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(poll)
+          setNotice('Google consent window closed. Click Generate Meeting Link to create the meeting — or paste a manual link below.')
+        }
+      }, 500)
+      setTimeout(() => clearInterval(poll), 120000)
+    }
   }
 
   const saveManualLink = () => {
@@ -608,9 +620,10 @@ function CreateTraining({ form, set, employees, venues, options, busy, onSubmit,
   const [meetingManual, setMeetingManual] = useState(false)
   const connectionFailed = /OAuth|not connected|not_configured/i.test(meetingError || '')
 
-  // Listen for OAuth completion from the popup window.
+  // Listen for OAuth completion from the popup window. After receiving the
+  // message, re-verify the connection server-side.
   useEffect(() => {
-    const onMessage = (event) => {
+    const onMessage = async (event) => {
       if (event.data?.type !== 'oauth_complete' || event.data.provider !== 'google_calendar') return
       if (event.data.success) {
         setMeetingError(''); setMeetingOk('Google account connected. Click Generate Meeting Link again to create the meeting.')
@@ -657,8 +670,18 @@ function CreateTraining({ form, set, employees, venues, options, busy, onSubmit,
     if (!userId) { setMeetingError('You must be signed in to connect your Google account.'); return }
     const { url, error: connectError } = connectGoogleCalendar(userId)
     if (!url) { setMeetingError(connectError || 'Google OAuth is not configured (VITE_GOOGLE_CLIENT_ID is missing).'); return }
-    window.open(url, '_blank', 'width=520,height=640')
+    const popup = window.open(url, '_blank', 'width=520,height=640')
     setMeetingOk('Complete the Google consent in the new window, then generate the meeting link again — or paste a manual link below.')
+    // Fallback: if postMessage doesn't fire, poll for popup closure.
+    if (popup) {
+      const poll = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(poll)
+          setMeetingOk('Google consent window closed. Click Generate Meeting Link again — or paste a manual link below.')
+        }
+      }, 500)
+      setTimeout(() => clearInterval(poll), 120000)
+    }
   }
 
   const selectVenue = (branchId) => {
