@@ -2,7 +2,7 @@ import React from 'react'
 import { MapPinned } from 'lucide-react'
 import Modal from './Modal'
 import { LoadingState, ErrorState } from '../PageStates'
-import { formatRadius } from '../../services/geofenceService'
+import { branchDisplayName, formatRadius } from '../../services/geofenceService'
 
 /**
  * "Add fence" — the branch picker. Every branch that is NOT already in
@@ -10,7 +10,7 @@ import { formatRadius } from '../../services/geofenceService'
  * editor with that branch's stored coordinates (or the app centre when
  * the branch has none yet).
  */
-export default function AddFenceDialog({ open, branches, loading, error, onRetry, onSelect, onClose }) {
+export default function AddFenceDialog({ open, branches, loading, error, onRetry, onSelect, onClose, myPosition, onUseMyLocation }) {
   return (
     <Modal open={open} onClose={onClose} width="max-w-xl">
       <div className="p-5">
@@ -20,6 +20,21 @@ export default function AddFenceDialog({ open, branches, loading, error, onRetry
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           These branches do not have a fence yet. Choose one to place it on the map.
         </p>
+
+        {myPosition && onUseMyLocation ? (
+          <button
+            type="button"
+            onClick={onUseMyLocation}
+            className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200"
+          >
+            <MapPin className="w-4 h-4" />
+            Use my location
+          </button>
+        ) : myPosition ? (
+          <p className="mb-3 text-xs text-emerald-600 dark:text-emerald-400">
+            Your location is pinned at {myPosition.lat.toFixed(6)}, {myPosition.lng.toFixed(6)} · tap a branch to place its fence around it.
+          </p>
+        ) : null}
 
         <div className="mt-4 max-h-[55vh] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
           {loading && <LoadingState label="Loading branches..." />}
@@ -55,7 +70,7 @@ export default function AddFenceDialog({ open, branches, loading, error, onRetry
                       <MapPinned className="w-4 h-4 flex-shrink-0 text-[#009944]" />
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-medium text-slate-800 dark:text-slate-100">
-                          {branch.branch_name}
+                          {branchDisplayName(branch)}
                         </span>
                         <span className="block text-xs text-slate-500 dark:text-slate-400">
                           {branch.branch_code || 'No code'}

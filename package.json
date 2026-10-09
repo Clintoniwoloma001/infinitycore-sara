@@ -88,6 +88,7 @@
     "test:acceptance-db": "sh tests/acceptance/run.sh",
     "test:mpr-scoring": "node --test tests/performanceScoring.test.mjs",
     "test:mpr-export": "node --test tests/performanceExport.test.mjs",
+    "test:performance-filters": "node tests/performancePeriodFilters.test.mjs",
     "test:tracking-freshness": "node tests/employeeTrackingFreshness.test.mjs"
   },
   "dependencies": {

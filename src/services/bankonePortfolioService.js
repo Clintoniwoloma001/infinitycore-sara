@@ -52,6 +52,60 @@ const bankoneSeed = (batchId) =>
   unwrap(supabase.rpc('bankone_seed_resolutions', { p_batch_id: batchId }),
     'Could not prepare the review list')
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * FLOW aggregate for one import batch: principal disbursed, loans booked and
+ * principal recovered on loans BOOKED inside [startDate, endDate] — summed on
+ * the per-loan business date `disbursementDate` (plain string comparison of
+ * ISO dates, the same rule get_director_executive_snapshot applies in SQL).
+ *
+ * PostgREST caps a single response at `max_rows` (1000), so the rows are read
+ * in pages: a truncated sum would silently disagree with SQL.
+ *
+ * Returns null when the rows cannot be read (a viewer without read access, or
+ * a database where the columns are absent) so the caller can fall back to the
+ * snapshot figures instead of reporting a fake 0.
+ */
+async function sumDisbursementFlow(batchId, startDate, endDate) {
+  const flow = { disbursed: 0, loanCount: 0, repaid: 0, byEmployee: {}, rowsRead: 0 }
+  const PAGE = 1000
+  const num = (v) => (v == null || v === '' ? 0 : Number(v) || 0)
+  try {
+    for (let offset = 0; ; offset += PAGE) {
+      const { data, error } = await supabase
+        .from('bankone_import_rows')
+        .select('officer_employee_id, loan:normalized_data->>loan_amount, booked_on:normalized_data->>disbursementDate, outstanding:normalized_data->>total_outstanding')
+        .eq('batch_id', batchId)
+        // Inclusive end date: start <= disbursementDate <= end.
+        .gte('normalized_data->>disbursementDate', startDate)
+        .lte('normalized_data->>disbursementDate', endDate)
+        .order('row_number', { ascending: true })
+        .range(offset, offset + PAGE - 1)
+      if (error) return null
+      for (const r of data || []) {
+        const booked = String(r.booked_on || '')
+        // Mirror the server guard: only a clean ISO date counts as booked.
+        if (!ISO_DATE.test(booked) || booked < startDate || booked > endDate) continue
+        const loan = num(r.loan)
+        const outstanding = num(r.outstanding)
+        flow.disbursed += loan
+        flow.loanCount += 1
+        flow.repaid += Math.max(loan - outstanding, 0)
+        flow.rowsRead += 1
+        const key = r.officer_employee_id || '_unattributed'
+        flow.byEmployee[key] = Math.round(((flow.byEmployee[key] || 0) + loan) * 100) / 100
+      }
+      if (!data || data.length < PAGE) break
+    }
+  } catch {
+    return null
+  }
+  flow.disbursed = Math.round(flow.disbursed * 100) / 100
+  flow.repaid = Math.round(flow.repaid * 100) / 100
+  return flow
+}
+
 export const bankonePortfolioService = {
   /**
    * Parse + resolve + persist one dated snapshot.
@@ -296,38 +350,79 @@ export const bankonePortfolioService = {
   },
 
   /**
-   * Department rows of the NEWEST published snapshot (the rollup the
-   * Performance page renders next to its employee-derived scorecards).
+   * Portfolio slice for a period filter (Performance page).
    *
-   * Optional enrichment, so it degrades instead of throwing: before the
-   * department-rollup migration is applied, or for a viewer without read
-   * access, it returns [] and the caller keeps its client-side rollup.
+   * Semantics — deliberately the same two rules the executive snapshot RPC
+   * documents, so the UI and SQL always agree:
+   *   * SNAPSHOT metrics (outstanding, PAR %) are POINT-IN-TIME: the latest
+   *     published PAR snapshot on or before the range END date. Snapshots are
+   *     never summed across a range.
+   *   * FLOW metrics (disbursed, loans booked) are SUMMED over the range using
+   *     the per-loan business date `disbursementDate`, scoped to that same
+   *     snapshot's batch so a cumulative PAR report is never double counted.
+   *
+   * Optional enrichment: every part degrades instead of throwing (pre-migration
+   * database, or a viewer without read access → empty parts + `error`).
+   *
+   * @param opts { startDate?: 'YYYY-MM-DD', endDate?: 'YYYY-MM-DD' }
+   * @returns { snapshot, departments, flow, latestAvailable, error }
    */
-  async listLatestDepartmentSnapshots() {
-    // Department rows only exist for published PAR snapshots, so prefer the
-    // newest PAR snapshot and walk backwards until one actually has rows —
-    // a newer disbursement snapshot must never hide the department data.
-    const { data: snaps, error: snapErr } = await supabase
+  async getPortfolioForRange({ startDate, endDate } = {}) {
+    const out = { snapshot: null, departments: [], flow: null, latestAvailable: null, error: null }
+
+    let snapQuery = supabase
       .from('bankone_portfolio_snapshots')
-      .select('id, report_type, as_at_date, published_at')
+      .select('id, batch_id, report_type, as_at_date, published_at, total_outstanding, par_ratio, total_disbursed, total_repaid, loan_count')
       .eq('status', 'published')
-      .order('as_at_date', { ascending: false })
-      .order('published_at', { ascending: false })
-      .limit(20)
-    if (snapErr) return []
+    // Inclusive end: `as_at_date <= range end` (plain date strings, no tz maths).
+    if (endDate) snapQuery = snapQuery.lte('as_at_date', endDate)
+    const [{ data: snaps, error: snapErr }, latest] = await Promise.all([
+      snapQuery
+        .order('as_at_date', { ascending: false })
+        .order('published_at', { ascending: false })
+        .limit(20),
+      supabase
+        .from('bankone_portfolio_snapshots')
+        .select('as_at_date')
+        .eq('status', 'published')
+        .order('as_at_date', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ])
+    out.latestAvailable = latest?.data?.as_at_date || null
+    if (snapErr) { out.error = snapErr.message || 'Could not read portfolio snapshots.'; return out }
+
+    // Department rows only exist for published PAR snapshots, so prefer PAR
+    // and walk backwards until one actually has rows — a newer disbursement
+    // snapshot must never hide the department data.
     const ordered = [...(snaps || [])].sort(
       (a, b) => (a.report_type === 'par' ? 0 : 1) - (b.report_type === 'par' ? 0 : 1)
     )
+    let fallback = ordered[0] || null
     for (const snap of ordered) {
       const { data, error } = await supabase
         .from('bankone_department_snapshots')
         .select('*')
         .eq('snapshot_id', snap.id)
         .order('total_outstanding', { ascending: false })
-      if (error) return []
-      if (data && data.length) return data
+      if (error) { out.error = error.message || 'Could not read department snapshots.'; return out }
+      if (data && data.length) { out.snapshot = snap; out.departments = data; break }
     }
-    return []
+    if (!out.snapshot) out.snapshot = fallback
+
+    if (out.snapshot?.batch_id && startDate && endDate) {
+      out.flow = await sumDisbursementFlow(out.snapshot.batch_id, startDate, endDate)
+    }
+    return out
+  },
+
+  /**
+   * Department rows only (kept for callers that do not need the period
+   * semantics — Director Intelligence renders them as portfolio context).
+   */
+  async listLatestDepartmentSnapshots(opts) {
+    const slice = await this.getPortfolioForRange(opts || {})
+    return slice.departments || []
   },
 
   // --- §9/§19 resolution actions (all audited, all role-gated) ------------

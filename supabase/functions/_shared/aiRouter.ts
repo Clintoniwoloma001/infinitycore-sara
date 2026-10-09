@@ -21,6 +21,13 @@
 // Keys are read from function secrets and never returned or logged:
 //   GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, NVIDIA_API_KEY
 //
+// Local OpenAI-compatible endpoint (e.g. Jarvis) overrides — server-side only:
+//   OPENAI_BASE_URL — overrides the OpenAI base (default https://api.openai.com/v1)
+//   OPENAI_MODEL    — overrides the OpenAI model (default gpt-4o-mini)
+// Set these as function secrets / supabase/functions/.env.local for local dev.
+// They are NEVER read from VITE_* or mobile .env — the browser/app must never
+// see the AUTH_TOKEN.
+//
 // The rules engine is a real provider, not a stub: it produces a correct
 // deterministic answer for every SARA feature from the data it is given, so a
 // total provider outage degrades quality instead of breaking the product.
@@ -81,6 +88,10 @@ export const PROVIDER_CATALOG: Record<string, ProviderDescriptor> = {
 
 // Clean APIs is tried EARLY (before the paid OpenAI tier) so a configured
 // Clean APIs key is actually used; the rest of the chain remains as failover.
+// Local dev note: set `primary=openai` in the ai_provider_settings row to route
+// SARA to your local Jarvis endpoint first
+// (OPENAI_BASE_URL=http://localhost:20128/v1, OPENAI_MODEL=Jarvis).
+// Do NOT reorder DEFAULT_CHAIN for local dev — it ships to production.
 export const DEFAULT_CHAIN = ['cleanapis', 'gemini', 'groq', 'rules', 'openai', 'nvidia']
 
 // ---------------------------------------------------------------------------
@@ -278,6 +289,14 @@ export function resolveModel(config: RouterConfig, providerId: string, feature: 
   }
   const perProvider = config.models?.[providerId]
   if (typeof perProvider === 'string' && perProvider.trim()) return perProvider.trim()
+  // OPENAI_MODEL env override (server-side only): local OpenAI-compatible
+  // endpoint model such as Jarvis. Database pins above still win when set.
+  if (providerId === 'openai') {
+    try {
+      const envModel = (Deno.env.get('OPENAI_MODEL') || '').trim()
+      if (envModel) return envModel
+    } catch { /* non-Deno test harness — fall through to catalog default */ }
+  }
   const descriptor = config.chain.find((c) => c.id === providerId)
   return descriptor?.default_model || PROVIDER_CATALOG[providerId]?.defaultModel || ''
 }
@@ -351,6 +370,31 @@ const OPENAI_COMPATIBLE: Record<string, { base: string; authHeader: string; auth
   // gateway base path differs, change it HERE and nowhere else.
   cleanapis: { base: 'https://cleanapis.com/v1', authHeader: 'Authorization', authPrefix: 'Bearer ' },
   nvidia: { base: 'https://integrate.api.nvidia.com/v1', authHeader: 'Authorization', authPrefix: 'Bearer ' },
+}
+
+// ---------------------------------------------------------------------------
+// Local OpenAI-compatible endpoint override (e.g. Jarvis).
+// ---------------------------------------------------------------------------
+// Resolved PER REQUEST (not at module load) so `supabase functions serve`
+// picks up secret changes without a redeploy:
+//   OPENAI_BASE_URL — overrides the `openai` provider base
+//                     (e.g. http://localhost:20128/v1). Trimmed, trailing
+//                     slashes removed. Empty = default https://api.openai.com/v1.
+//   OPENAI_MODEL    — overrides the `openai` provider model (e.g. Jarvis).
+//                     Empty = router/database default (gpt-4o-mini).
+// Server-side function secrets / supabase/functions/.env.local ONLY — never
+// VITE_* or mobile .env. The browser/app must never see the AUTH_TOKEN.
+function openAiBase(provider: string): string {
+  if (provider !== 'openai') return OPENAI_COMPATIBLE[provider]?.base || ''
+  const override = (Deno.env.get('OPENAI_BASE_URL') || '').trim().replace(/\/+$/, '')
+  return override || OPENAI_COMPATIBLE.openai.base
+}
+
+function openAiCompatibleConfig(provider: string): { base: string; authHeader: string; authPrefix: string } | null {
+  const cfg = OPENAI_COMPATIBLE[provider]
+  if (!cfg) return null
+  if (provider !== 'openai') return cfg
+  return { ...cfg, base: openAiBase(provider) }
 }
 
 function statusToFailure(provider: string, status: number, body: string): AiProviderError {
@@ -512,7 +556,7 @@ async function openAiCompatibleGenerate(
   model: string,
   req: GenerateRequest,
 ): Promise<ProviderResult> {
-  const cfg = OPENAI_COMPATIBLE[provider]
+  const cfg = openAiCompatibleConfig(provider)
   if (!cfg) throw new AiProviderError('ai_unsupported', provider)
   const key = providerSecret(provider)
   if (!key) throw new AiProviderError('ai_not_configured', provider)
@@ -554,7 +598,7 @@ async function openAiCompatibleTurn(
   model: string,
   req: TurnRequest,
 ): Promise<TurnResult> {
-  const cfg = OPENAI_COMPATIBLE[provider]
+  const cfg = openAiCompatibleConfig(provider)
   if (!cfg) throw new AiProviderError('ai_unsupported', provider)
   const key = providerSecret(provider)
   if (!key) throw new AiProviderError('ai_not_configured', provider)

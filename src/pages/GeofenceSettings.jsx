@@ -62,6 +62,27 @@ function GeofenceSettingsBody({ userName }) {
 
   const testerRef = useRef(null)
 
+  // ---- GPS / "Use my location" for Add-Fence --------------------------------
+  const [myPosition, setMyPosition] = useState(null)
+  const [myLocationError, setMyLocationError] = useState(null)
+  const [pendingMyPosition, setPendingMyPosition] = useState(null) // handed to the Add-Fence editor
+
+  const useMyLocation = () => {
+    if (navigator.geolocation == null) {
+      setMyLocationError('Geolocation is not supported by this browser.')
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const center = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+        setMyPosition(center)
+        setMyLocationError(null)
+      },
+      () => setMyLocationError('Could not get a GPS fix. Drag the pin manually on the map.'),
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 },
+    )
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -120,6 +141,10 @@ function GeofenceSettingsBody({ userName }) {
   }
 
   const startAdd = (branch) => {
+    // Hand the held "my position" (from the "Use my location" button) to the
+    // fence editor so the Add-location circle is drawn around the user the
+    // moment the editor opens, right next to the branch's stored centre.
+    setPendingMyPosition(myPosition)
     setAddOpen(false)
     setEditing({ branch })
   }
@@ -306,6 +331,8 @@ function GeofenceSettingsBody({ userName }) {
         onRetry={openAddDialog}
         onSelect={startAdd}
         onClose={() => setAddOpen(false)}
+        myPosition={myPosition}
+        onUseMyLocation={useMyLocation}
       />
 
       <ConfirmDialog

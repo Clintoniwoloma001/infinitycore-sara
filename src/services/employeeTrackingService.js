@@ -46,7 +46,11 @@ export const trackingService = {
    * is what let a two-day-old fix be counted as "recently updated".
    */
   async livePositions({ withinMinutes = 60, department = null, branchId = null } = {}) {
-    const { data, error } = await supabase.rpc('employee_live_positions_v2', {
+    // Cross-platform parity: mobile and web BOTH read the SAME RPC
+    // (employee_live_positions_v3). v2 is kept only as a thin backward
+    // compatibility delegate so older databases still work — the two apps can
+    // never render different verdicts again.
+    const { data, error } = await supabase.rpc('employee_live_positions_v3', {
       p_within_minutes: withinMinutes,
       p_department: department,
       p_branch_id: branchId,
@@ -66,29 +70,41 @@ export const trackingService = {
       employee_id: item.employee_id,
       latitude: item.latitude == null ? null : Number(item.latitude),
       longitude: item.longitude == null ? null : Number(item.longitude),
-      recorded_at: item.recorded_at || item.last_seen || null,
-      full_name: item.employee_name || item.employee?.full_name || item.full_name || 'Staff Member',
-      branch_name: item.branch_name || item.employee?.branch?.name || 'Head Office',
-      // Preserve existing flags used by the UI
+      recorded_at: item.recorded_at || null,
+      full_name: item.full_name || 'Staff Member',
+      branch_name: item.branch_name || 'Head Office',
+      // Fields the UI already consumed from v2
       inside_geofence: item.inside_geofence,
       location_label: item.location_label,
-      resolved_place: item.resolved_place,
+      resolved_place: item.location_label || item.resolved_place || '',
       nearest_location_name: item.nearest_location_name,
       nearest_distance: item.nearest_distance,
       nearest_radius: item.nearest_radius,
-      minutes_ago: item.minutes_ago,
-      last_seen: item.last_seen,
+      // v3 returns server age_seconds (now() - recorded_at), so derive
+      // minutes_ago from it. v2 returned minutes_ago directly.
+      minutes_ago:
+        item.age_seconds == null
+          ? null
+          : Math.max(0, Math.round(item.age_seconds / 60)),
+      last_seen: item.recorded_at,
       uploaded_at: item.uploaded_at,
-      // Server-computed age (now() - recorded_at, in seconds) + the server's
-      // own clock reading. These are what freshness is computed from.
+      // Server-computed age + server clock
       age_seconds: item.age_seconds,
       server_now: item.server_now,
-      is_stale: item.is_stale,
+      // Kept for compatibility — the live-sources are is_stale from
+      // list_tracked_employees() (v2) and freshness from v3. Both are
+      // server-derived from recorded_at against the server clock, so the
+      // verdict is passed through verbatim when present and otherwise taken
+      // from the server's own freshness bucket — never recomputed on the
+      // client, never dropped.
+      is_stale: item.is_stale ?? item.freshness === 'stale',
+      freshness: item.freshness,
       accuracy: item.accuracy,
       employee_number: item.employee_number,
       position: item.position,
       department: item.department,
       has_fix: item.has_fix !== false && item.recorded_at != null,
+      tracking_unavailable_reason: item.tracking_unavailable_reason,
     }))
   },
 

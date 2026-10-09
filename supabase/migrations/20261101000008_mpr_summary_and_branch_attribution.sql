@@ -301,4 +301,4 @@ revoke all on function public.rpc_get_branch_drag_and_soaring_staff(uuid, text) 
 grant execute on function public.rpc_get_branch_drag_and_soaring_staff(uuid, text) to authenticated;
 
 commit;
-
+i

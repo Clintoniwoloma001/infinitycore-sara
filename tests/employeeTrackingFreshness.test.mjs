@@ -212,7 +212,19 @@ check('is_stale, age_seconds, server_now and uploaded_at survive normalization',
 check('the empty-state path is a genuinely empty array, nothing else', () => {
   assert.match(serviceSource, /unwrap\(data, error, \[\]\)/)
   assert.match(serviceSource, /Array\.isArray\(result\)/)
-  assert.ok(!/rows\.filter\(/.test(page), 'the page must not narrow the authorised set')
+  // The page may re-derive the visible set ONLY behind an explicit,
+  // user-activated header chip (activeFilter). With no chip selected the full
+  // authorised row set must reach the table untouched — nothing narrows it
+  // silently (the original sin: rows.filter(r => !r.is_stale)).
+  assert.match(page, /if \(!activeFilter\) return rows/,
+    'an unfiltered view must return every authorised row')
+  const visibleDef = page.slice(page.indexOf('const visible = useMemo'), page.indexOf('}, [rows, elapsed, activeFilter])'))
+  assert.ok(/rows\.filter\(/.test(visibleDef),
+    'chip filtering re-derives from the same row set')
+  assert.ok(!/rows\.filter\(/.test(page.slice(0, page.indexOf('const visible = useMemo'))),
+    'nothing before the chip filter may narrow the authorised set')
+  assert.ok(!/is_stale\)/.test(visibleDef),
+    'freshness is never dropped client-side; chips filter, they never hide')
 })
 check('the service still does no geofence math', () => {
   assert.ok(!/Math\.(sin|cos|acos|asin)/.test(serviceSource),
@@ -220,11 +232,18 @@ check('the service still does no geofence math', () => {
 })
 
 console.log('\n6. The live tab says what is actually true')
-check('the header counts live / delayed / stale', () => {
-  assert.match(page, /\{counts\.live\} live/)
-  assert.match(page, /\{counts\.delayed\} delayed/)
-  assert.match(page, /\{counts\.stale\} stale/)
+check('the header counts live / delayed / stale as Inside / Outside / Stale / No data chips', () => {
+  // Badges read Inside / Outside / Stale / No data (screenshot spec) but the
+  // COUNTS behind them must still be the freshness buckets from the ONE
+  // config — a two-day-old fix can never land in the "Inside" number.
+  assert.match(page, /\{counts\.live\} Inside/)
+  assert.match(page, /\{counts\.delayed\} Outside/)
+  assert.match(page, /\{counts\.stale\} Stale/)
+  assert.match(page, /\{counts\.none\} No data/)
   assert.match(page, /freshness-counts/)
+  // The counts come from countFreshness over the whole row set, so every row
+  // lands in exactly one bucket (see the countFreshness tests in section 3).
+  assert.match(page, /countFreshness\(rows, elapsed\)/)
 })
 check('a stale fix is grey + "Last known", never a green Inside pill', () => {
   assert.match(page, /Last known/)

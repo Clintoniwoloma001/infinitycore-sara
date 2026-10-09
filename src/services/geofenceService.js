@@ -104,6 +104,21 @@ function toFiniteNumber(value) {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * Branch display text, hardened against the data fault behind the "NULL"
+ * branch names on the Add-fence list: a null/blank name — or the four
+ * literal characters "null" that a stringifying client or import writes
+ * into the column — falls back to "Unnamed branch" instead of rendering
+ * the word "null" next to a real branch.
+ */
+export function branchDisplayName(row) {
+  const raw = row?.branch_name ?? row?.name ?? null
+  if (raw == null) return 'Unnamed branch'
+  const text = String(raw).trim()
+  if (text === '' || text.toLowerCase() === 'null') return 'Unnamed branch'
+  return text
+}
+
 /** list_branch_geofences / save_branch_geofence / … -> normalised rows. */
 export function parseGeofenceList(payload) {
   const rows = Array.isArray(payload) ? payload : payload?.geofences
@@ -114,7 +129,7 @@ export function parseGeofenceList(payload) {
     .map((row) => ({
       id: row.id ?? null,
       branchId: row.branch_id,
-      branchName: row.branch_name || 'Unnamed branch',
+      branchName: branchDisplayName(row),
       branchCode: row.branch_code || '',
       latitude: toFiniteNumber(row.latitude ?? row.center_lat),
       longitude: toFiniteNumber(row.longitude ?? row.center_lng),
@@ -217,6 +232,11 @@ export function createFenceGeometry({ lat, lng, radiusMeters = DEFAULT_RADIUS_ME
     pin: { ...pin },
     circle: { ...pin },
     radiusMeters: Number.isFinite(radius) ? radius : DEFAULT_RADIUS_METERS,
+    // Live GPS fix (as held on the client) + whether the live stream is running.
+    // The circle is NOT moved by GPS: the admin anchors it, the green marker
+    // walks with the user (walk-locked mode).
+    myPosition: null,
+    locating: false,
   }
 }
 
@@ -243,6 +263,21 @@ export function fenceGeometryReducer(state, action) {
       const radius = Number(action.meters)
       if (!Number.isFinite(radius)) return state
       return { ...state, radiusMeters: radius }
+    }
+    case 'set-my-position': {
+      const myPosition = toCentre(action.center)
+      if (!myPosition) return state
+      // Placing the fence ON the user's location: snap the circle onto them
+      // so the fence starts exactly where the admin is.
+      return {
+        ...state,
+        myPosition,
+        locating: false,
+        circle: state.locked ? { ...myPosition } : (state.circle || myPosition),
+      }
+    }
+    case 'toggle-locating': {
+      return { ...state, locating: !state.locating }
     }
     default:
       return state
