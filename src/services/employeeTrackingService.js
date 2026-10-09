@@ -57,7 +57,14 @@ export const trackingService = {
     })
 
     const result = unwrap(data, error, [])
-    const normalized = Array.isArray(result) ? result : (result?.positions || [])
+    // PostgREST returns a bare ARRAY for `returns table` functions, so
+    // `result` is normally the rows. The object branch accepts EITHER key a
+    // future/other endpoint might wrap rows in — `employees` (the name this
+    // RPC family uses) or a generic `positions` — so Live Positions can never
+    // silently render an empty table from a shape mismatch again.
+    const normalized = Array.isArray(result)
+      ? result
+      : (result?.employees ?? result?.positions ?? [])
 
     if (!Array.isArray(normalized)) {
       throw new Error(
@@ -71,7 +78,18 @@ export const trackingService = {
       latitude: item.latitude == null ? null : Number(item.latitude),
       longitude: item.longitude == null ? null : Number(item.longitude),
       recorded_at: item.recorded_at || null,
-      full_name: item.full_name || 'Staff Member',
+      // The server (v3 + name-fallback migration) guarantees a non-blank
+      // full_name via its COALESCE chain. The client keeps a defensive chain
+      // of its own — employee number, then position — and only as a last
+      // resort shows the employee id, so the generic 'Staff Member' placeholder
+      // can never again mask a real person across every row.
+      full_name: item.full_name
+        || item.employee_name
+        || item.name
+        || item.employee_number
+        || item.position
+        || item.employee_id
+        || 'Staff Member',
       branch_name: item.branch_name || 'Head Office',
       // Fields the UI already consumed from v2
       inside_geofence: item.inside_geofence,
