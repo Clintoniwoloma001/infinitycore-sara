@@ -70,6 +70,25 @@ export default function Interviews() {
     checkZoom().then(r => setZoomConnected(r.connected)).catch(() => setZoomConnected(false))
   }, [])
 
+  // Listen for OAuth completion from the popup window.
+  useEffect(() => {
+    const onMessage = (event) => {
+      if (event.data?.type !== 'oauth_complete') return
+      if (event.data.provider === 'google_calendar') {
+        if (event.data.success) {
+          setGoogleConnected(true)
+          setFormError('')
+        } else {
+          setFormError(event.data.error || 'Google authorization failed. Please try again.')
+        }
+      } else if (event.data.provider === 'zoom') {
+        setZoomConnected(event.data.success === true)
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
 
   const onCandidateChange = (e) => {

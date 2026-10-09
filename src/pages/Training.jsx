@@ -326,6 +326,20 @@ function SessionMeetingPanel({ session, onClose, onRefresh, userId }) {
   const hasMeeting = Boolean(session.meeting_url)
   const connectionFailed = /OAuth|not connected|not_configured/i.test(error || '')
 
+  // Listen for OAuth completion from the popup window.
+  useEffect(() => {
+    const onMessage = (event) => {
+      if (event.data?.type !== 'oauth_complete' || event.data.provider !== 'google_calendar') return
+      if (event.data.success) {
+        setError(''); setNotice('Google account connected. Click Generate Meeting Link to create the meeting.')
+      } else {
+        setError(event.data.error || 'Google authorization failed. Please try again.')
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
   const connectGoogle = () => {
     if (!userId) {
       setError('You must be signed in to connect your Google account.')
@@ -593,6 +607,21 @@ function CreateTraining({ form, set, employees, venues, options, busy, onSubmit,
   const [manualLinkInput, setManualLinkInput] = useState('')
   const [meetingManual, setMeetingManual] = useState(false)
   const connectionFailed = /OAuth|not connected|not_configured/i.test(meetingError || '')
+
+  // Listen for OAuth completion from the popup window.
+  useEffect(() => {
+    const onMessage = (event) => {
+      if (event.data?.type !== 'oauth_complete' || event.data.provider !== 'google_calendar') return
+      if (event.data.success) {
+        setMeetingError(''); setMeetingOk('Google account connected. Click Generate Meeting Link again to create the meeting.')
+      } else {
+        setMeetingError(event.data.error || 'Google authorization failed. Please try again.')
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
   const [aiBusy, setAiBusy] = useState(false)
   const [aiError, setAiError] = useState('')
   const [aiOk, setAiOk] = useState('')

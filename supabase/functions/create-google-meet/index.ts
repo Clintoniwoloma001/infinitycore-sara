@@ -54,9 +54,23 @@ Deno.serve(async (req) => {
   const body = await req.json()
   const { summary, description, startDateTime, endDateTime, attendeeEmail, interviewId } = body
 
-  if (!summary || !startDateTime) return json({ error: 'summary_and_start_required' }, 400)
-
   const admin = createClient(supabaseUrl, serviceRoleKey)
+
+  // _check: lightweight connection-status probe — no event is created.
+  if (body._check) {
+    const { data: conn, error: connError } = await admin
+      .from('integration_connections')
+      .select('id, connected, token_expires_at')
+      .eq('user_id', user.id)
+      .eq('provider', 'google_calendar')
+      .eq('connected', true)
+      .single()
+
+    if (connError || !conn) return json({ status: 'not_connected' }, 200)
+    return json({ status: 'connected' }, 200)
+  }
+
+  if (!summary || !startDateTime) return json({ error: 'summary_and_start_required' }, 400)
 
   // Get the user's Google OAuth tokens
   const { data: conn, error: connError } = await admin
