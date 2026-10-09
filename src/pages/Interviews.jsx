@@ -70,6 +70,37 @@ export default function Interviews() {
     checkZoom().then(r => setZoomConnected(r.connected)).catch(() => setZoomConnected(false))
   }, [])
 
+  // Listen for OAuth completion from the popup window. After receiving the
+  // message, re-verify the connection server-side so the UI reflects the
+  // actual stored token — not just the popup's claim.
+  useEffect(() => {
+    const onMessage = async (event) => {
+      if (event.data?.type !== 'oauth_complete') return
+      if (event.data.provider === 'google_calendar') {
+        if (event.data.success) {
+          setFormError('')
+          // Re-verify the connection instead of trusting the popup alone.
+          const r = await checkGoogleCalendar().catch(() => null)
+          setGoogleConnected(r?.connected === true)
+          if (!r?.connected) {
+            setFormError('Google authorization completed but the connection could not be verified. Ensure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set as Supabase secrets, then try again.')
+          }
+        } else {
+          setFormError(event.data.error || 'Google authorization failed. Please try again.')
+        }
+      } else if (event.data.provider === 'zoom') {
+        if (event.data.success) {
+          const r = await checkZoom().catch(() => null)
+          setZoomConnected(r?.connected === true)
+        } else {
+          setZoomConnected(false)
+        }
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
 
   const onCandidateChange = (e) => {
@@ -98,7 +129,26 @@ export default function Interviews() {
   const handleConnectGoogle = () => {
     const { url, error } = connectGoogleCalendar(user?.id)
     if (error) { setFormError(error); return }
-    if (url) window.open(url, '_blank', 'width=500,height=600')
+    if (!url) return
+    const popup = window.open(url, '_blank', 'width=500,height=600')
+    // Fallback: if postMessage doesn't fire (popup blocker, cross-origin
+    // restrictions), poll for popup closure and re-check the connection.
+    if (popup) {
+      const poll = setInterval(async () => {
+        if (popup.closed) {
+          clearInterval(poll)
+          // Only re-check if we haven't already been updated by postMessage.
+          setGoogleConnected((prev) => {
+            if (prev) return prev
+            checkGoogleCalendar()
+              .then((r) => setGoogleConnected(r.connected))
+              .catch(() => {})
+            return prev
+          })
+        }
+      }, 500)
+      setTimeout(() => clearInterval(poll), 120000) // safety timeout
+    }
   }
 
   const handleConnectZoom = () => {

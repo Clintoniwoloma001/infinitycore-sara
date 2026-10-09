@@ -387,6 +387,23 @@ export const attendanceService = {
     })
     if (error) throw new Error(normalizeAttendanceError(error.message))
     logAction({ action: 'ATTENDANCE_CLOCK_IN', entityType: 'AttendanceRecord', entityId: data.attendance_id, details: 'Clock in via geofence RPC' })
+    // Opportunistic location ping: submit the same GPS coordinates to the
+    // tracking pipeline so Live Positions and movement history reflect the
+    // clock-in location. Fire-and-forget — attendance success is never
+    // blocked by a tracking ping failure.
+    try {
+      await supabase.rpc('record_employee_location', {
+        p_lat: parseFloat(coords?.lat ?? 0) || 0,
+        p_lng: parseFloat(coords?.lng ?? 0) || 0,
+        p_accuracy: coords?.accuracy != null ? parseFloat(coords.accuracy) : null,
+        p_recorded_at: null,
+        p_source: 'attendance',
+        p_source_detail: 'clock_in',
+        p_device_id: null,
+        p_device_fingerprint: String(deviceFingerprint || ''),
+        p_attendance_record_id: data?.attendance_id || null,
+      })
+    } catch { /* best-effort — attendance already succeeded */ }
     // Send notification
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -425,6 +442,23 @@ export const attendanceService = {
     })
     if (error) throw new Error(normalizeAttendanceError(error.message))
     logAction({ action: 'ATTENDANCE_CLOCK_OUT', entityType: 'AttendanceRecord', entityId: attendanceId, details: 'Clock out via geofence RPC' })
+    // Opportunistic location ping: submit the same GPS coordinates to the
+    // tracking pipeline so Live Positions and movement history reflect the
+    // clock-out location. Fire-and-forget — attendance success is never
+    // blocked by a tracking ping failure.
+    try {
+      await supabase.rpc('record_employee_location', {
+        p_lat: parseFloat(coords?.lat ?? 0) || 0,
+        p_lng: parseFloat(coords?.lng ?? 0) || 0,
+        p_accuracy: coords?.accuracy != null ? parseFloat(coords.accuracy) : null,
+        p_recorded_at: null,
+        p_source: 'attendance',
+        p_source_detail: 'clock_out',
+        p_device_id: null,
+        p_device_fingerprint: String(deviceFingerprint || ''),
+        p_attendance_record_id: attendanceId,
+      })
+    } catch { /* best-effort — attendance already succeeded */ }
     // Send notification
     try {
       const { data: { user } } = await supabase.auth.getUser()

@@ -1,5 +1,5 @@
 import React from 'react'
-import { MapPinned } from 'lucide-react'
+import { MapPin } from 'lucide-react'
 import Modal from './Modal'
 import { LoadingState, ErrorState } from '../PageStates'
 import { formatRadius } from '../../services/geofenceService'
@@ -52,7 +52,7 @@ export default function AddFenceDialog({ open, branches, loading, error, onRetry
                     className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-slate-700/60"
                   >
                     <span className="flex items-center gap-3 min-w-0">
-                      <MapPinned className="w-4 h-4 flex-shrink-0 text-[#009944]" />
+                      <MapPin className="w-4 h-4 flex-shrink-0 text-[#009944]" />
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-medium text-slate-800 dark:text-slate-100">
                           {branch.branch_name}

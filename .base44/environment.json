@@ -12,6 +12,11 @@
       "name": "VITE_SUPABASE_ANON_KEY",
       "description": "Supabase anon/public key (Dashboard → Project Settings → API → Project API keys)",
       "requiredAtBoot": true
+    },
+    {
+      "name": "VITE_GOOGLE_CLIENT_ID",
+      "description": "Google OAuth client ID for Google Meet integration (Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID). Required for the Interview and Training Google Meet flows.",
+      "requiredAtBoot": false
     }
   ]
 }

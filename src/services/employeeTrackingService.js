@@ -37,7 +37,7 @@ export const trackingService = {
    * "points in window" signal used for activity display; it never decides
    * whether a stale point is shown as live - `is_stale` does that.
    */
-  async livePositions({ withinMinutes = 60, department = null, branchId = null } = {}) {
+  async livePositions({ withinMinutes = 60, department = null, branchId = null, position = null } = {}) {
     const { data, error } = await supabase.rpc('list_tracked_employees', {
       p_within_minutes: withinMinutes,
       p_department: department,
@@ -45,7 +45,7 @@ export const trackingService = {
     })
 
     const rawData = unwrap(data, error, [])
-    const normalized = Array.isArray(rawData) ? rawData : (rawData?.positions || [])
+    const normalized = Array.isArray(rawData) ? rawData : (rawData?.employees || rawData?.positions || [])
 
     if (!Array.isArray(normalized)) {
       throw new Error(
@@ -53,7 +53,7 @@ export const trackingService = {
       )
     }
 
-    return normalized.map(item => ({
+    const mapped = normalized.map(item => ({
       id: item.id || item.employee_id,
       employee_id: item.employee_id,
       latitude: Number(item.latitude || 0),
@@ -63,6 +63,7 @@ export const trackingService = {
       branch_name: item.branch_name || item.employee?.branch?.name || 'Head Office',
       // Preserve existing flags used by the UI
       inside_geofence: item.inside_geofence,
+      is_stale: item.is_stale,
       location_label: item.location_label,
       nearest_location_name: item.nearest_location_name,
       nearest_distance: item.nearest_distance,
@@ -73,7 +74,59 @@ export const trackingService = {
       employee_number: item.employee_number,
       position: item.position,
       department: item.department,
+      branch_id: item.branch_id,
     }))
+
+    // Position filtering is client-side because the RPC does not support it.
+    if (position) {
+      return mapped.filter(item =>
+        item.position && item.position.toLowerCase() === position.toLowerCase()
+      )
+    }
+
+    return mapped
+  },
+
+  /** Distinct departments, branches and positions for filter dropdowns. */
+  async filterOptions() {
+    const { data, error } = await supabase.rpc('get_dashboard_filter_options', {
+      p_branch_id: null,
+      p_department: null,
+      p_area: null,
+    })
+    if (error) return { departments: [], branches: [], positions: [] }
+
+    const departments = (data?.departments || [])
+      .map(d => d.name || d)
+      .filter(Boolean)
+    const branches = (data?.branches || [])
+      .map(b => ({ id: b.id, name: b.branch_name || b.name }))
+      .filter(b => b.id && b.name)
+
+    // Positions: query employees for distinct non-null positions.
+    let positions = []
+    try {
+      const { data: empData } = await supabase
+        .from('employees')
+        .select('position')
+        .not('position', 'is', null)
+        .neq('position', '')
+        .eq('is_archived', false)
+        .order('position')
+        .limit(500)
+      if (empData) {
+        const seen = new Set()
+        for (const row of empData) {
+          const pos = (row.position || '').trim()
+          if (pos && !seen.has(pos.toLowerCase())) {
+            seen.add(pos.toLowerCase())
+            positions.push(pos)
+          }
+        }
+      }
+    } catch { /* positions are optional */ }
+
+    return { departments, branches, positions }
   },
 
   /**
