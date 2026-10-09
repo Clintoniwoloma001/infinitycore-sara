@@ -45,27 +45,52 @@ export async function checkZoom() {
   }
 }
 
-// Initiate Google OAuth flow
-export function connectGoogleCalendar(userId) {
-  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
-  if (!clientId) return { url: null, error: 'VITE_GOOGLE_CLIENT_ID not configured' }
+// Start a provider OAuth flow.
+//
+// The consent URL is minted by the oauth-callback Edge Function (?mode=start),
+// which proves the caller's identity from their session JWT and returns a
+// signed, expiring state. The browser never builds the state itself and never
+// puts a token in a URL: the JWT travels only in an Authorization header on an
+// authenticated fetch.
+async function startOAuthPopup(provider, label) {
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) return { ok: false, error: `You must be signed in to connect ${label}.` }
 
-  const redirectUri = encodeURIComponent(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/oauth-callback?provider=google_calendar`)
-  const scope = encodeURIComponent('https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email')
-  const state = `google_calendar:${userId}`
-  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent&state=${state}`
-  return { url: authUrl }
+  const popup = window.open('about:blank', 'infinity-oauth', 'width=520,height=680')
+  if (!popup) return { ok: false, error: 'Your browser blocked the popup. Allow popups and retry.' }
+
+  try {
+    const res = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/oauth-callback?mode=start&provider=${provider}&origin=${encodeURIComponent(window.location.origin)}`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+        },
+      },
+    )
+    const body = await res.json().catch(() => null)
+    if (!res.ok || !body?.url) {
+      popup.close()
+      return { ok: false, error: body?.error || `Could not start the ${label} connection.` }
+    }
+    popup.location.replace(body.url)
+    return { ok: true, popup }
+  } catch (e) {
+    popup.close()
+    return { ok: false, error: e?.message || `Could not start the ${label} connection.` }
+  }
+}
+
+// Initiate Google OAuth flow
+export function connectGoogleCalendar() {
+  return startOAuthPopup('google_calendar', 'Google Calendar')
 }
 
 // Initiate Zoom OAuth flow
-export function connectZoom(userId) {
-  const clientId = import.meta.env.VITE_ZOOM_CLIENT_ID
-  if (!clientId) return { url: null, error: 'VITE_ZOOM_CLIENT_ID not configured' }
-
-  const redirectUri = encodeURIComponent(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/oauth-callback?provider=zoom`)
-  const state = `zoom:${userId}`
-  const authUrl = `https://zoom.us/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&state=${state}`
-  return { url: authUrl }
+export function connectZoom() {
+  return startOAuthPopup('zoom', 'Zoom')
 }
 
 // Create a Google Meet via Edge Function

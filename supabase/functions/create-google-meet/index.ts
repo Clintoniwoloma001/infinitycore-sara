@@ -51,12 +51,27 @@ Deno.serve(async (req) => {
   const { data: { user }, error: authError } = await userClient.auth.getUser()
   if (authError || !user) return json({ error: 'unauthorized' }, 401)
 
-  const body = await req.json()
-  const { summary, description, startDateTime, endDateTime, attendeeEmail, interviewId } = body
-
-  if (!summary || !startDateTime) return json({ error: 'summary_and_start_required' }, 400)
+  const body = await req.json().catch(() => ({}))
+  const { summary, description, startDateTime, endDateTime, attendeeEmail, interviewId } = body || {}
 
   const admin = createClient(supabaseUrl, serviceRoleKey)
+
+  // Lightweight connection probe used by the Schedule Interview form to decide
+  // whether to offer "Connect" or to create the event straight away.
+  if (body?._check === true) {
+    const { data: conn } = await admin
+      .from('integration_connections')
+      .select('id, token_expires_at')
+      .eq('user_id', user.id)
+      .eq('provider', 'google_calendar')
+      .eq('connected', true)
+      .maybeSingle()
+
+    if (!conn) return json({ status: 'not_connected', connected: false }, 200)
+    return json({ status: 'connected', connected: true, expires_at: conn.token_expires_at }, 200)
+  }
+
+  if (!summary || !startDateTime) return json({ error: 'summary_and_start_required' }, 400)
 
   // Get the user's Google OAuth tokens
   const { data: conn, error: connError } = await admin

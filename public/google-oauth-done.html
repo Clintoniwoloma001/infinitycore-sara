@@ -1,0 +1,9 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Google connection</title>
+<p>Finishing the connection. You can close this window.</p>
+<script>
+ const p=new URLSearchParams(location.search);
+ try{ if(window.opener) window.opener.postMessage({type:'google-oauth',status:p.get('status')||'error',reason:p.get('reason')||''},location.origin);}catch(e){}
+ setTimeout(function(){window.close()},300);
+</script>

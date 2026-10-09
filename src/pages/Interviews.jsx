@@ -66,8 +66,27 @@ export default function Interviews() {
   useEffect(() => {
     hrService.listCandidates().then(setCandidates).catch(() => {})
     // Check integration status
-    checkGoogleCalendar().then(r => setGoogleConnected(r.connected)).catch(() => setGoogleConnected(false))
+    refreshGoogleStatus()
     checkZoom().then(r => setZoomConnected(r.connected)).catch(() => setZoomConnected(false))
+  }, [])
+
+  // The oauth-callback Edge Function always finishes on public/google-oauth-done.html,
+  // which posts the result back to this window and closes itself.
+  useEffect(() => {
+    const onOAuthMessage = (event) => {
+      if (event.origin !== window.location.origin) return
+      if (event.data?.type !== 'google-oauth') return
+
+      if (event.data.status === 'ok') {
+        setFormError('')
+        refreshGoogleStatus()
+      } else {
+        const reason = event.data.reason ? ` (${event.data.reason})` : ''
+        setFormError(`Google Calendar could not be connected${reason}. Please try again.`)
+      }
+    }
+    window.addEventListener('message', onOAuthMessage)
+    return () => window.removeEventListener('message', onOAuthMessage)
   }, [])
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
@@ -95,16 +114,22 @@ export default function Interviews() {
     }))
   }
 
-  const handleConnectGoogle = () => {
-    const { url, error } = connectGoogleCalendar(user?.id)
-    if (error) { setFormError(error); return }
-    if (url) window.open(url, '_blank', 'width=500,height=600')
+  const refreshGoogleStatus = () => {
+    checkGoogleCalendar()
+      .then(r => setGoogleConnected(r.connected))
+      .catch(() => setGoogleConnected(false))
   }
 
-  const handleConnectZoom = () => {
-    const { url, error } = connectZoom(user?.id)
-    if (error) { setFormError(error); return }
-    if (url) window.open(url, '_blank', 'width=500,height=600')
+  const handleConnectGoogle = async () => {
+    setFormError('')
+    const { ok, error } = await connectGoogleCalendar()
+    if (!ok && error) setFormError(error)
+  }
+
+  const handleConnectZoom = async () => {
+    setFormError('')
+    const { ok, error } = await connectZoom()
+    if (!ok && error) setFormError(error)
   }
 
   // Create a manual candidate then auto-select it for the interview.
