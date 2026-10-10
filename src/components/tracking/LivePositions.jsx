@@ -553,7 +553,7 @@ function MobileRows({ rows, elapsed, onSelect }) {
  * makes it obvious when a pick is hiding rows. Nothing here decides freshness
  * or inside/outside — those verdicts stay with the server.
  */
-function ScopeFilters({ options, scope, onChange, active, total, shown }) {
+function ScopeFilters({ options, scope, onChange, active, total, shown, label }) {
   const set = (key) => (event) => onChange((prev) => ({ ...prev, [key]: event.target.value }))
   const selectCls = 'h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-sm text-slate-700 focus:border-[#009944] focus:outline-none focus:ring-2 focus:ring-[#009944]/30'
   return (
