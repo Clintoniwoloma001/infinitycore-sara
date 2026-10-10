@@ -406,4 +406,52 @@ check('a centre with missing coordinates cannot enter the state machine', () => 
   assert.throws(() => createFenceGeometry({ lat: null, lng: null }), /finite lat\/lng/)
 })
 
+// ---------------------------------------------------------------------------
+console.log('--- GPS must move the fence, not just the green dot ---')
+// ---------------------------------------------------------------------------
+
+// A GPS fix somewhere other than the branch. "Use my location" has to PLOT THE
+// FENCE HERE, so the state machine (and with it fenceCircleCentre) must move
+// to it in the default locked mode — which renders the circle from `pin`.
+const GPS = { lat: 6.4558, lng: 3.6015 }
+
+check('set-my-position snaps the fence circle onto the fix while locked', () => {
+  const gps = fenceGeometryReducer(start, { type: 'set-my-position', center: GPS })
+  assert.deepEqual(gps.myPosition, GPS)
+  assert.deepEqual(gps.pin, GPS, 'while locked the pin owns the circle, so it must move with it')
+  assert.deepEqual(fenceCircleCentre(gps), GPS, 'the fence must render around the operator')
+})
+
+check('set-my-position keeps the pin while unlocked (the circle snaps only)', () => {
+  const unlocked = fenceGeometryReducer(start, { type: 'toggle-lock' })
+  const gps = fenceGeometryReducer(unlocked, { type: 'set-my-position', center: GPS })
+  assert.deepEqual(gps.myPosition, GPS)
+  assert.deepEqual(gps.pin, start.pin, 'unlocked: the pin keeps marking the test location')
+  assert.deepEqual(gps.circle, GPS)
+  assert.deepEqual(fenceCircleCentre(gps), GPS)
+})
+
+check('a jammed/absent fix is refused, never coerced to null island', () => {
+  const gps = fenceGeometryReducer(start, { type: 'set-my-position', center: { lat: null, lng: null } })
+  assert.deepEqual(gps.myPosition, start.myPosition)
+  assert.deepEqual(fenceCircleCentre(gps), start.pin)
+})
+
+check('clear-my-position removes the green marker and leaves the fence put', () => {
+  const gps = fenceGeometryReducer(start, { type: 'set-my-position', center: GPS })
+  const cleared = fenceGeometryReducer(gps, { type: 'clear-my-position' })
+  assert.equal(cleared.myPosition, null)
+  assert.equal(cleared.locating, false)
+  assert.deepEqual(cleared.pin, GPS, 'the anchored fence does not move when GPS stops')
+  assert.deepEqual(fenceCircleCentre(cleared), GPS)
+})
+
+check('a held fix from the Add-Fence dialog seeds through the same action', () => {
+  // GeofenceMapEditor's reducer initialiser dishes the held fix through
+  // set-my-position rather than rewriting centres by hand, so this path is
+  // the one that produces the opening map of a newly added fence.
+  const opened = fenceGeometryReducer(start, { type: 'set-my-position', center: GPS })
+  assert.deepEqual(fenceCircleCentre(opened), GPS)
+})
+
 console.log(`\nAll ${n} checks passed.`)

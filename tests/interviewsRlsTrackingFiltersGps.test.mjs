@@ -205,6 +205,7 @@ const geoPage = read('src/pages/GeofenceSettings.jsx')
 const addDialog = read('src/components/geofences/AddFenceDialog.jsx')
 const editor = read('src/components/geofences/GeofenceMapEditor.jsx')
 const tester = read('src/components/geofences/CoverageTester.jsx')
+const geoServiceSource = read('src/services/geofenceService.js')
 
 check('one shared GPS module bounds the request and forbids a cached fix', () => {
   assert.match(gpsLib, /maximumAge: 0/)
@@ -270,6 +271,43 @@ check('the coverage tester uses the same acquisition path', () => {
   // The local copy of the error mapper is gone: one message per reason.
   const local = tester.indexOf('function gpsErrorMessage')
   assert.equal(local, -1, 'the tester must import the shared mapper, not define its own')
+})
+check('a fix moves the FENCE, not only the green dot (locked is the default)', () => {
+  // LOCKED NOTE THE CIRCLE RENDERS FROM `pin`, so a locked set-my-position
+  // must snap the pin or nothing on screen moves at all.
+  assert.match(geoServiceSource, /case 'set-my-position'/)
+  const action = geoServiceSource.slice(
+    geoServiceSource.indexOf("case 'set-my-position'"),
+    geoServiceSource.indexOf("case 'toggle-locating'"),
+  )
+  assert.match(action, /pin: state\.locked \? \{ \.\.\.myPosition \} : state\.pin/)
+  assert.match(action, /circle: \{ \.\.\.myPosition \}/)
+})
+check('the GPS marker only exists while a fix is held', () => {
+  // It used to be created on the pin, so a marker claiming "you are here" was
+  // on screen with no fix at all.
+  assert.ok(!/const myMarker = L\.marker\(\[myLat, myLng\]/.test(editor))
+  assert.ok(editor.includes("myMarker.setLatLng([state.myPosition.lat, state.myPosition.lng]).addTo(map)"),
+    'the marker is added only when a fix is held')
+  assert.ok(editor.includes('map.hasLayer(myMarker)') && editor.includes('map.removeLayer(myMarker)'),
+    'the marker is removed again — no marker with no fix')
+})
+check('Stop is real, and never moves the fence it was anchoring', () => {
+  // The component dispatches the new action...
+  assert.match(editor, /dispatch\(\{ type: 'clear-my-position' \}\)/)
+  // ...the state machine implements it...
+  assert.match(geoServiceSource, /case 'clear-my-position'/)
+  const clear = geoServiceSource.slice(
+    geoServiceSource.indexOf("case 'clear-my-position'"),
+    geoServiceSource.indexOf('default:'),
+  )
+  assert.match(clear, /myPosition: null/)
+  assert.match(clear, /locating: false/)
+  // ...and no null centre is ever pushed into set-my-position any more.
+  assert.ok(!/set-my-position', center: \{ lat: null, lng: null \}/.test(editor))
+})
+check('the map follows a fix that lands off-screen', () => {
+  assert.match(editor, /mapRef\.current\?\.panTo\(/)
 })
 
 // ===========================================================================

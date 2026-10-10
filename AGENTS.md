@@ -894,6 +894,60 @@ must be applied in Supabase SQL Editor for Phases 2/3, and the edge functions
   fixed gates resolve the geofence and return the clear not-found error. `npm run build`
   passes.
 
+## Phase — Geofence "Use my location" actually places the fence on the operator
+- No SQL migration — frontend only.
+- Root cause of "the buttons can't pick GPS": three stacked defects.
+  1. `set-my-position` moved only `myPosition` (+ `circle`), but
+     `fenceCircleCentre()` renders from `pin` while the editor is **locked** (the
+     default). The green dot walked to the GPS fix and the fence stayed on the old
+     branch — invisible to the operator, and impossible to chair the reason.
+     Now a locked `set-my-position` snaps `pin` with it (the pin owns the circle);
+     unlocked, only the circle snaps because the handle owns it.
+  2. The green "your live location" marker was created ON the pin and only ever
+     had `setLatLng` called on it, so it existed with no fix at all (claiming the
+     operator stands on the fence centre) and survived `Stop`. It is now added only
+     while a fix is held, and removed by the `Stop` button.
+  3. `stopMyLocation()` dispatched `set-my-position` with a **null** centre —
+     `toCentre` refused that, so `Stop` was a no-op. New `clear-my-position` action.
+- `src/lib/geolocation.js` is now the single GPS surface (`requestGpsPosition`,
+  `positionToCentre`, `gpsErrorMessage`): a promise wrapper with
+  `maximumAge: 0` (a cached fix is useless for placing a fence) and a 15 s bound,
+  plus one actionable message per GeolocationPositionError code — denied,
+  unavailable, timeout — and the non-HTTPS case, which is the browser's refusal
+  and not the operator's fault. Every "Use my location" button uses it:
+  `AddFenceDialog`, `GeofenceMapEditor`, `CoverageTester` and
+  `GeofenceSettings` (which no longer calls the raw API and drops the error).
+- `AddFenceDialog`: the button rendered only when `myPosition && onUseMyLocation`
+  — a first fix could never be requested there. It is always rendered now, with a
+  "Finding you…" busy state and the failure reason inline.
+- `GeofenceSettings` hands the captured fix to the editor through
+  `initialMyPosition` (it was accepted as a prop but never passed, so the fix was
+  read via an out-of-scope `toCentre()` — a latent ReferenceError on the first
+  held fix). The reducer's init function dishes the held fix through
+  `set-my-position`, and the pair is cleared on cancel/save.
+- After a fix the map pans to it once (`panTo`, zoom untouched) so a fix outside
+  the viewport is SEEN, not just recorded; continuous re-centring would fight an
+  operator dragging the pin.
+- Also fixed in the same pass: `hr_interviews` INSERT refused `super_admin`
+  ("new row violates row-level security policy for table hr_interviews") — the
+  policy listed only admin/head_of_human_resources/hr_officer while SELECT and
+  UPDATE allowed super_admin. Migration
+  `supabase/migrations/20261110000004_hr_interviews_insert_super_admin.sql`
+  re-issues that one policy (additive, idempotent, transaction-wrapped) and
+  `hrService.scheduleInterview()` additionally falls back to the guarded
+  `hr_schedule_recruitment_interview` RPC on a 42501 so the web keeps working
+  before the SQL is applied.
+- Tests: `npm run test:geofence-service` (new "GPS must move the fence, not just
+  the green dot" section: locked snap, unlocked handle, junk fix refused,
+  clear-marker, held-fix seeding) and
+  `npm run test:interviews-tracking-gps` —
+  `tests/interviewsRlsTrackingFiltersGps.test.mjs` (migration + RLS fallback +
+  the GPS acquisition wiring). Verified in a real Chromium against the real
+  components with a stubbed `navigator.geolocation`: the fence circle renders
+  0.6 px from the fix at 150 m and on screen, a denied fix leaves the fence on
+  the branch and explains what to allow, and a non-HTTPS origin says so.
+  `npm run build` passes.
+
 ## Phase — Granular Access & Privileges (centralized authorization mirror)
 - Replaces ad-hoc UI-level role checks with a single, audited, granular
   authorization layer layered ON TOP of the existing RBAC. One deliverable —

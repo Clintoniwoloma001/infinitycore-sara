@@ -269,12 +269,26 @@ export function fenceGeometryReducer(state, action) {
       if (!myPosition) return state
       // Placing the fence ON the user's location: snap the circle onto them
       // so the fence starts exactly where the admin is.
+      //
+      // WHILE LOCKED THE CIRCLE RENDERS FROM `pin` (fenceCircleCentre), so
+      // moving only `circle` moved NOTHING on screen — the green dot walked to
+      // the GPS fix and the fence stayed on the old branch, which is exactly
+      // what "Use my location" must never do. While locked the pin therefore
+      // snaps with it (pin owns the circle). Unlocked, the handle owns the
+      // circle and the pin keeps marking the test location, so only the
+      // circle is snapped.
       return {
         ...state,
         myPosition,
         locating: false,
-        circle: state.locked ? { ...myPosition } : (state.circle || myPosition),
+        pin: state.locked ? { ...myPosition } : state.pin,
+        circle: { ...myPosition },
       }
+    }
+    case 'clear-my-position': {
+      // "Stop" must actually stop: the green marker leaves the map. The fence
+      // itself is untouched — it was anchored by the admin, not by the GPS.
+      return { ...state, myPosition: null, locating: false }
     }
     case 'toggle-locating': {
       return { ...state, locating: !state.locating }

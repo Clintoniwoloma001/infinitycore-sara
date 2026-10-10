@@ -83,9 +83,14 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
     setLocationError(null)
     try {
       const position = await requestGpsPosition()
+      const centre = positionToCentre(position)
       // Snap the fence circle onto the user's location so the fence starts
       // exactly where the admin is, and clear any previous error.
-      dispatch({ type: 'set-my-position', center: positionToCentre(position) })
+      dispatch({ type: 'set-my-position', center: centre })
+      // A fix outside the current viewport must be SEEN, not just recorded:
+      // pan once to it (zoom untouched). Continuous re-centring would fight an
+      // operator who is dragging the pin at the same time.
+      mapRef.current?.panTo({ lat: centre.lat, lng: centre.lng }, { animate: true })
     } catch (err) {
       setLocationError(gpsErrorMessage(err))
     } finally {
@@ -94,7 +99,9 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
   }
 
   const stopMyLocation = () => {
-    dispatch({ type: 'set-my-position', center: { lat: null, lng: null } })
+    // 'clear-my-position' is the action that removes the green marker; sending
+    // a null centre here used to be a no-op, so "Stop" never stopped anything.
+    dispatch({ type: 'clear-my-position' })
     setLocationError(null)
   }
 
@@ -148,12 +155,11 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
       dispatch({ type: 'circle-move', center: { lat: ll.lat, lng: ll.lng } })
     })
 
-    // The green "your live position" marker. It renders on the branch's stored
-    // centre until the admin taps "Use my location", then it follows the
-    // device fix so the fence circle can be placed around the user.
-    const myLat = start.myPosition?.lat ?? state.pin.lat
-    const myLng = start.myPosition?.lng ?? state.pin.lng
-    const myMarker = L.marker([myLat, myLng], {
+    // The green "your live position" marker. It only exists while a real fix is
+    // held: parked on the pin before a fix arrives it would claim the operator
+    // is standing on the fence centre, which is exactly the lie this button
+    // exists to remove.
+    const myMarker = L.marker([0, 0], {
       icon: L.divIcon({
         className: 'gf-editor-my-position',
         html: '<span class="gf-editor-my-position__dot"></span>',
@@ -162,7 +168,10 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
       }),
       zIndexOffset: 800,
       title: 'Your live location',
-    }).addTo(map)
+    })
+    if (state.myPosition) {
+      myMarker.setLatLng([state.myPosition.lat, state.myPosition.lng]).addTo(map)
+    }
     myMarkerRef.current = myMarker
 
     map.fitBounds(circle.getBounds(), { padding: [40, 40], maxZoom: 17 })
@@ -207,7 +216,14 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
 
     const myMarker = myMarkerRef.current
     if (myMarker) {
-      myMarker.setLatLng([state.myPosition?.lat ?? state.pin.lat, state.myPosition?.lng ?? state.pin.lng])
+      if (state.myPosition) {
+        myMarker.setLatLng([state.myPosition.lat, state.myPosition.lng])
+        if (!map.hasLayer(myMarker)) map.addLayer(myMarker)
+      } else if (map.hasLayer(myMarker)) {
+        // "Stop" must take the marker off the map. Leaving it parked on the pin
+        // keeps telling the operator that the fence centre is where they stand.
+        map.removeLayer(myMarker)
+      }
     }
   }, [state])
 
