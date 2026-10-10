@@ -66,11 +66,10 @@ export default function Interviews() {
   useEffect(() => {
     hrService.listCandidates().then(setCandidates).catch(() => {})
     // Check integration status
-    refreshGoogleStatus()
+    checkGoogleCalendar().then(r => setGoogleConnected(r.connected)).catch(() => setGoogleConnected(false))
     checkZoom().then(r => setZoomConnected(r.connected)).catch(() => setZoomConnected(false))
   }, [])
 
-<<<<<<< HEAD
   // Listen for OAuth completion from the popup window. After receiving the
   // message, re-verify the connection server-side so the UI reflects the
   // actual stored token — not just the popup's claim.
@@ -100,25 +99,6 @@ export default function Interviews() {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-=======
-  // The oauth-callback Edge Function always finishes on public/google-oauth-done.html,
-  // which posts the result back to this window and closes itself.
-  useEffect(() => {
-    const onOAuthMessage = (event) => {
-      if (event.origin !== window.location.origin) return
-      if (event.data?.type !== 'google-oauth') return
-
-      if (event.data.status === 'ok') {
-        setFormError('')
-        refreshGoogleStatus()
-      } else {
-        const reason = event.data.reason ? ` (${event.data.reason})` : ''
-        setFormError(`Google Calendar could not be connected${reason}. Please try again.`)
-      }
-    }
-    window.addEventListener('message', onOAuthMessage)
-    return () => window.removeEventListener('message', onOAuthMessage)
->>>>>>> satellite/sara-meet
   }, [])
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
@@ -146,7 +126,6 @@ export default function Interviews() {
     }))
   }
 
-<<<<<<< HEAD
   const handleConnectGoogle = () => {
     const { url, error } = connectGoogleCalendar(user?.id)
     if (error) { setFormError(error); return }
@@ -170,24 +149,12 @@ export default function Interviews() {
       }, 500)
       setTimeout(() => clearInterval(poll), 120000) // safety timeout
     }
-=======
-  const refreshGoogleStatus = () => {
-    checkGoogleCalendar()
-      .then(r => setGoogleConnected(r.connected))
-      .catch(() => setGoogleConnected(false))
->>>>>>> satellite/sara-meet
   }
 
-  const handleConnectGoogle = async () => {
-    setFormError('')
-    const { ok, error } = await connectGoogleCalendar()
-    if (!ok && error) setFormError(error)
-  }
-
-  const handleConnectZoom = async () => {
-    setFormError('')
-    const { ok, error } = await connectZoom()
-    if (!ok && error) setFormError(error)
+  const handleConnectZoom = () => {
+    const { url, error } = connectZoom(user?.id)
+    if (error) { setFormError(error); return }
+    if (url) window.open(url, '_blank', 'width=500,height=600')
   }
 
   // Create a manual candidate then auto-select it for the interview.
