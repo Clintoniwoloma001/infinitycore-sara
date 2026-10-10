@@ -11,17 +11,14 @@ import { formatCurrencyValue, formatPercent } from './formatScorecard'
  *   data         jsonb from director_top_staff (has .best, .worst, .per_branch)
  *   onSelect     (employeeId) => drill into employee detail
  */
-export function DirectorBestWorstStaff({ data = {}, onSelect }) {
-  const best = data.best ?? []
-  const worst = data.worst ?? []
-  const perBranch = data.per_branch ?? {}
-
-  if (best.length === 0 && worst.length === 0) {
-    return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800">
-        <p className="text-sm text-slate-500">No staff with a complete score in the selected period.</p>
+function RankCard({ label, items, positive, onSelect }) {
+  return (
+    <div className={`overflow-hidden rounded-2xl border shadow-sm ${positive ? 'border-emerald-200 bg-emerald-50/40 dark:border-emerald-900 dark:bg-emerald-950/20' : 'border-rose-200 bg-rose-50/40 dark:border-rose-900 dark:bg-rose-950/20'}`}>
+      <div className={`flex items-center justify-between border-b px-4 py-3 ${positive ? 'border-emerald-200 dark:border-emerald-900' : 'border-rose-200 dark:border-rose-900'}`}>
+        <p className={`text-[10px] font-bold uppercase tracking-[.16em] ${positive ? 'text-emerald-700' : 'text-rose-700'}`}>{label}</p>
+        <span className="text-[11px] text-slate-500">{items.length} staff</span>
       </div>
-
+      <div className={`divide-y ${positive ? 'divide-emerald-100 dark:divide-emerald-900' : 'divide-rose-100 dark:divide-rose-900'}`}>
         {items.map((s, i) => (
           <button
             key={s.employee_id ?? s.id}
@@ -37,7 +34,10 @@ export function DirectorBestWorstStaff({ data = {}, onSelect }) {
             <div className="text-right text-sm font-bold text-slate-900 dark:text-white">
               {s.overall_score == null ? '—' : Number(s.overall_score).toFixed(1)}
             </div>
-            <span className="inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[.08em] text-white" style={{ backgroundColor: (s.grade_hex && s.grade_hex !== 'null') ? s.grade_hex : positive ? '#009944' : '#dc2626' }}>
+            <span
+              className="inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[.08em] text-white"
+              style={{ backgroundColor: (s.grade_hex && s.grade_hex !== 'null') ? s.grade_hex : positive ? '#009944' : '#dc2626' }}
+            >
               {s.grade ?? '—'}
             </span>
           </button>
@@ -45,8 +45,23 @@ export function DirectorBestWorstStaff({ data = {}, onSelect }) {
       </div>
     </div>
   )
+}
+
+export function DirectorBestWorstStaff({ data = {}, onSelect }) {
+  const best = data.best ?? []
+  const worst = data.worst ?? []
+  const perBranch = data.per_branch ?? {}
+
+  if (best.length === 0 && worst.length === 0) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800">
+        <p className="text-sm text-slate-500">No staff with a complete score in the selected period.</p>
+      </div>
+    )
+  }
 
   return (
+
     <div className="space-y-4">
       <div className="grid gap-4 xl:grid-cols-2">
         <RankCard label="Bank-wide overall best" items={best} positive onSelect={onSelect} />
@@ -98,14 +113,3 @@ export function DirectorBestWorstStaff({ data = {}, onSelect }) {
     </div>
   )
 }
-
-    )
-  }
-
-  const RankCard = ({ label, items, positive, onSelect }) => (
-    <div className={`overflow-hidden rounded-2xl border shadow-sm ${positive ? 'border-emerald-200 bg-emerald-50/40 dark:border-emerald-900 dark:bg-emerald-950/20' : 'border-rose-200 bg-rose-50/40 dark:border-rose-900 dark:bg-rose-950/20'}`}>
-      <div className={`flex items-center justify-between border-b px-4 py-3 ${positive ? 'border-emerald-200 dark:border-emerald-900' : 'border-rose-200 dark:border-rose-900'}`}>
-        <p className={`text-[10px] font-bold uppercase tracking-[.16em] ${positive ? 'text-emerald-700' : 'text-rose-700'}`}>{label}</p>
-        <span className="text-[11px] text-slate-500">{items.length} staff</span>
-      </div>
-      <div className={`divide-y ${positive ? 'divide-emerald-100 dark:divide-emerald-900' : 'divide-rose-100 dark:divide-rose-900'}`}>

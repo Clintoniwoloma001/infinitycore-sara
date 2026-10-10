@@ -34,7 +34,7 @@ import {
 const PERIODS = ['today', 'week', 'month', 'quarter', 'custom']
 const EMPTY_FILTERS = { period: 'month', department: '', branchId: '', area: '', role: '', designationId: '', employeeId: '', startDate: '', endDate: '' }
 
-const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+export const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const startOfWeek = (d) => { const x = new Date(d); const day = x.getDay() || 7; x.setDate(x.getDate() - day + 1); x.setHours(0,0,0,0); return x }
 const quarterStart = (d) => new Date(d.getFullYear(), Math.floor(d.getMonth()/3)*3, 1)
 

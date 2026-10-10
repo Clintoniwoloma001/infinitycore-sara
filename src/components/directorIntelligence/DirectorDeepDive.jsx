@@ -15,11 +15,10 @@ import { formatCurrencyValue, formatPercent, formatCount } from './formatScoreca
  *   onClose    () => close
  */
 export function DirectorDeepDive({ open, metricKey, data = {}, onClose }) {
-  const metricLabel =
-    metricKey
-      .replace(/_/g, ' ')
-      .replace(/\b\w/g, (c) => c.toUpperCase())
-      .replace(/\b(Amount|Pct|Caseload|Count|Disbursement)\b/g, (w) => w.toLowerCase())
+  const metricLabel = String(metricKey ?? 'metric')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\b(Amount|Pct|Caseload|Count|Disbursement)\b/g, (w) => w.toLowerCase())
 
   const branches = data.branches ?? []
   const managers = data.managers ?? []
@@ -36,7 +35,25 @@ export function DirectorDeepDive({ open, metricKey, data = {}, onClose }) {
       >
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-800">
           <div>
-
+            <p className="text-[10px] font-bold uppercase tracking-[.2em] text-[#009944]">{metricLabel} deep-dive</p>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">{metricLabel} across locations</h2>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
+          </button>
+        </div>
+        <div className="p-5">
+          {branches.length === 0 ? (
+            <p className="text-sm text-slate-500">No locations in scope for this metric.</p>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-xs text-slate-400">
+                {branches.length} locations with data. Scores are produced server-side by the existing MPR engine; these numbers are for comparison only.
+              </p>
               <div className="space-y-1">
                 <p className="text-xs font-semibold uppercase tracking-[.1em] text-slate-400">Branch ranking</p>
                 <div className="max-h-64 overflow-y-auto">
@@ -68,6 +85,7 @@ export function DirectorDeepDive({ open, metricKey, data = {}, onClose }) {
                   </table>
                 </div>
               </div>
+
               {managers.length > 0 && (
                 <div className="space-y-1">
                   <p className="text-xs font-semibold uppercase tracking-[.1em] text-slate-400">Branch managers</p>
@@ -101,23 +119,3 @@ export function DirectorDeepDive({ open, metricKey, data = {}, onClose }) {
     </div>
   )
 }
-
-            <p className="text-[10px] font-bold uppercase tracking-[.2em] text-[#009944]">{metricLabel} deep-dive</p>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">{metricLabel} across locations</h2>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-          >
-            <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
-          </button>
-        </div>
-        <div className="p-5">
-          {branches.length === 0 ? (
-            <p className="text-sm text-slate-500">No locations in scope for this metric.</p>
-          ) : (
-            <div className="space-y-4">
-              <p className="text-xs text-slate-400">
-                {branches.length} locations with data. Scores are produced server-side by the existing MPR engine; these numbers are for comparison only.
-              </p>
