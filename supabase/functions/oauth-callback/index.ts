@@ -26,7 +26,21 @@ Deno.serve(async (req) => {
   const userId = state?.split(':')[1]
   const error = url.searchParams.get('error')
 
-  if (error) return json({ error: `OAuth error: ${error}` }, 400)
+  if (error) {
+    return new Response(
+      `<html><body style="font-family: sans-serif; text-align: center; padding: 40px;">
+        <h2 style="color: #dc2626;">✗ Authorization Failed</h2>
+        <p>${error}</p>
+        <script>
+          if (window.opener) {
+            window.opener.postMessage({ type: 'oauth_complete', provider: '${provider || 'unknown'}', success: false, error: '${error}' }, '*');
+          }
+          setTimeout(() => window.close(), 3000);
+        </script>
+      </body></html>`,
+      { status: 400, headers: { 'Content-Type': 'text/html' } }
+    )
+  }
   if (!code || !provider || !userId) return json({ error: 'missing_params' }, 400)
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
@@ -139,12 +153,18 @@ Deno.serve(async (req) => {
     severity: 'info',
   })
 
-  // Return a simple HTML page that closes the popup
+  // Notify the parent window (popup opener) that OAuth completed, then close.
+  const providerLabel = provider === 'google_calendar' ? 'Google Calendar' : 'Zoom'
   return new Response(
     `<html><body style="font-family: sans-serif; text-align: center; padding: 40px;">
-      <h2 style="color: #009944;">✓ ${provider === 'google_calendar' ? 'Google Calendar' : 'Zoom'} Connected</h2>
-      <p>You can close this window and return to the interview scheduling form.</p>
-      <script>setTimeout(() => window.close(), 2000);</script>
+      <h2 style="color: #009944;">✓ ${providerLabel} Connected</h2>
+      <p>You can close this window and return to the form.</p>
+      <script>
+        if (window.opener) {
+          window.opener.postMessage({ type: 'oauth_complete', provider: '${provider}', success: true }, '*');
+        }
+        setTimeout(() => window.close(), 1500);
+      </script>
     </body></html>`,
     { status: 200, headers: { 'Content-Type': 'text/html' } }
   )

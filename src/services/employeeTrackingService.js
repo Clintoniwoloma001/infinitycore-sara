@@ -45,11 +45,23 @@ export const trackingService = {
    * verbatim — the previous implementation silently dropped `is_stale`, which
    * is what let a two-day-old fix be counted as "recently updated".
    */
-  async livePositions({ withinMinutes = 60, department = null, branchId = null } = {}) {
+  async livePositions({
+    withinMinutes = 60,
+    department = null,
+    branchId = null,
+    // Added by main; kept, and forwarded to v3 which ignores unknown params.
+    position = null,
+  } = {}) {
     // Cross-platform parity: mobile and web BOTH read the SAME RPC
     // (employee_live_positions_v3). v2 is kept only as a thin backward
     // compatibility delegate so older databases still work — the two apps can
     // never render different verdicts again.
+    //
+    // NOTE FOR ANYONE MERGING main INTO THIS BRANCH: main temporarily pointed
+    // this at `list_tracked_employees`. That legacy function was superseded by
+    // employee_live_positions_v3 (see
+    // supabase/migrations/20261110000002_drop_legacy_list_tracked_employees.sql)
+    // and would silently drop is_stale/freshness again. Restore v3.
     const { data, error } = await supabase.rpc('employee_live_positions_v3', {
       p_within_minutes: withinMinutes,
       p_department: department,
@@ -60,11 +72,12 @@ export const trackingService = {
     // PostgREST returns a bare ARRAY for `returns table` functions, so
     // `result` is normally the rows. The object branch accepts EITHER key a
     // future/other endpoint might wrap rows in — `employees` (the name this
-    // RPC family uses) or a generic `positions` — so Live Positions can never
+    // RPC family uses) or `positions` — so Live Positions can never
     // silently render an empty table from a shape mismatch again.
     const normalized = Array.isArray(result)
       ? result
       : (result?.employees ?? result?.positions ?? [])
+
 
     if (!Array.isArray(normalized)) {
       throw new Error(
@@ -72,7 +85,7 @@ export const trackingService = {
       )
     }
 
-    return normalized.map(item => ({
+    const mapped = normalized.map(item => ({
       id: item.id || item.employee_id,
       employee_id: item.employee_id,
       latitude: item.latitude == null ? null : Number(item.latitude),
@@ -96,6 +109,7 @@ export const trackingService = {
       branch_id: item.branch_id ?? null,
       // Fields the UI already consumed from v2
       inside_geofence: item.inside_geofence,
+      is_stale: item.is_stale,
       location_label: item.location_label,
       resolved_place: item.location_label || item.resolved_place || '',
       nearest_location_name: item.nearest_location_name,
@@ -126,7 +140,59 @@ export const trackingService = {
       department: item.department,
       has_fix: item.has_fix !== false && item.recorded_at != null,
       tracking_unavailable_reason: item.tracking_unavailable_reason,
+      position: item.position,
     }))
+
+    // Position filtering is client-side because the RPC does not support it.
+    if (position) {
+      return mapped.filter(item =>
+        item.position && item.position.toLowerCase() === position.toLowerCase()
+      )
+    }
+
+    return mapped
+  },
+
+  /** Distinct departments, branches and positions for filter dropdowns. */
+  async filterOptions() {
+    const { data, error } = await supabase.rpc('get_dashboard_filter_options', {
+      p_branch_id: null,
+      p_department: null,
+      p_area: null,
+    })
+    if (error) return { departments: [], branches: [], positions: [] }
+
+    const departments = (data?.departments || [])
+      .map(d => d.name || d)
+      .filter(Boolean)
+    const branches = (data?.branches || [])
+      .map(b => ({ id: b.id, name: b.branch_name || b.name }))
+      .filter(b => b.id && b.name)
+
+    // Positions: query employees for distinct non-null positions.
+    let positions = []
+    try {
+      const { data: empData } = await supabase
+        .from('employees')
+        .select('position')
+        .not('position', 'is', null)
+        .neq('position', '')
+        .eq('is_archived', false)
+        .order('position')
+        .limit(500)
+      if (empData) {
+        const seen = new Set()
+        for (const row of empData) {
+          const pos = (row.position || '').trim()
+          if (pos && !seen.has(pos.toLowerCase())) {
+            seen.add(pos.toLowerCase())
+            positions.push(pos)
+          }
+        }
+      }
+    } catch { /* positions are optional */ }
+
+    return { departments, branches, positions }
   },
 
   /**
