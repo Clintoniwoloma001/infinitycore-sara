@@ -11,6 +11,7 @@ import {
   ClipboardList,
   Clock3,
   Database,
+  FileSpreadsheet,
   FileSignature,
   LayoutDashboard,
   Link2,
@@ -48,12 +49,14 @@ export const routeConfig = [
     items: [
       { label: 'Dashboard', path: '/', icon: LayoutDashboard, element: 'Dashboard', permissions: [] },
       { label: 'Director Intelligence', path: '/director', icon: Crown, element: 'DirectorDashboard', permissions: [PERMISSIONS.DIRECTOR_EXECUTIVE_READ] },
+      { label: 'Director Intelligence Deep Dive', path: '/director-intelligence', icon: Crown, element: 'DirectorIntelligenceDeepDive', permissions: [PERMISSIONS.DIRECTOR_EXECUTIVE_READ] },
       { label: 'My Profile', path: '/profile', icon: UserCircle, element: 'Profile', permissions: [] },
       { label: 'Messages', path: '/chat', icon: MessageSquare, element: 'MessagesPage', permissions: [] },
       { label: 'Comm Admin', path: '/communication-admin', icon: Landmark, element: 'CommunicationAdmin', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
       { label: 'BankOne Imports', path: '/bankone-imports', icon: Database, element: 'BankOneImportCenter', permissions: [PERMISSIONS.BANKONE_READ] },
       { label: 'Portfolio Import Review', path: '/bankone-portfolio-review', icon: ShieldCheck, element: 'BankOneImportReview', permissions: [PERMISSIONS.BANKONE_READ] },
       { label: 'BankOne Integration', path: '/bankone-integration', icon: Building2, element: 'BankOneIntegration', permissions: [PERMISSIONS.BANKONE_READ] },
+      { label: 'Metric Import', path: '/director-metric-import', icon: FileSpreadsheet, element: 'DirectorMetricImport', permissions: [PERMISSIONS.BANKONE_READ] },
     ],
   },
   {

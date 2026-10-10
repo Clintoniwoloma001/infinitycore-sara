@@ -19,6 +19,17 @@ import { ErrorState, LoadingState } from '../components/PageStates'
 import DatePicker, { toIsoDate } from '../components/DatePicker'
 import PersonAvatar from '../components/messages/PersonAvatar'
 import { formatCurrency, formatDate } from '../lib/utils'
+import { rpcWithRetry } from '../services/rpcHelper'
+import { DirectorGlobalFilterBar } from '../components/directorIntelligence/DirectorGlobalFilterBar'
+import { DirectorScorecardCards } from '../components/directorIntelligence/DirectorScorecardCards'
+import { DirectorBestWorstStaff } from '../components/directorIntelligence/DirectorBestWorstStaff'
+import { DirectorBranchStaffTable } from '../components/directorIntelligence/DirectorBranchStaffTable'
+import { DirectorDeepDive } from '../components/directorIntelligence/DirectorDeepDive'
+import {
+  formatCurrencyValue,
+  formatPercent,
+  formatCount,
+} from '../components/directorIntelligence/formatScorecard'
 
 const PERIODS = ['today', 'week', 'month', 'quarter', 'custom']
 const EMPTY_FILTERS = { period: 'month', department: '', branchId: '', area: '', role: '', designationId: '', employeeId: '', startDate: '', endDate: '' }
@@ -277,7 +288,7 @@ function DepartmentDrillDownModal({ department, snapshots, staff, onClose }) {
               </div>
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="rounded-xl bg-emerald-50 p-3 dark:bg-emerald-900/20"><p className="text-[10px] uppercase tracking-wider text-emerald-600">Performing ({perfPct.toFixed(1)}%)</p><p className="mt-1 text-sm font-semibold text-emerald-800 dark:text-emerald-200">{formatCurrency(performing)}</p></div>
-                <div className="rounded-xl bg-amber-50 p-3 dark:bg-amber-900/20"><p className="text-[10px] uppercase tracking-wider text-amber-600">PAR > 30d ({naPct.toFixed(1)}%)</p><p className="mt-1 text-sm font-semibold text-amber-800 dark:text-amber-200">{formatCurrency(nonPerf)}</p></div>
+                <div className="rounded-xl bg-amber-50 p-3 dark:bg-amber-900/20"><p className="text-[10px] uppercase tracking-wider text-amber-600">PAR &gt; 30d ({naPct.toFixed(1)}%)</p><p className="mt-1 text-sm font-semibold text-amber-800 dark:text-amber-200">{formatCurrency(nonPerf)}</p></div>
               </div>
               <div className="mt-5"><p className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">Staff ranking (attendance · KPI · target)</p>
                 {deptStaff.length === 0 ? <p className="text-sm text-slate-500">No staff recorded for this department.</p> :
