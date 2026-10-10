@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth'
 import { AccessDenied } from '../components/PageStates'
 import { GEOFENCE_ADMIN_ROLES } from '../constants/permissions'
 import { geofenceService, geofenceErrorMessage } from '../services/geofenceService'
+import { gpsErrorMessage, positionToCentre, requestGpsPosition } from '../lib/geolocation'
 import GeofenceList from '../components/geofences/GeofenceList'
 import GeofenceMapEditor from '../components/geofences/GeofenceMapEditor'
 import CoverageTester from '../components/geofences/CoverageTester'
@@ -61,6 +62,29 @@ function GeofenceSettingsBody({ userName }) {
   const [testBranchId, setTestBranchId] = useState(null)
 
   const testerRef = useRef(null)
+
+  // ---- GPS / "Use my location" for Add-Fence --------------------------------
+  const [myPosition, setMyPosition] = useState(null)
+  const [myLocationError, setMyLocationError] = useState(null)
+  const [myLocationBusy, setMyLocationBusy] = useState(false)
+  const [pendingMyPosition, setPendingMyPosition] = useState(null) // handed to the Add-Fence editor
+
+  const useMyLocation = async () => {
+    // One shared acquisition path (src/lib/geolocation.js): bounded timeout, no
+    // cached fix, and the real reason (denied / unavailable / timeout /
+    // insecure origin) reported to the operator instead of one generic line.
+    setMyLocationBusy(true)
+    setMyLocationError(null)
+    try {
+      const position = await requestGpsPosition()
+      setMyPosition(positionToCentre(position))
+    } catch (err) {
+      setMyPosition(null)
+      setMyLocationError(gpsErrorMessage(err))
+    } finally {
+      setMyLocationBusy(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -120,6 +144,10 @@ function GeofenceSettingsBody({ userName }) {
   }
 
   const startAdd = (branch) => {
+    // Hand the held "my position" (from the "Use my location" button) to the
+    // fence editor so the Add-location circle is drawn around the user the
+    // moment the editor opens, right next to the branch's stored centre.
+    setPendingMyPosition(myPosition)
     setAddOpen(false)
     setEditing({ branch })
   }
@@ -145,6 +173,7 @@ function GeofenceSettingsBody({ userName }) {
       })
       setFences(result.fences)
       setEditing(null)
+      setPendingMyPosition(null)
       setFlash({ tone: 'ok', text: `Fence saved for ${branchName}.` })
     } catch (e) {
       setFlash({ tone: 'error', text: geofenceErrorMessage(e) })
@@ -272,12 +301,16 @@ function GeofenceSettingsBody({ userName }) {
               : (editing.branch.geofence_radius || 150),
             locked: true,
           }}
+          // The fix captured in the Add-Fence dialog is handed to the editor,
+          // so the fence starts where the operator actually is. Cleared on
+          // cancel/save so a later edit never inherits a stale position.
+          initialMyPosition={pendingMyPosition}
           isActive={
             editing.fence ? editing.fence.isActive : editing.branch.geofence_active !== false
           }
           busy={busy}
           onSave={handleSave}
-          onCancel={() => setEditing(null)}
+          onCancel={() => { setEditing(null); setPendingMyPosition(null) }}
         />
       ) : (
         <section className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center dark:border-slate-600 dark:bg-slate-800">
@@ -306,6 +339,10 @@ function GeofenceSettingsBody({ userName }) {
         onRetry={openAddDialog}
         onSelect={startAdd}
         onClose={() => setAddOpen(false)}
+        myPosition={myPosition}
+        myLocationBusy={myLocationBusy}
+        myLocationError={myLocationError}
+        onUseMyLocation={useMyLocation}
       />
 
       <ConfirmDialog

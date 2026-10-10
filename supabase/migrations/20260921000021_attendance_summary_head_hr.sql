@@ -75,7 +75,7 @@ begin
    where ae.event_type = 'CLOCK_IN' and (ae.event_time at time zone v_tz)::date = v_today
      and ae.metadata ->> 'location_difference' = 'true'
      and e.employment_status = 'active' and coalesce(e.is_archived, false) = false;
-  select count(distinct ae.employee_id) into v_head_office
+  select count(distinct ae.employee_id) into v_head_offic
     from public.attendance_events ae
     join public.employees e on e.id = ae.employee_id
    where ae.event_type = 'CLOCK_IN' and (ae.event_time at time zone v_tz)::date = v_today

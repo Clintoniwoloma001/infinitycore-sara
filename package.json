@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "homepage": "https://clintoniwoloma001.github.io/infinitycore-sara",
   "type": "module",
-  "description": "Infinity Bank Operations Platform — Vite + React + Supabase SARA AI ENEABLED",
+  "description": "Infinity Bank Operations Platform \u2014 Vite + React + Supabase SARA AI ENEABLED",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -87,7 +87,10 @@
     "test:ai-router": "node tests/saraAiRouter.test.mjs",
     "test:acceptance-db": "sh tests/acceptance/run.sh",
     "test:mpr-scoring": "node --test tests/performanceScoring.test.mjs",
-    "test:mpr-export": "node --test tests/performanceExport.test.mjs"
+    "test:mpr-export": "node --test tests/performanceExport.test.mjs",
+    "test:performance-filters": "node tests/performancePeriodFilters.test.mjs",
+    "test:tracking-freshness": "node tests/employeeTrackingFreshness.test.mjs",
+    "test:interviews-tracking-gps": "node tests/interviewsRlsTrackingFiltersGps.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

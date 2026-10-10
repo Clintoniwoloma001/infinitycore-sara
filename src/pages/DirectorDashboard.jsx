@@ -208,6 +208,9 @@ export default function DirectorDashboard() {
   useEffect(() => { loadRef.current = load })
   // Published snapshots (same session or another user) refresh the cards live.
   useEffect(() => subscribeSnapshotRefresh(() => loadRef.current()), [])
+  // Changing the active scope invalidates any open drill-down panel: close it so a
+  // stale panel can never be re-shown without a fresh user click.
+  useEffect(() => { setIsBranchDrillOpen(false); setIsDepartmentDrillOpen(false) }, [filters])
   const range=useMemo(()=>dateWindow(filters.period,filters),[filters]); const staff=useMemo(()=>department?(snapshot?.staff||[]).filter(s=>s.department===department):snapshot?.staff||[],[snapshot,department])
   // Executive titles (MD/CEO, Chairman, Director…) are roles, never departments.
   const filterOptions=useMemo(()=>({...(snapshot?.filters||{}),departments:filterDepartmentOptions(snapshot?.filters?.departments||[])}),[snapshot])
@@ -221,9 +224,9 @@ export default function DirectorDashboard() {
     <FilterBar filters={filters} setFilters={setFilters} options={filterOptions}/>
     <MetricStrip snapshot={snapshot}/>
     <BusinessRibbon summary={snapshot.summary}/>
-    <div className="flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-800">{tabs.map(([id,name])=><button key={id} onClick={()=>{setTab(id);setDepartment(null)}} className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-semibold transition ${tab===id?'border-[#009944] text-[#009944]':'border-transparent text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>{name}</button>)}</div>
+    <div className="flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-800">{tabs.map(([id,name])=><button key={id} onClick={()=>{setTab(id);setDepartment(null);setIsBranchDrillOpen(false);setIsDepartmentDrillOpen(false)}} className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-semibold transition ${tab===id?'border-[#009944] text-[#009944]':'border-transparent text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>{name}</button>)}</div>
     {department&&<div className={`${panel} flex items-center justify-between px-5 py-3`}><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#009944]">Department intelligence</p><h2 className="font-semibold text-slate-900 dark:text-white">{department}</h2></div><button onClick={()=>setDepartment(null)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-4 w-4"/></button></div>}
-    {tab==='overview'&&<><DepartmentTable rows={departmentRollup} onSelect={(d)=>{setDepartment(d.name);setIsDepartmentDrillOpen(true)}}/><div className="grid gap-5 xl:grid-cols-[1.45fr_1fr]"><ExecutiveTrend data={snapshot.trend}/><RolePerformance rows={snapshot.roles}/></div><div className="mt-5 grid gap-5 xl:grid-cols-2"><OrganizationTable title="Branch performance" rows={snapshot.branches} onSelect={(r)=>{setBranchDrillName(r.name);setIsBranchDrillOpen(true)}}/><OrganizationTable title="Area performance" rows={snapshot.areas}/></div><DepartmentDrillDownModal department={departmentDrillName} snapshots={departmentSnapshots} staff={snapshot?.staff||[]} onClose={()=>{setIsDepartmentDrillOpen(false)}}/><BranchDetailModal branch={branchDrillName} branches={snapshot?.branches||[]} staff={snapshot?.staff||[]} onClose={()=>{setIsBranchDrillOpen(false)}}/></>}
+    {tab==='overview'&&<><DepartmentTable rows={departmentRollup} onSelect={(d)=>{setDepartment(d.name);setDepartmentDrillName(d.name);setIsDepartmentDrillOpen(true)}}/><div className="grid gap-5 xl:grid-cols-[1.45fr_1fr]"><ExecutiveTrend data={snapshot.trend}/><RolePerformance rows={snapshot.roles}/></div><div className="mt-5 grid gap-5 xl:grid-cols-2"><OrganizationTable title="Branch performance" rows={snapshot.branches} onSelect={(r)=>{setBranchDrillName(r.name);setIsBranchDrillOpen(true)}}/><OrganizationTable title="Area performance" rows={snapshot.areas}/></div>{isDepartmentDrillOpen&&<DepartmentDrillDownModal department={departmentDrillName} snapshots={departmentSnapshots} staff={snapshot?.staff||[]} onClose={()=>{setIsDepartmentDrillOpen(false);setDepartmentDrillName('')}}/>}{isBranchDrillOpen&&<BranchDetailModal branch={branchDrillName} branches={snapshot?.branches||[]} staff={snapshot?.staff||[]} onClose={()=>{setIsBranchDrillOpen(false);setBranchDrillName('')}}/>}</>}
     {tab==='attendance'&&<><AttendanceView staff={staff}/><div className="mt-5"><StaffTable rows={staff} onEmployee={setEmployeeId}/></div></>}
     {tab==='leave'&&<LeaveView rows={snapshot.leave} onEmployee={setEmployeeId}/>} 
     {tab==='performance'&&<><div className="grid gap-5 xl:grid-cols-[1.45fr_1fr]"><ExecutiveTrend data={snapshot.trend}/><RolePerformance rows={snapshot.roles}/></div><div className="mt-5"><StaffTable rows={staff} onEmployee={setEmployeeId}/></div></>}
@@ -233,6 +236,12 @@ export default function DirectorDashboard() {
 }
 
 function DepartmentDrillDownModal({ department, snapshots, staff, onClose }) {
+  // Escape closes the panel from anywhere, including while it is showing empty data.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
   const rows = (snapshots || []).filter(s => String(s.department || '').toLowerCase() === String(department || '').toLowerCase())
   const totalOut = rows.reduce((a, r) => a + Number(r.total_outstanding || 0), 0)
   const totalDisb = rows.reduce((a, r) => a + Number(r.total_disbursed || 0), 0)
@@ -288,6 +297,14 @@ function BranchDetailModal({ branch, branches, staff, onClose }) {
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+
+  // Escape closes the panel from anywhere, including while an error is on screen.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   useEffect(() => {
     let live = true
@@ -297,36 +314,32 @@ function BranchDetailModal({ branch, branches, staff, onClose }) {
     const fetchDetails = async () => {
       try {
         // SCOPE-AGNOSTIC RESOLUTION:
-        // Query global branches table directly without applying active top-bar filter constraints.
-        // This prevents "Branch not found in the active scope" errors when drills are triggered.
-        const { data: branchData, error: branchError } = await supabase
-          .from('branches')
-          .select('*')
-          .or(`id.eq.${branch}, name.ilike.${branch}`)
-          .maybeSingle()
-
-        if (branchError) throw branchError
-        if (!branchData) throw new Error('Branch details unavailable.')
-
-        // RELATIONSHIP FIX:
-        // There is no direct FK between branches and bankone_portfolio_snapshots.
-        // We fetch the latest published snapshot for this branch's associated data.
-        const { data: snapshotData, error: snapError } = await supabase
-          .from('bankone_portfolio_snapshots')
-          .select('*')
-          .eq('status', 'published')
-          .order('as_at_date', { ascending: false })
-          .limit(1)
-          .single()
-
-        if (snapError && snapError.code !== 'PGRST116') throw snapError
-
-        setDetail({
-          ...branchData,
-          bankone_portfolio_snapshots: snapshotData ? [snapshotData] : [],
-        })
+        // Query the global branches table directly without applying active top-bar
+        // filter constraints, so a drill still works when a top-bar filter is active.
+        //
+        // COLUMN FIX: public.branches has NO `name` column (verified against
+        // information_schema — the display name is `branch_name`). The previous
+        // `.or(\`id.eq.${branch}, name.ilike.${branch}\`)` raised Postgres 42703
+        // "column branches.name does not exist" for every click, which is why the
+        // panel only ever showed "Branch details unavailable."
+        // `branch` is the rollup row's display name, so match it on branch_name.
+        // A branch name is not unique in `branches` (several rows can share one), so
+        // take the first row rather than `.single()`, which would throw PGRST116.
+        let branchData = null
+        if (branch && branch !== 'Unassigned') {
+          const { data, error: branchError } = await supabase
+            .from('branches')
+            .select('*')
+            .eq('branch_name', branch)
+            .limit(1)
+          if (branchError) throw branchError
+          branchData = (data && data[0]) || null
+        }
+        // "Unassigned" (staff with no branch) and a display name with no active
+        // `branches` row are both legitimate, not errors.
+        if (live) setDetail(branchData)
       } catch (e) {
-        setError(e.message)
+        if (live) setError(e.message)
       } finally {
         if (live) setLoading(false)
       }
@@ -334,35 +347,54 @@ function BranchDetailModal({ branch, branches, staff, onClose }) {
 
     fetchDetails()
     return () => { live = false }
-  }, [branch])
+  }, [branch, attempt])
+
+  // Every figure this panel shows comes from the executive rollup row that opened it
+  // (`branches` prop) — the `branches` TABLE row has no staff/attendance/KPI columns,
+  // which is why the cards used to render 0 / 0%.
+  const rollup = (branches || []).find(r => String(r.name) === String(branch)) || null
+  const norm = (v) => String(v ?? '').trim().toLowerCase()
+  // The rollup groups staff by coalesce(branch_name,'Unassigned'), so match on the
+  // staff row's own branch_name (previously every employee was listed here).
+  const targetName = norm(branch) === 'unassigned' ? '' : norm(branch)
+  const branchStaff = (staff || []).filter(s => norm(s.branch_name) === targetName)
 
   return (
     <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/50 backdrop-blur-sm" onMouseDown={onClose}>
       <aside onMouseDown={(e) => e.stopPropagation()} className="h-full w-full max-w-4xl overflow-y-auto bg-white shadow-2xl dark:bg-slate-900">
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 px-6 py-4 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
-          <div><p className="text-[10px] font-bold uppercase tracking-[.2em] text-[#009944]">Branch intelligence</p><h2 className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{branch}</h2></div>
+          <div><p className="text-[10px] font-bold uppercase tracking-[.2em] text-[#009944]">Branch intelligence</p><h2 className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{branch || 'Unassigned'}</h2></div>
           <button onClick={onClose} aria-label="Close" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
         </div>
         <div className="p-5">
           {loading ? (
             <div className="flex h-64 items-center justify-center"><LoadingState label="Fetching branch intelligence..." /></div>
           ) : error ? (
-            <div className="flex h-64 items-center justify-center"><ErrorState title="Branch details unavailable" message={error} /></div>
+            <div className="flex h-64 flex-col items-center justify-center gap-3 text-center">
+              <ErrorState title="Branch details unavailable" message={error} />
+              <button onClick={() => setAttempt(a => a + 1)} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm hover:border-[#009944] hover:text-[#009944] dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">Retry</button>
+            </div>
           ) : (
             <>
+              {!rollup && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">This branch is outside the current filter scope, so its figures are unavailable.</p>}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Staff</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{Number(detail.total_staff || 0)}</p></div>
-                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Active</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{Number(detail.active_staff || 0)}</p></div>
-                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Attendance</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{pct(detail.attendance_rate)}</p></div>
-                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">KPI completion</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{pct(detail.kpi_completion)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Staff</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{Number(rollup?.total_staff || 0)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Active</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{Number(rollup?.active_staff || 0)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">Attendance</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{pct(rollup?.attendance_rate)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40"><p className="text-[10px] uppercase tracking-wider text-slate-400">KPI completion</p><p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{pct(rollup?.kpi_completion)}</p></div>
               </div>
+              {detail && <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                {detail.branch_code && <span>Code: {detail.branch_code}</span>}
+                {detail.manager_name && <span>Manager: {detail.manager_name}</span>}
+                {detail.location && <span>{detail.location}</span>}
+              </div>}
               <div className="mt-4">
                 <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">Staff under this branch</p>
-                {staff.length === 0 ? <p className="text-sm text-slate-500">No staff assigned to this branch in the current filter.</p> :
+                {branchStaff.length === 0 ? <p className="text-sm text-slate-500">No staff assigned to this branch in the current filter.</p> :
                   <div className="max-h-64 overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 bg-slate-50"><tr className="text-left text-xs text-slate-400"><th className="px-2 py-1">Employee</th><th className="px-2 py-1">Role</th><th className="px-2 py-1">Designation</th></tr></thead>
-                      <tbody className="divide-y divide-slate-100">{staff.map(s => <tr key={s.id}><td className="px-2 py-1 font-medium text-slate-800">{s.full_name}</td><td className="px-2 py-1 text-slate-500">{s.position || '—'}</td><td className="px-2 py-1 text-slate-500">{s.designation_title || '—'}</td></tr>)}</tbody>
+                      <tbody className="divide-y divide-slate-100">{branchStaff.map(s => <tr key={s.id}><td className="px-2 py-1 font-medium text-slate-800">{s.full_name}</td><td className="px-2 py-1 text-slate-500">{s.position || '—'}</td><td className="px-2 py-1 text-slate-500">{s.designation_title || '—'}</td></tr>)}</tbody>
                     </table>
                   </div>}
               </div>

@@ -53,9 +53,23 @@ Deno.serve(async (req) => {
   const body = await req.json()
   const { topic, description, startDateTime, durationMinutes, interviewId } = body
 
-  if (!topic || !startDateTime) return json({ error: 'topic_and_start_required' }, 400)
-
   const admin = createClient(supabaseUrl, serviceRoleKey)
+
+  // Connection probe (no side effects) — mirrors create-google-meet so the
+  // frontend badge works the same way for both providers.
+  if (body._check === true) {
+    const { data: probe, error: probeError } = await admin
+      .from('integration_connections')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('provider', 'zoom')
+      .eq('connected', true)
+      .maybeSingle()
+    if (probeError || !probe) return json({ status: 'not_connected' }, 200)
+    return json({ status: 'connected' }, 200)
+  }
+
+  if (!topic || !startDateTime) return json({ error: 'topic_and_start_required' }, 400)
 
   // Get the user's Zoom OAuth tokens
   const { data: conn, error: connError } = await admin

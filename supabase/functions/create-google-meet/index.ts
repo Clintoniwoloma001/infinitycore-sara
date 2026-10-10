@@ -25,6 +25,34 @@ function json(body, status = 200) {
   })
 }
 
+// RFC 3339 with an explicit UTC offset — the only shape Google Calendar
+// accepts for `dateTime`.
+//
+// ROOT CAUSE OF THE OPAQUE 400 "Bad Request" FROM GOOGLE CALENDAR:
+// the web passes the RAW value of an <input type="datetime-local">, i.e.
+// "2026-10-12T09:30" with NO timezone. Google rejects a dateTime that is not
+// full RFC 3339 with that exact opaque error, and mentions nothing about the
+// timezone — which is why it looked like "the link generation is broken". The
+// equivalent Zoom path already called toISOString() on the same field, so only
+// Google Meet ever hit it. Normalising HERE fixes every caller at once (web,
+// mobile, a future flow) even if one of them still sends a naive local string.
+function toRfc3339(value) {
+  if (value == null || value === '') return null
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString()
+}
+
+// Google fails the WHOLE event insert when an attendee is not a valid,
+// deliverable email. A candidate with a blank/typo'd address must not take the
+// meeting down with them, so the attendee is only attached when it is usable.
+function attendeeList(email) {
+  if (typeof email !== 'string') return []
+  const trimmed = email.trim()
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(trimmed)) return []
+  return [{ email: trimmed }]
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS })
@@ -56,21 +84,34 @@ Deno.serve(async (req) => {
 
   const admin = createClient(supabaseUrl, serviceRoleKey)
 
-  // _check: lightweight connection-status probe — no event is created.
-  if (body._check) {
-    const { data: conn, error: connError } = await admin
+  // Connection probe (no side effects): lets the frontend show an honest
+  // connected/not-connected badge without sending a create payload that
+  // would fail validation anyway. Returns 'not_configured' when the
+  // Supabase Google secrets are missing so the UI can say so explicitly.
+  if (body._check === true) {
+    const { data: probe, error: probeError } = await admin
       .from('integration_connections')
-      .select('id, connected, token_expires_at')
+      .select('id')
       .eq('user_id', user.id)
       .eq('provider', 'google_calendar')
       .eq('connected', true)
-      .single()
-
-    if (connError || !conn) return json({ status: 'not_connected' }, 200)
+      .maybeSingle()
+    if (probeError || !probe) return json({ status: 'not_connected' }, 200)
     return json({ status: 'connected' }, 200)
   }
 
   if (!summary || !startDateTime) return json({ error: 'summary_and_start_required' }, 400)
+
+  // RFC 3339 first — reject an unusable start before talking to Google.
+  const start = toRfc3339(startDateTime)
+  if (!start) return json({ error: 'invalid_start_date_time' }, 400)
+  // End = start + the supplied duration when it is usable, otherwise the
+  // client's own endDateTime, otherwise 30 minutes from the start. Computed
+  // OFF the parsed start so a 25h event can never be created by a missed zone.
+  const durationMs = Math.max(1, Number(body.durationMinutes) || 30) * 60000
+  const end = toRfc3339(endDateTime)
+    || toRfc3339(new Date(new Date(start).getTime() + durationMs))
+    || toRfc3339(start)
 
   // Get the user's Google OAuth tokens
   const { data: conn, error: connError } = await admin
@@ -118,9 +159,9 @@ Deno.serve(async (req) => {
   const eventBody = {
     summary,
     description: description || '',
-    start: { dateTime: startDateTime, timeZone: 'UTC' },
-    end: { dateTime: endDateTime || new Date(new Date(startDateTime).getTime() + 30 * 60000).toISOString(), timeZone: 'UTC' },
-    attendees: attendeeEmail ? [{ email: attendeeEmail }] : [],
+    start: { dateTime: start, timeZone: 'UTC' },
+    end: { dateTime: end, timeZone: 'UTC' },
+    attendees: attendeeList(attendeeEmail),
     conferenceData: {
       createRequest: {
         requestId: `iv-${interviewId || Date.now()}`,
@@ -156,7 +197,13 @@ Deno.serve(async (req) => {
         user_name: user.email || 'unknown',
         severity: 'warning',
       })
-      return json({ status: 'failed', error: `Google Calendar API returned ${calRes.status}: ${errText}` }, 200)
+      // Google answers "Bad Request" with no reason when the event body is
+      // rejected (bad dateTime, an unattachable attendee, a stale requestId).
+      // The operator cannot act on that alone, so say what to check.
+      const detail = calRes.status === 400
+        ? ' — Google rejected the event. Refresh the Google connection and use a full date & time.'
+        : ''
+      return json({ status: 'failed', error: `Google Calendar API returned ${calRes.status}: ${errText}${detail}` }, 200)
     }
 
     const event = await calRes.json()

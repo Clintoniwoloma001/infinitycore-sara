@@ -2,16 +2,25 @@ import { supabase } from '../supabaseClient'
 import { logAction } from './supabaseService'
 import { sendInAppNotification } from './notificationService'
 
-// Check integration connection status for the current user
+// Check integration connection status for the current user.
+// Real check: asks the matching edge function for its own connection state,
+// which it reads server-side from integration_connections (RLS denies all
+// client access, so the client can never read the table itself).
 export async function getConnectionStatus(provider) {
   try {
-    // We can't read integration_connections directly (RLS denies all client access).
-    // Instead, we invoke the Edge Function which checks server-side.
-    // For now, use a lightweight check: try to invoke the create function
-    // and interpret the response.
-    return { connected: false, status: 'unknown' }
+    const fn =
+      provider === 'google_calendar' ? 'create-google-meet'
+      : provider === 'zoom' ? 'create-zoom-meeting'
+      : null
+    if (!fn) return { connected: false, status: 'unknown' }
+    const { data, error } = await supabase.functions.invoke(fn, {
+      body: { _check: true },
+    })
+    if (error) return { connected: false, status: 'not_configured' }
+    if (data?.status === 'connected') return { connected: true, status: 'connected' }
+    return { connected: false, status: data?.status || 'not_connected' }
   } catch {
-    return { connected: false, status: 'unknown' }
+    return { connected: false, status: 'error' }
   }
 }
 
@@ -45,12 +54,19 @@ export async function checkZoom() {
   }
 }
 
-// Initiate Google OAuth flow
+// Initiate Google OAuth flow.
+// The redirect_uri here MUST stay byte-equal to the one oauth-callback uses
+// at token-exchange time (SUPABASE_URL + /functions/v1/oauth-callback), and
+// that exact string must be registered in the Google Cloud console under
+// Authorized redirect URIs — otherwise Google rejects the code exchange with
+// redirect_uri_mismatch even when the Supabase secrets are correct.
 export function connectGoogleCalendar(userId) {
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
   if (!clientId) return { url: null, error: 'VITE_GOOGLE_CLIENT_ID not configured' }
 
   const redirectUri = encodeURIComponent(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/oauth-callback?provider=google_calendar`)
+  // Calendar scope (full) is required: create-google-meet inserts events with
+  // conferenceData. userinfo.email identifies the connected account.
   const scope = encodeURIComponent('https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email')
   const state = `google_calendar:${userId}`
   const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent&state=${state}`
@@ -68,13 +84,34 @@ export function connectZoom(userId) {
   return { url: authUrl }
 }
 
+// Full RFC 3339 UTC ("2026-10-12T09:30:00.000Z") or null when the value cannot
+// be understood. Providers (Google Calendar above all) reject a naive local
+// string with an opaque 400, so every datetime sent out of this file goes
+// through here first.
+function toRfc3339Utc(value) {
+  if (value == null || value === '') return null
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString()
+}
+
 // Create a Google Meet via Edge Function
-export async function createGoogleMeet({ summary, description, startDateTime, endDateTime, attendeeEmail, interviewId }) {
+export async function createGoogleMeet({ summary, description, startDateTime, endDateTime, attendeeEmail, interviewId, durationMinutes }) {
   try {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) {
       throw new Error('User must be authenticated to create a Google Meet link')
     }
+
+    // The form gives a naive local value from <input type="datetime-local">
+    // (e.g. "2026-10-12T09:30"). Google Calendar ONLY accepts full RFC 3339
+    // with a zone and answers anything else with an opaque 400 "Bad Request",
+    // so the timestamps are normalised to UTC ISO strings here as well as in
+    // the edge function. Durations are derived, never guessed by the provider.
+    const startIso = toRfc3339Utc(startDateTime)
+    const endIso = toRfc3339Utc(endDateTime)
+    const minutes = Math.max(1, Number(durationMinutes) || 30)
+    const finalEnd = endIso || toRfc3339Utc(new Date(new Date(startIso).getTime() + minutes * 60000))
 
     const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-google-meet`, {
       method: 'POST',
@@ -83,7 +120,15 @@ export async function createGoogleMeet({ summary, description, startDateTime, en
         'Authorization': `Bearer ${session.access_token}`,
         'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
       },
-      body: JSON.stringify({ summary, description, startDateTime, endDateTime, attendeeEmail, interviewId }),
+      body: JSON.stringify({
+        summary,
+        description,
+        startDateTime: startIso,
+        endDateTime: finalEnd,
+        durationMinutes: minutes,
+        attendeeEmail,
+        interviewId,
+      }),
     })
 
     if (!response.ok) {
@@ -161,8 +206,13 @@ export async function scheduleInterviewWithMeeting({
 
   // Step 2: Create meeting if virtual with Google Meet or Zoom
   if (interviewData.interview_type === 'VIRTUAL' && (interviewData.platform === 'Google Meet' || interviewData.platform === 'Zoom')) {
-    const startDateTime = interviewData.scheduled_date
-    const endDateTime = new Date(new Date(startDateTime).getTime() + (interviewData.duration_minutes || 30) * 60000).toISOString()
+    // Normalised once here, so the payload is stored AND sent as real RFC 3339.
+    // The raw datetime-local value ("2026-10-12T09:30") is what made Google
+    // Calendar answer 400 "Bad Request": it has no timezone, and a 25-hour
+    // event that ended the next day was created instead of a 30-minute one.
+    const startDateTime = toRfc3339Utc(interviewData.scheduled_date) || interviewData.scheduled_date
+    const durationMinutes = Math.max(1, Number(interviewData.duration_minutes) || 30)
+    const endDateTime = toRfc3339Utc(new Date(new Date(startDateTime).getTime() + durationMinutes * 60000))
     const summary = `Interview: ${interviewData.candidate_name} — ${interviewData.position || 'Position'}`
     const description = interviewData.interview_instructions || `Interview for ${interviewData.position || 'the position'}`
 
@@ -173,6 +223,7 @@ export async function scheduleInterviewWithMeeting({
         description,
         startDateTime,
         endDateTime,
+        durationMinutes,
         attendeeEmail: interviewData.candidate_email,
         interviewId: steps.interview.id,
       })
@@ -181,7 +232,7 @@ export async function scheduleInterviewWithMeeting({
         topic: summary,
         description,
         startDateTime,
-        durationMinutes: interviewData.duration_minutes || 30,
+        durationMinutes,
         interviewId: steps.interview.id,
       })
     }

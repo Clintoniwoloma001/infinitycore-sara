@@ -10,6 +10,10 @@
 // resolve_employee_location() in Postgres so the web app, the mobile app, the
 // clock-in path and the Location Audit can never disagree.
 import { supabase } from '../supabaseClient'
+import {
+  TIMELINE_GAP_MINUTES, LATE_UPLOAD_MINUTES, LOW_ACCURACY_SUFFIX,
+  ageSecondsOf, formatDurationMinutes,
+} from '../config/trackingFreshness'
 
 const unwrap = (data, error, fallback) => {
   if (error) {
@@ -33,19 +37,47 @@ export const trackingService = {
   },
 
   /**
-   * Latest known position per employee. `withinMinutes` only widens the
-   * "points in window" signal used for activity display; it never decides
-   * whether a stale point is shown as live - `is_stale` does that.
+   * Latest known position per employee.
+   *
+   * Freshness is NEVER decided here: the server returns the fix's age against
+   * its own clock (`age_seconds`) and the UI classifies it with the thresholds
+   * in src/config/trackingFreshness.js. Every server field is passed through
+   * verbatim — the previous implementation silently dropped `is_stale`, which
+   * is what let a two-day-old fix be counted as "recently updated".
    */
-  async livePositions({ withinMinutes = 60, department = null, branchId = null, position = null } = {}) {
-    const { data, error } = await supabase.rpc('list_tracked_employees', {
+  async livePositions({
+    withinMinutes = 60,
+    department = null,
+    branchId = null,
+    // Added by main; kept, and forwarded to v3 which ignores unknown params.
+    position = null,
+  } = {}) {
+    // Cross-platform parity: mobile and web BOTH read the SAME RPC
+    // (employee_live_positions_v3). v2 is kept only as a thin backward
+    // compatibility delegate so older databases still work — the two apps can
+    // never render different verdicts again.
+    //
+    // NOTE FOR ANYONE MERGING main INTO THIS BRANCH: main temporarily pointed
+    // this at `list_tracked_employees`. That legacy function was superseded by
+    // employee_live_positions_v3 (see
+    // supabase/migrations/20261110000002_drop_legacy_list_tracked_employees.sql)
+    // and would silently drop is_stale/freshness again. Restore v3.
+    const { data, error } = await supabase.rpc('employee_live_positions_v3', {
       p_within_minutes: withinMinutes,
       p_department: department,
       p_branch_id: branchId,
     })
 
-    const rawData = unwrap(data, error, [])
-    const normalized = Array.isArray(rawData) ? rawData : (rawData?.employees || rawData?.positions || [])
+    const result = unwrap(data, error, [])
+    // PostgREST returns a bare ARRAY for `returns table` functions, so
+    // `result` is normally the rows. The object branch accepts EITHER key a
+    // future/other endpoint might wrap rows in — `employees` (the name this
+    // RPC family uses) or `positions` — so Live Positions can never
+    // silently render an empty table from a shape mismatch again.
+    const normalized = Array.isArray(result)
+      ? result
+      : (result?.employees ?? result?.positions ?? [])
+
 
     if (!Array.isArray(normalized)) {
       throw new Error(
@@ -56,25 +88,59 @@ export const trackingService = {
     const mapped = normalized.map(item => ({
       id: item.id || item.employee_id,
       employee_id: item.employee_id,
-      latitude: Number(item.latitude || 0),
-      longitude: Number(item.longitude || 0),
-      recorded_at: item.recorded_at || new Date().toISOString(),
-      full_name: item.employee_name || item.employee?.full_name || 'Staff Member',
-      branch_name: item.branch_name || item.employee?.branch?.name || 'Head Office',
-      // Preserve existing flags used by the UI
+      latitude: item.latitude == null ? null : Number(item.latitude),
+      longitude: item.longitude == null ? null : Number(item.longitude),
+      recorded_at: item.recorded_at || null,
+      // The server (v3 + name-fallback migration) guarantees a non-blank
+      // full_name via its COALESCE chain. The client keeps a defensive chain
+      // of its own — employee number, then position — and only as a last
+      // resort shows the employee id, so the generic 'Staff Member' placeholder
+      // can never again mask a real person across every row.
+      full_name: item.full_name
+        || item.employee_name
+        || item.name
+        || item.employee_number
+        || item.position
+        || item.employee_id
+        || 'Staff Member',
+      branch_name: item.branch_name || 'Head Office',
+      // The row's own branch id, so the live tab can filter by branch without
+      // re-deriving it from a name (names repeat across branch codes).
+      branch_id: item.branch_id ?? null,
+      // Fields the UI already consumed from v2
       inside_geofence: item.inside_geofence,
       is_stale: item.is_stale,
       location_label: item.location_label,
+      resolved_place: item.location_label || item.resolved_place || '',
       nearest_location_name: item.nearest_location_name,
       nearest_distance: item.nearest_distance,
       nearest_radius: item.nearest_radius,
-      minutes_ago: item.minutes_ago,
-      last_seen: item.last_seen,
+      // v3 returns server age_seconds (now() - recorded_at), so derive
+      // minutes_ago from it. v2 returned minutes_ago directly.
+      minutes_ago:
+        item.age_seconds == null
+          ? null
+          : Math.max(0, Math.round(item.age_seconds / 60)),
+      last_seen: item.recorded_at,
+      uploaded_at: item.uploaded_at,
+      // Server-computed age + server clock
+      age_seconds: item.age_seconds,
+      server_now: item.server_now,
+      // Kept for compatibility — the live-sources are is_stale from
+      // list_tracked_employees() (v2) and freshness from v3. Both are
+      // server-derived from recorded_at against the server clock, so the
+      // verdict is passed through verbatim when present and otherwise taken
+      // from the server's own freshness bucket — never recomputed on the
+      // client, never dropped.
+      is_stale: item.is_stale ?? item.freshness === 'stale',
+      freshness: item.freshness,
       accuracy: item.accuracy,
       employee_number: item.employee_number,
       position: item.position,
       department: item.department,
-      branch_id: item.branch_id,
+      has_fix: item.has_fix !== false && item.recorded_at != null,
+      tracking_unavailable_reason: item.tracking_unavailable_reason,
+      position: item.position,
     }))
 
     // Position filtering is client-side because the RPC does not support it.
@@ -130,21 +196,89 @@ export const trackingService = {
   },
 
   /**
+   * Latest known position per employee — employees WITH a fix in the last
+   * 48 h only, one row each, already sorted by the server.
+   *
+   * This is employee_live_positions_v4, the single source of truth for the Live
+   * positions tab. It replaced v3 on that tab because v3 returned EVERY
+   * employee (224 "No location yet" rows pushed the people actually reporting
+   * to the bottom of an unsorted list) and it left every client to recompute a
+   * display category of its own. That is exactly where the reported mismatch
+   * came from: the header chips counted FRESHNESS while the badges rendered the
+   * geofence verdict, so "1 Inside" (one live fix) sat next to a correctly
+   * Outside badge.
+   *
+   * v4 returns, per row, ONE `display_category` field — 'stale' | 'inside' |
+   * 'outside' | 'unconfigured' — plus `boundary_ambiguous`, so the page can
+   * count chips, filter and sort from the SAME rows it renders and never
+   * recompute a verdict. `livePositions` (v3) is kept for the mobile app and
+   * for older databases; v3 is never dropped, so an older client that still
+   * calls it keeps working against this schema.
+   */
+  async livePositionsRecent({
+    recentHours = 48,
+    department = null,
+    branchId = null,
+    role = null,
+    search = null,
+  } = {}) {
+    const { data, error } = await supabase.rpc('employee_live_positions_v4', {
+      p_recent_hours: recentHours,
+      p_department: department,
+      p_branch_id: branchId,
+      p_role: role,
+      p_search: search,
+    })
+
+    const result = unwrap(data, error, [])
+    const normalized = Array.isArray(result) ? result : (result?.employees ?? [])
+    if (!Array.isArray(normalized)) {
+      throw new Error('Tracking data could not be read: the server returned an unexpected shape.')
+    }
+    return normalized.map(normalizeLiveRow)
+  },
+
+  /**
    * Movement history for one employee on one date. Returns the ACTUAL recorded
-   * points in time order - the map polyline and the timeline are both drawn
-   * from this array, so no route is ever inferred between two points.
+   * points in recorded_at order - the map polyline and the timeline are both
+   * drawn from this array, so no route is ever inferred between two points and
+   * a late (backfilled) upload can never be shown out of sequence.
    */
   async history(employeeId, date, { fromTime = null, toTime = null, insideOnly = 'all' } = {}) {
-    const { data, error } = await supabase.rpc('employee_location_history', {
+    const { data, error } = await supabase.rpc('employee_movement_trail_v2', {
       p_employee_id: employeeId,
       p_date: date,
       p_from_time: fromTime,
       p_to_time: toTime,
       p_inside_only: insideOnly,
     })
-    return unwrap(data, error, { points: [], point_count: 0 })
+    const res = unwrap(data, error, { points: [], point_count: 0 })
+    return { ...res, points: sortByRecordedAt(res?.points) }
   },
 
+  /**
+   * Subscribe to new location events on the private tracking:live channel.
+   * The trigger sends ONLY {employee_id, recorded_at} - never coordinates.
+   * The channel is authorized by an RLS policy on realtime.messages that
+   * requires the same Full/Shared tracking access as every other RPC.
+   *
+   * The callback receives nothing useful: the caller refetches the v2 view
+   * after a 2 s debounce so rows are never patched locally.
+   */
+  subscribeLive(onInsert, { debounceMs = 2000 } = {}) {
+    let timer = null
+    const fire = () => { timer = null; onInsert() }
+    const channel = supabase.channel('tracking:live')
+      .on('broadcast', { event: 'message' }, () => {
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(fire, debounceMs)
+      })
+      .subscribe()
+    return { channel, unsubscribe: () => channel.unsubscribe() }
+  },
+
+  /**
+   * ACTIVE registered locations with the radius the engine actually applies, so
   /**
    * ACTIVE registered locations with the radius the engine actually applies, so
    * the map draws exactly the fences that can resolve a clock-in. Read through
@@ -219,11 +353,96 @@ export const trackingService = {
 // Presentation helpers (formatting only - no business math, no geofence logic)
 // ---------------------------------------------------------------------------
 
-/** "Last seen 42 minutes ago" - never present a stale point as live. */
-export function describeFreshness(row) {
-  if (!row?.last_seen) return 'No location recorded'
-  const mins = row.minutes_ago
-  if (mins == null) return 'No location recorded'
+/**
+ * Pass a live-position row from the server through, VERBATIM.
+ *
+ * Two server fields are load-bearing and must never be dropped or re-derived:
+ *
+ *   display_category    — the ONE category the server assigned
+ *                         ('stale' | 'inside' | 'outside' | 'unconfigured').
+ *                         The chips, the badges and the sort all read this.
+ *   boundary_ambiguous  — TRUE only when the GPS error circle reaches across
+ *                         the fence boundary, i.e. the reading cannot on its
+ *                         own prove inside or outside. It NEVER changes the
+ *                         verdict; it only licenses the honest
+ *                         "(low GPS accuracy)" note. A fix 11.6 km outside a
+ *                         20 m fence is not ambiguous however imprecise it is,
+ *                         which is what the old `accuracy > radius` test got
+ *                         wrong.
+ */
+export function normalizeLiveRow(item) {
+  if (!item) return item
+  return {
+    id: item.id || item.employee_id,
+    employee_id: item.employee_id,
+    latitude: item.latitude == null ? null : Number(item.latitude),
+    longitude: item.longitude == null ? null : Number(item.longitude),
+    accuracy: item.accuracy_m != null ? Number(item.accuracy_m) : (item.accuracy == null ? null : Number(item.accuracy)),
+    recorded_at: item.recorded_at || null,
+    uploaded_at: item.uploaded_at || null,
+    full_name: item.full_name || item.employee_name || item.name || 'Staff Member',
+    employee_number: item.employee_number || null,
+    position: item.position || null,
+    department: item.department || null,
+    branch_id: item.branch_id ?? null,
+    branch_name: item.branch_name || 'Head Office',
+    // Geofence verdict — computed SERVER-SIDE from the newest fix and the
+    // active fences. A stored inside_geofence written at capture time is never
+    // trusted, and the client never recomputes it.
+    inside_geofence: item.geofence_status === 'inside',
+    geofence_status: item.geofence_status || null,
+    geofence_name: item.geofence_name || item.nearest_location_name || null,
+    location_label: item.location_label || null,
+    nearest_location_name: item.nearest_location_name || item.geofence_name || null,
+    nearest_distance: item.nearest_distance ?? null,
+    nearest_radius: item.nearest_radius ?? null,
+    radius_m: item.radius_m ?? item.nearest_radius ?? null,
+    distance_to_center_m: item.distance_to_center_m ?? null,
+    meters_outside: item.meters_outside ?? null,
+    boundary_ambiguous: item.boundary_ambiguous === true,
+    confidence: item.confidence || null,
+    display_category: item.display_category || null,
+    age_seconds: item.age_seconds ?? null,
+    server_now: item.server_now ?? null,
+    freshness: item.freshness || null,
+    sync_status: item.sync_status || null,
+    last_seen: item.recorded_at,
+    is_clocked_in: item.is_clocked_in === true,
+    tracking_unavailable_reason: item.tracking_unavailable_reason || null,
+    has_fix: item.recorded_at != null,
+  }
+}
+
+/**
+ * Strict recorded_at ascending order. Both the timeline and the map polyline
+ * consume this, so a backfilled row (recorded earlier, uploaded later) can
+ * never be drawn after a fix that was captured after it.
+ */
+export function sortByRecordedAt(points = []) {
+  if (!Array.isArray(points)) return []
+  return [...points].sort((a, b) => {
+    const at = a?.recorded_at ? Date.parse(a.recorded_at) : NaN
+    const bt = b?.recorded_at ? Date.parse(b.recorded_at) : NaN
+    if (Number.isNaN(at) && Number.isNaN(bt)) return 0
+    if (Number.isNaN(at)) return 1
+    if (Number.isNaN(bt)) return -1
+    return at - bt
+  })
+}
+
+/**
+ * "Last seen 42 minutes ago" - never present a stale point as live.
+ *
+ * `elapsedMs` is the time since the server response arrived; the base age is
+ * always the server's own `age_seconds`, so the label keeps counting up between
+ * polls instead of freezing (and a wrong browser clock cannot make an old fix
+ * look fresh).
+ */
+export function describeFreshness(row, elapsedMs = 0) {
+  if (!row) return 'No location yet'
+  const seconds = ageSecondsOf(row, elapsedMs)
+  if (seconds == null) return 'No location yet'
+  const mins = Math.floor(seconds / 60)
   if (mins < 1) return 'Just now'
   if (mins === 1) return 'Last seen 1 minute ago'
   if (mins < 60) return `Last seen ${mins} minutes ago`
@@ -257,9 +476,45 @@ export function formatDistance(meters) {
  * helper additionally surfaces the measured distance and the fence radius, so
  * "outside" is always a checkable statement rather than an assertion.
  */
-export function describeGeofenceStatus(point) {
-  if (!point) return { tone: 'muted', text: 'No location recorded', detail: null }
+/**
+ * TRUE only when the fix's GPS error circle actually reaches across the fence
+ * boundary, so the reading cannot on its own prove inside or outside.
+ *
+ * This NEVER changes the verdict — the server owns that — it only decides
+ * whether the honest "(low GPS accuracy)" note is shown. The old test was
+ * `accuracy > radius`, which is true for almost every reading (a 100 m fix
+ * against a 20 m fence) and therefore printed the note on a point 11.7 km OUTSIDE
+ * the fence, where accuracy cannot possibly change the verdict.
+ *
+ * The server now computes `boundary_ambiguous` as
+ * `abs(distance - radius) <= accuracy`; this helper trusts that field whenever
+ * it is present and falls back to the same formula only for a row from an older
+ * RPC that does not send it.
+ */
+export function isLowAccuracy(point) {
+  if (!point) return false
+  // Trust the server when it spoke (employee_live_positions_v4 always does).
+  if (typeof point.boundary_ambiguous === 'boolean') return point.boundary_ambiguous
+  const accuracy = point.accuracy
+  const radius = point.nearest_radius
+  const distance = point.distance_to_center_m ?? point.nearest_distance
+  if (accuracy == null || radius == null) return false
+  const a = Number(accuracy)
+  const r = Number(radius)
+  const d = Number(distance)
+  if (!Number.isFinite(a) || !Number.isFinite(r) || !Number.isFinite(d)) return false
+  return Math.abs(d - r) <= a
+}
 
+function withLowAccuracy(detail, low) {
+  if (!low) return detail
+  return detail ? `${detail} · ${LOW_ACCURACY_SUFFIX}` : LOW_ACCURACY_SUFFIX
+}
+
+export function describeGeofenceStatus(point) {
+  if (!point) return { tone: 'muted', text: 'No location recorded', detail: null, lowAccuracy: false }
+
+  const low = isLowAccuracy(point)
   const nearest = point.nearest_location_name
   const distance = point.nearest_distance
   const radius = point.nearest_radius
@@ -268,14 +523,23 @@ export function describeGeofenceStatus(point) {
     return {
       tone: 'inside',
       text: point.location_label || nearest || 'Inside a registered location',
-      detail: distance != null
-        ? `${formatDistance(distance)} from the centre (radius ${formatDistance(radius)})`
-        : null,
+      detail: withLowAccuracy(
+        distance != null
+          ? `${formatDistance(distance)} from the centre (radius ${formatDistance(radius)})`
+          : null,
+        low,
+      ),
+      lowAccuracy: low,
     }
   }
 
   if (!nearest) {
-    return { tone: 'outside', text: 'Outside all registered locations', detail: null }
+    return {
+      tone: 'outside',
+      text: 'Outside all registered locations',
+      detail: withLowAccuracy(null, low),
+      lowAccuracy: low,
+    }
   }
 
   const gap = distance != null && radius != null
@@ -290,7 +554,8 @@ export function describeGeofenceStatus(point) {
     text: distance != null
       ? `${formatDistance(distance)} outside ${nearest}`
       : `Outside ${nearest}`,
-    detail: gap,
+    detail: withLowAccuracy(gap, low),
+    lowAccuracy: low,
   }
 }
 
@@ -364,6 +629,9 @@ export function buildMovementTimeline(points = [], addresses = {}) {
       id: p.id,
       time: formatClockTime(p.recorded_at),
       recordedAt: p.recorded_at,
+      // Kept so the row can say "uploaded late" when a backfilled fix reached
+      // the server long after it was captured (threshold lives in config).
+      uploadedAt: p.uploaded_at,
       label,
       // The registered-location wording is kept separately so the sub-line can
       // still say how far outside the point was, even when the headline shows
@@ -376,4 +644,48 @@ export function buildMovementTimeline(points = [], addresses = {}) {
       transition,
     }
   })
+}
+
+/**
+ * Inserts a "No data for 1h 20m" row wherever two consecutive fixes are more
+ * than TIMELINE_GAP_MINUTES apart, so a long silent stretch is stated instead
+ * of being drawn over as if the person never moved.
+ *
+ * Pure presentation: it reads recorded_at only, never reorders and never
+ * removes a point. The threshold comes from src/config/trackingFreshness.js.
+ */
+export function insertTimelineGaps(timeline = [], gapMinutes = TIMELINE_GAP_MINUTES) {
+  if (!Array.isArray(timeline) || timeline.length === 0) return []
+  const out = []
+  let lastPoint = null
+  let seq = 0
+
+  for (const item of timeline) {
+    if (!item || item.isGap) continue
+    if (lastPoint) {
+      const from = Date.parse(lastPoint.recordedAt)
+      const to = Date.parse(item.recordedAt)
+      const deltaMs = to - from
+      if (Number.isFinite(deltaMs) && deltaMs > gapMinutes * 60000) {
+        out.push({
+          id: `timeline-gap-${seq++}`,
+          isGap: true,
+          gapMinutes: deltaMs / 60000,
+          label: `No data for ${formatDurationMinutes(deltaMs / 60000)}`,
+        })
+      }
+    }
+    out.push(item)
+    lastPoint = item
+  }
+  return out
+}
+
+/** True when the fix reached the server more than LATE_UPLOAD_MINUTES after capture. */
+export function isUploadedLate(recordedAt, uploadedAt, lateMinutes = LATE_UPLOAD_MINUTES) {
+  if (!recordedAt || !uploadedAt) return false
+  const recorded = Date.parse(recordedAt)
+  const uploaded = Date.parse(uploadedAt)
+  if (!Number.isFinite(recorded) || !Number.isFinite(uploaded)) return false
+  return (uploaded - recorded) > lateMinutes * 60000
 }

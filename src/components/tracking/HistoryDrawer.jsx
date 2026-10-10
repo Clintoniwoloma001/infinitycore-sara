@@ -11,8 +11,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { X, Map as MapIcon, Filter, RotateCcw } from 'lucide-react'
 import {
   trackingService, formatCoord, formatClockTime, buildMovementTimeline,
-  describeGeofenceStatus, outsidePoints,
+  describeGeofenceStatus, outsidePoints, insertTimelineGaps, isUploadedLate,
 } from '../../services/employeeTrackingService'
+import { LATE_UPLOAD_MINUTES } from '../../config/trackingFreshness'
 import { LoadingState, ErrorState } from '../PageStates'
 import TrackingMap from './TrackingMap'
 import MovementSummary from './MovementSummary'
@@ -74,8 +75,11 @@ export default function HistoryDrawer({ row, onClose }) {
     return () => { alive = false }
   }, [row.employee_id, date, fromTime, toTime, insideOnly])
 
+  // Points arrive sorted by recorded_at (see trackingService.history), so the
+  // timeline is chronological even when a backfilled upload lands out of order.
+  // Gaps longer than TIMELINE_GAP_MINUTES are stated instead of drawn over.
   const timeline = useMemo(
-    () => buildMovementTimeline(points, addresses),
+    () => insertTimelineGaps(buildMovementTimeline(points, addresses)),
     [points, addresses],
   )
 
@@ -231,22 +235,38 @@ export default function HistoryDrawer({ row, onClose }) {
                       <li key={t.id || i} className="flex gap-3">
                         <div className="flex flex-col items-center">
                           <span className={`w-2.5 h-2.5 rounded-full mt-1.5 ${
-                            t.insideGeofence ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                            t.isGap ? 'bg-slate-300 ring-2 ring-slate-200'
+                                    : t.insideGeofence ? 'bg-emerald-500' : 'bg-amber-500'}`} />
                           {i < timeline.length - 1 && (
                             <span className="w-px flex-1 bg-slate-200" />
                           )}
                         </div>
                         <div className="pb-4">
-                          <p className="text-sm font-medium text-slate-900">
-                            {t.time} {t.label}
-                          </p>
-                          {t.transition && (
-                            <p className="text-xs text-slate-500">{t.transition}</p>
-                          )}
-                          {!t.insideGeofence && t.placeLabel && (
-                            <p className="text-xs text-slate-500">
-                              Outside every registered location
-                            </p>
+                          {t.isGap ? (
+                            // A silent stretch, stated plainly: the person simply
+                            // produced no fixes during this window.
+                            <p className="text-xs font-medium italic text-slate-400">{t.label}</p>
+                          ) : (
+                            <>
+                              <p className="text-sm font-medium text-slate-900">
+                                {t.time} {t.label}
+                              </p>
+                              {t.transition && (
+                                <p className="text-xs text-slate-500">{t.transition}</p>
+                              )}
+                              {!t.insideGeofence && t.placeLabel && (
+                                <p className="text-xs text-slate-500">
+                                  Outside every registered location
+                                </p>
+                              )}
+                              {isUploadedLate(t.recordedAt, t.uploadedAt, LATE_UPLOAD_MINUTES) && (
+                                <p className="text-xs text-slate-500">
+                                  <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 ring-1 ring-slate-200">
+                                    uploaded late
+                                  </span>
+                                </p>
+                              )}
+                            </>
                           )}
                         </div>
                       </li>

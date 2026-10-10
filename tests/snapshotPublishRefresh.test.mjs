@@ -127,11 +127,13 @@ assert.doesNotMatch(performance, /localStorage\.getItem\('perf_preset'\)/)
 assert.match(performance, /const derived = useMemo\(\(\) => deriveDefaultPeriod\(results\), \[results\]\)/)
 assert.match(performance, /applied \?\? \{/)
 // Apply + Reset both re-query; Reset returns to the derived default.
+// Apply hands the APPLIED RANGE to the refresh (snapshot as-of its end date,
+// flow windowed by it) — see tests/performancePeriodFilters.test.mjs.
 const applyBlock = performance.slice(performance.indexOf('const applyFilters'), performance.indexOf('const resetFilters'))
 const resetBlock = performance.slice(performance.indexOf('const resetFilters'), performance.indexOf('const exportCsv'))
-assert.match(applyBlock, /await onRefresh\(\)/)
+assert.match(applyBlock, /await onRefresh\(rangeOf\(next\)\)/)
 assert.match(resetBlock, /setApplied\(null\)/)
-assert.match(resetBlock, /await onRefresh\(\)/)
+assert.match(resetBlock, /await onRefresh\(null\)/)
 assert.doesNotMatch(resetBlock, /preset: 'month'/)
 // Department scorecards table + snapshot metric columns.
 assert.match(performance, /Department Scorecards/)
@@ -140,7 +142,7 @@ assert.match(performance, /'outstanding', 'Outstanding'/)
 assert.match(performance, /'disbursed', 'Disbursed'/)
 assert.match(performance, /'repaid', 'Repaid'/)
 assert.match(performance, /'par', 'PAR %'/)
-assert.match(performance, /deptSnapshots=\{deptSnapshots\}/)
+assert.match(performance, /portfolio=\{portfolio\}/)
 // Empty state points at the import surfaces and no longer says "run a
 // calculation"; the "no match" case is no longer a blank screen.
 assert.match(performance, /#\/bankone-portfolio-review/)
@@ -154,12 +156,20 @@ assert.match(performance, /subscribeSnapshotRefresh\(\(\) => loadRef\.current\(\
 // 6. Service reads published snapshots' department rows — par-first, so
 //    a newer disbursement snapshot can never hide the department data —
 //    and degrades to [] while the rollup migration is not yet applied.
+//    The date-aware entry point (getPortfolioForRange) now owns that
+//    selection; listLatestDepartmentSnapshots delegates to it.
 // ------------------------------------------------------------------
-assert.match(portfolioService, /async listLatestDepartmentSnapshots\(\)/)
+assert.match(portfolioService, /async getPortfolioForRange\(/)
+assert.match(portfolioService, /async listLatestDepartmentSnapshots\(opts\)/)
+assert.match(portfolioService, /const slice = await this\.getPortfolioForRange\(opts \|\| \{\}\)/)
+assert.match(portfolioService, /return slice\.departments \|\| \[\]/)
 assert.match(portfolioService, /\.from\('bankone_portfolio_snapshots'\)/)
 assert.match(portfolioService, /\.eq\('status', 'published'\)/)
 assert.match(portfolioService, /\.from\('bankone_department_snapshots'\)/)
-assert.match(portfolioService, /if \(error\) return \[\]/)
+assert.match(portfolioService, /out\.departments/, 'departments are part of the returned slice')
+assert.match(portfolioService, /const out = \{ snapshot: null, departments: \[\], flow: null, latestAvailable: null, error: null \}/,
+  'partial reads degrade to empty parts + error instead of throwing')
+assert.match(portfolioService, /if \(snapErr\) \{ out\.error = snapErr\.message/, 'snapshot read errors are surfaced, not swallowed')
 assert.match(portfolioService, /report_type === 'par'/)
 assert.match(portfolioService, /\.limit\(20\)/)
 

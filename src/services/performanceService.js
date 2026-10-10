@@ -176,19 +176,33 @@ export const performanceService = {
 
   // ---- Get stored results ----
   async getResults({ periodLabel, startDate, endDate, employeeId, metricId } = {}) {
-    let query = supabase.from('performance_results').select('*').order('calculated_at', { ascending: false })
-    
-    if (periodLabel) {
-      query = query.eq('period_label', periodLabel)
-    } else if (startDate && endDate) {
-      query = query.gte('period_start', startDate).lte('period_end', endDate)
+    // PostgREST caps one response at `max_rows` (1000): without paging, a
+    // second page of results would be dropped and every total on the dashboard
+    // would silently disagree with SQL. One stable order across pages.
+    const PAGE = 1000
+    const rows = []
+    for (let offset = 0; ; offset += PAGE) {
+      let query = supabase
+        .from('performance_results')
+        .select('*')
+        .order('calculated_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(offset, offset + PAGE - 1)
+
+      if (periodLabel) {
+        query = query.eq('period_label', periodLabel)
+      } else if (startDate && endDate) {
+        query = query.gte('period_start', startDate).lte('period_end', endDate)
+      }
+
+      if (employeeId) query = query.eq('employee_id', employeeId)
+      if (metricId) query = query.eq('metric_id', metricId)
+      const { data, error } = await query
+      if (error) throw error
+      rows.push(...(data || []))
+      if (!data || data.length < PAGE) break
     }
-    
-    if (employeeId) query = query.eq('employee_id', employeeId)
-    if (metricId) query = query.eq('metric_id', metricId)
-    const { data, error } = await query
-    if (error) throw error
-    return data || []
+    return rows
   },
 
   // ---- Get employee performance summary ----

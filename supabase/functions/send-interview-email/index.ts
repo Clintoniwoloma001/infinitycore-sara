@@ -126,7 +126,26 @@ Deno.serve(async (req) => {
 
     if (!res.ok) {
       const errText = await res.text()
-      // Update interview with failed status
+      // Resend's own message is the actionable part: it names the reason
+      // (unverified sending domain, an invalid `from`, a rejected recipient).
+      // The body used to be read into errText and then DISCARDED, so the
+      // operator only ever saw "Resend API returned 400" with no way to fix it.
+      let reason = `Resend API returned ${res.status}`
+      try {
+        const parsed = JSON.parse(errText)
+        const first = Array.isArray(parsed?.errors) ? parsed.errors[0] : null
+        const detail = first?.message || parsed?.message || parsed?.error
+        if (detail) reason = `${reason} — ${detail}`
+      } catch (_) {
+        if (errText) reason = `${reason} — ${errText}`
+      }
+      // The single most common cause is an unverified sending domain, which can
+      // only be fixed in the Resend dashboard — so say so instead of implying
+      // the candidate or the code is wrong.
+      const hint = res.status === 403 || res.status === 400
+        ? ' Check that the sending domain is verified in Resend, or set INTERVIEW_FROM_EMAIL to an address on it.'
+        : ''
+
       await admin.from('hr_interviews').update({
         notification_status: 'failed',
         notification_error: `Resend API error: ${res.status}`,
@@ -142,7 +161,7 @@ Deno.serve(async (req) => {
         severity: 'warning',
       })
 
-      return json({ status: 'failed', error: `Resend API returned ${res.status}` }, 200)
+      return json({ status: 'failed', error: `Email failed: ${reason}.${hint}` }, 200)
     }
 
     const result = await res.json()

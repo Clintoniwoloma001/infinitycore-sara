@@ -101,7 +101,7 @@ begin
     return jsonb_build_object('ok', false, 'message', 'employee_id and period_label are required');
   end if;
 
-  select e.id, e.full_name, e.branch_id, b.name as branch_name
+  select e.id, e.full_name, e.branch_id, b.branch_name as branch_name
     into v_emp
     from public.employees e
     left join public.branches b on b.id = e.branch_id
@@ -210,7 +210,7 @@ begin
     return jsonb_build_object('ok', false, 'message', 'branch_id and period_label are required');
   end if;
 
-  select b.name into v_branch_name from public.branches b where b.id = p_branch_id;
+  select b.branch_name into v_branch_name from public.branches b where b.id = p_branch_id;
   if not found then
     return jsonb_build_object('ok', false, 'message', 'Branch not found');
   end if;
@@ -301,4 +301,4 @@ revoke all on function public.rpc_get_branch_drag_and_soaring_staff(uuid, text) 
 grant execute on function public.rpc_get_branch_drag_and_soaring_staff(uuid, text) to authenticated;
 
 commit;
-
+i

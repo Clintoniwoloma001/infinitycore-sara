@@ -1,0 +1,34 @@
+-- ---------------------------------------------------------------------------
+-- Drop the LEGACY table-returning list_tracked_employees before re-issue
+-- ---------------------------------------------------------------------------
+-- Why this file exists (found while applying the 1.1.8 tracking pack to the
+-- LIVE database):
+--
+--   The live database still holds the ORIGINAL base44-era definition of
+--   list_tracked_employees(integer, text, uuid):
+--
+--       returns TABLE(id uuid, employee_id uuid, ... last_seen text, ...)
+--
+--   while every migration since 20260926000002 re-issues it as `returns
+--   jsonb`. PostgreSQL refuses to change the return type of an existing
+--   function ("cannot change return type of existing function"), so those
+--   create-or-replace statements FAILED silently-ish on the live project and
+--   the freshness contract (20261109000001) could never land either.
+--
+--   The old shape is not consumed anywhere: the web reads
+--   employee_live_positions_v3 / employee_movement_trail_v2, and mobile reads
+--   employee_live_positions_v3 / employee_location_history. Nothing in either
+--   app calls list_tracked_employees, and the tests assert the jsonb contract
+--   ("returns a BARE jsonb"). Dropping it therefore breaks no caller.
+--
+-- RUN ORDER
+--   1. THIS FILE (drops the stale definition so the return type can change)
+--   2. 20261109000001_list_tracked_employees_freshness.sql  (jsonb + freshness)
+--   3. 20261109000002_live_positions_v3.sql
+--   4. 20261109000003_tracking_geofence_repair_pack.sql
+--
+-- Idempotent: DROP FUNCTION IF EXISTS ... is a no-op when already applied.
+-- No data is touched — this only removes a function definition that is
+-- immediately recreated by the next file.
+-- ---------------------------------------------------------------------------
+drop function if exists public.list_tracked_employees(integer, text, uuid);
