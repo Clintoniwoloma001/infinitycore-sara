@@ -51,6 +51,7 @@ import Chat from './pages/Chat'
 import MessagesPage from './components/messages/MessagesPage'
 import CommunicationAdmin from './pages/CommunicationAdmin'
 import BankOneImportCenter from './pages/BankOneImportCenter'
+import DirectorMetricImport from './pages/DirectorMetricImport'
 import BankOneImportReview from './pages/BankOneImportReview'
 import BankOneIntegration from './pages/BankOneIntegration'
 import Performance from './pages/Performance'
@@ -127,6 +128,7 @@ const pageComponents = {
   MessagesPage,
   CommunicationAdmin,
   BankOneImportCenter,
+  DirectorMetricImport,
   BankOneImportReview,
   BankOneIntegration,
   Performance,

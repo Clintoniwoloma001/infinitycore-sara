@@ -23,14 +23,16 @@ create table if not exists public.director_metric_settings (
   -- eligible for best/worst rankings. NULL/0 = no minimum.
   min_caseload_for_ranking integer not null default 0,
   -- Days-past-due thresholds that define each PAR bucket when the source sheet
-  -- gives days_overdue instead of a status label. lower<=dpd for that bucket.
-  -- Stored as an ordered array of {metric_key, min_dpd}. The first row whose
-  -- range contains the dpd wins.
+  -- gives days_overdue instead of a status label. These MIRROR the existing
+  -- PAR_STATUS_BUCKETS in src/domains/performance/mprEngine.js (performing=0,
+  -- pass_watch 1-30, substandard 31-60, doubtful 61-90, lost 91+) so the import
+  -- never introduces a second definition. lower<=dpd for that bucket; the first
+  -- row whose range contains the dpd wins.
   bucket_dpd_thresholds    jsonb not null default '[
-      {"metric_key":"pass_watch","min_dpd":1},
-      {"metric_key":"substandard","min_dpd":90},
-      {"metric_key":"doubtful","min_dpd":180},
-      {"metric_key":"lost","min_dpd":365}
+      {"metric_key":"pass_watch","min_dpd":1,"max_dpd":30},
+      {"metric_key":"substandard","min_dpd":31,"max_dpd":60},
+      {"metric_key":"doubtful","min_dpd":61,"max_dpd":90},
+      {"metric_key":"lost","min_dpd":91,"max_dpd":null}
     ]'::jsonb,
   -- Which raw STATUS strings count as performing (NOT in the PAR numerator).
   performing_status_values  jsonb not null default '["performing","current","active"]'::jsonb,

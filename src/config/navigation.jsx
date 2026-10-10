@@ -11,6 +11,7 @@ import {
   ClipboardList,
   Clock3,
   Database,
+  FileSpreadsheet,
   FileSignature,
   LayoutDashboard,
   Link2,
@@ -54,6 +55,7 @@ export const routeConfig = [
       { label: 'BankOne Imports', path: '/bankone-imports', icon: Database, element: 'BankOneImportCenter', permissions: [PERMISSIONS.BANKONE_READ] },
       { label: 'Portfolio Import Review', path: '/bankone-portfolio-review', icon: ShieldCheck, element: 'BankOneImportReview', permissions: [PERMISSIONS.BANKONE_READ] },
       { label: 'BankOne Integration', path: '/bankone-integration', icon: Building2, element: 'BankOneIntegration', permissions: [PERMISSIONS.BANKONE_READ] },
+      { label: 'Metric Import', path: '/director-metric-import', icon: FileSpreadsheet, element: 'DirectorMetricImport', permissions: [PERMISSIONS.BANKONE_READ] },
     ],
   },
   {
