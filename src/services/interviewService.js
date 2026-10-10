@@ -2,16 +2,25 @@ import { supabase } from '../supabaseClient'
 import { logAction } from './supabaseService'
 import { sendInAppNotification } from './notificationService'
 
-// Check integration connection status for the current user
+// Check integration connection status for the current user.
+// Real check: asks the matching edge function for its own connection state,
+// which it reads server-side from integration_connections (RLS denies all
+// client access, so the client can never read the table itself).
 export async function getConnectionStatus(provider) {
   try {
-    // We can't read integration_connections directly (RLS denies all client access).
-    // Instead, we invoke the Edge Function which checks server-side.
-    // For now, use a lightweight check: try to invoke the create function
-    // and interpret the response.
-    return { connected: false, status: 'unknown' }
+    const fn =
+      provider === 'google_calendar' ? 'create-google-meet'
+      : provider === 'zoom' ? 'create-zoom-meeting'
+      : null
+    if (!fn) return { connected: false, status: 'unknown' }
+    const { data, error } = await supabase.functions.invoke(fn, {
+      body: { _check: true },
+    })
+    if (error) return { connected: false, status: 'not_configured' }
+    if (data?.status === 'connected') return { connected: true, status: 'connected' }
+    return { connected: false, status: data?.status || 'not_connected' }
   } catch {
-    return { connected: false, status: 'unknown' }
+    return { connected: false, status: 'error' }
   }
 }
 
@@ -45,12 +54,19 @@ export async function checkZoom() {
   }
 }
 
-// Initiate Google OAuth flow
+// Initiate Google OAuth flow.
+// The redirect_uri here MUST stay byte-equal to the one oauth-callback uses
+// at token-exchange time (SUPABASE_URL + /functions/v1/oauth-callback), and
+// that exact string must be registered in the Google Cloud console under
+// Authorized redirect URIs — otherwise Google rejects the code exchange with
+// redirect_uri_mismatch even when the Supabase secrets are correct.
 export function connectGoogleCalendar(userId) {
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
   if (!clientId) return { url: null, error: 'VITE_GOOGLE_CLIENT_ID not configured' }
 
   const redirectUri = encodeURIComponent(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/oauth-callback?provider=google_calendar`)
+  // Calendar scope (full) is required: create-google-meet inserts events with
+  // conferenceData. userinfo.email identifies the connected account.
   const scope = encodeURIComponent('https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email')
   const state = `google_calendar:${userId}`
   const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent&state=${state}`

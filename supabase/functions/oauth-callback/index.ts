@@ -31,6 +31,12 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  // The redirect_uri sent to Google at token-exchange time MUST be byte-equal
+  // to the one used in the authorize step. The frontend builds it from the
+  // live project URL (VITE_SUPABASE_URL + /functions/v1/oauth-callback), so
+  // the default here is the live SUPABASE_URL. OAUTH_REDIRECT_BASE exists only
+  // as an explicit override — set it ONLY if you deliberately use a different
+  // public URL, and keep it identical everywhere.
   const redirectBase = Deno.env.get('OAUTH_REDIRECT_BASE') || supabaseUrl
 
   if (!supabaseUrl || !serviceRoleKey) return json({ error: 'env_missing' }, 500)

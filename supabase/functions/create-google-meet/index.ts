@@ -54,9 +54,25 @@ Deno.serve(async (req) => {
   const body = await req.json()
   const { summary, description, startDateTime, endDateTime, attendeeEmail, interviewId } = body
 
-  if (!summary || !startDateTime) return json({ error: 'summary_and_start_required' }, 400)
-
   const admin = createClient(supabaseUrl, serviceRoleKey)
+
+  // Connection probe (no side effects): lets the frontend show an honest
+  // connected/not-connected badge without sending a create payload that
+  // would fail validation anyway. Returns 'not_configured' when the
+  // Supabase Google secrets are missing so the UI can say so explicitly.
+  if (body._check === true) {
+    const { data: probe, error: probeError } = await admin
+      .from('integration_connections')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('provider', 'google_calendar')
+      .eq('connected', true)
+      .maybeSingle()
+    if (probeError || !probe) return json({ status: 'not_connected' }, 200)
+    return json({ status: 'connected' }, 200)
+  }
+
+  if (!summary || !startDateTime) return json({ error: 'summary_and_start_required' }, 400)
 
   // Get the user's Google OAuth tokens
   const { data: conn, error: connError } = await admin
