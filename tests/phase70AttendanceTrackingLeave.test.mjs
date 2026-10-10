@@ -212,9 +212,16 @@ check('client forwards the depth parameter it now sends', () => {
 check('stale locations are labelled, never shown as live', () => {
   const page = read('src/components/tracking/LivePositions.jsx')
   assert.match(page, /describeFreshness/)
-  // Freshness comes from ONE shared classifier (src/config/trackingFreshness.js),
-  // not from an ad-hoc test on the row inside the component.
-  assert.match(page, /rowFreshness/)
+  // Aging still comes from the ONE shared classifier
+  // (src/config/trackingFreshness.js), not from an ad-hoc test on the row
+  // inside the component. The verdict/category itself now comes from the
+  // server's display_category, so the component no longer runs its own
+  // freshness counter over the rows.
+  assert.match(page, /classifyAgeSeconds\(ageSecondsOf\(/)
+  // A stale fix must never render as a bright inside pill.
+  assert.match(page, /display_category === 'stale'/)
+  assert.match(page, /Last known:/)
+})
   assert.match(page, /countFreshness/)
   assert.match(page, /trackingFreshness/)
   // An employee with no fix must be shown, not dropped from the roster.

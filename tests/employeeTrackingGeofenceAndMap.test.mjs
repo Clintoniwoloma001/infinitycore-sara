@@ -189,8 +189,10 @@ check('a single point makes no movement claim', () => {
   assert.match(summary, /single moment, so no movement can be described/)
 })
 check('the grid shows the measured distance, not a bare "Outside"', () => {
-  assert.match(live, /describeGeofenceStatus/)
-  assert.match(service, /formatDistance/)
+  // The distance is rendered from the server's own fields — one line, once.
+  assert.match(live, /formatDistance\(/)
+  assert.match(live, /distance_to_center_m \?\? row\.meters_outside \?\? row\.nearest_distance/)
+  assert.match(live, /from the centre/)
   assert.ok(!/Outside registered locations/.test(live),
     'the grid must not fall back to the old bare wording')
 })
@@ -349,10 +351,15 @@ check('a bare-array RPC is not unwrapped as an object', () => {
 })
 
 check('the empty-state copy is only reachable from a genuinely empty array', () => {
-  assert.match(live, /No locations recorded yet/)
+  // The tab only ever receives employees who HAVE a fix in the window (v4
+  // inner-joins the newest fix), so the empty state means "nobody reported",
+  // never "232 employees, 224 without a location".
+  assert.match(live, /No one has reported in the last \$\{RECENT_HOURS\} h/)
   // The rows it renders come straight from the service result - nothing filters
   // the authorised set down to nothing on the client.
-  assert.match(live, /setRows\(await trackingService\.livePositions/)
+  assert.match(live, /setRows\(result\)/)
+  assert.ok(!/setRows\(await trackingService\.livePositions\(/.test(live),
+    'the live tab must read v4 (recent fixes only), not the all-employees v3 view')
   assert.ok(!/rows\.filter\(.*points_in_window/.test(live),
     'points_in_window is an activity signal, never a visibility filter')
 })

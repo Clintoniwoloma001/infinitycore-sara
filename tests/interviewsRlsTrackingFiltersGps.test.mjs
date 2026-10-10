@@ -182,15 +182,18 @@ check('the scope filter runs before the freshness chip and never hides the set',
   assert.match(live, /const scoped = useMemo\(/)
   assert.match(live, /if \(!activeFilter\) return scoped/)
   assert.match(live, /matchesScope\(r, scope\)/)
-  // Counts still describe the whole authorised population.
-  assert.match(live, /countFreshness\(rows, elapsed\)/)
+  // Counts describe the same rows, and recompute after the scope pick, so the
+  // chips can never drift from the table. One field, one source.
+  assert.match(live, /countDisplayCategories\(rows\)/)
+  assert.match(live, /countDisplayCategories\(scoped\)/)
+  assert.match(live, /scopedCounts\.inside\} Inside/)
 })
 check('an over-filtered view has its own empty state with a Clear action', () => {
   assert.match(live, /No employees match these filters/)
   assert.match(live, /setScope\(EMPTY_SCOPE\)/)
-  // The generic "no locations recorded" state stays reachable only when there
-  // are genuinely no rows at all.
-  assert.match(live, /title="No locations recorded yet"/)
+  // The generic empty state stays reachable only when there are genuinely no
+  // rows at all, and now says what it actually means: nobody reported.
+  assert.match(live, /No one has reported in the last \$\{RECENT_HOURS\} h/)
 })
 check('mobile cards follow the same visible set', () => {
   assert.match(live, /<MobileRows rows=\{visible\}/)

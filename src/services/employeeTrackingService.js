@@ -130,6 +130,49 @@ export const trackingService = {
   },
 
   /**
+   * Latest known position per employee — employees WITH a fix in the last
+   * 48 h only, one row each, already sorted by the server.
+   *
+   * This is employee_live_positions_v4, the single source of truth for the Live
+   * positions tab. It replaced v3 on that tab because v3 returned EVERY
+   * employee (224 "No location yet" rows pushed the people actually reporting
+   * to the bottom of an unsorted list) and it left every client to recompute a
+   * display category of its own. That is exactly where the reported mismatch
+   * came from: the header chips counted FRESHNESS while the badges rendered the
+   * geofence verdict, so "1 Inside" (one live fix) sat next to a correctly
+   * Outside badge.
+   *
+   * v4 returns, per row, ONE `display_category` field — 'stale' | 'inside' |
+   * 'outside' | 'unconfigured' — plus `boundary_ambiguous`, so the page can
+   * count chips, filter and sort from the SAME rows it renders and never
+   * recompute a verdict. `livePositions` (v3) is kept for the mobile app and
+   * for older databases; v3 is never dropped, so an older client that still
+   * calls it keeps working against this schema.
+   */
+  async livePositionsRecent({
+    recentHours = 48,
+    department = null,
+    branchId = null,
+    role = null,
+    search = null,
+  } = {}) {
+    const { data, error } = await supabase.rpc('employee_live_positions_v4', {
+      p_recent_hours: recentHours,
+      p_department: department,
+      p_branch_id: branchId,
+      p_role: role,
+      p_search: search,
+    })
+
+    const result = unwrap(data, error, [])
+    const normalized = Array.isArray(result) ? result : (result?.employees ?? [])
+    if (!Array.isArray(normalized)) {
+      throw new Error('Tracking data could not be read: the server returned an unexpected shape.')
+    }
+    return normalized.map(normalizeLiveRow)
+  },
+
+  /**
    * Movement history for one employee on one date. Returns the ACTUAL recorded
    * points in recorded_at order - the map polyline and the timeline are both
    * drawn from this array, so no route is ever inferred between two points and
@@ -245,6 +288,66 @@ export const trackingService = {
 // ---------------------------------------------------------------------------
 
 /**
+ * Pass a live-position row from the server through, VERBATIM.
+ *
+ * Two server fields are load-bearing and must never be dropped or re-derived:
+ *
+ *   display_category    — the ONE category the server assigned
+ *                         ('stale' | 'inside' | 'outside' | 'unconfigured').
+ *                         The chips, the badges and the sort all read this.
+ *   boundary_ambiguous  — TRUE only when the GPS error circle reaches across
+ *                         the fence boundary, i.e. the reading cannot on its
+ *                         own prove inside or outside. It NEVER changes the
+ *                         verdict; it only licenses the honest
+ *                         "(low GPS accuracy)" note. A fix 11.6 km outside a
+ *                         20 m fence is not ambiguous however imprecise it is,
+ *                         which is what the old `accuracy > radius` test got
+ *                         wrong.
+ */
+export function normalizeLiveRow(item) {
+  if (!item) return item
+  return {
+    id: item.id || item.employee_id,
+    employee_id: item.employee_id,
+    latitude: item.latitude == null ? null : Number(item.latitude),
+    longitude: item.longitude == null ? null : Number(item.longitude),
+    accuracy: item.accuracy_m != null ? Number(item.accuracy_m) : (item.accuracy == null ? null : Number(item.accuracy)),
+    recorded_at: item.recorded_at || null,
+    uploaded_at: item.uploaded_at || null,
+    full_name: item.full_name || item.employee_name || item.name || 'Staff Member',
+    employee_number: item.employee_number || null,
+    position: item.position || null,
+    department: item.department || null,
+    branch_id: item.branch_id ?? null,
+    branch_name: item.branch_name || 'Head Office',
+    // Geofence verdict — computed SERVER-SIDE from the newest fix and the
+    // active fences. A stored inside_geofence written at capture time is never
+    // trusted, and the client never recomputes it.
+    inside_geofence: item.geofence_status === 'inside',
+    geofence_status: item.geofence_status || null,
+    geofence_name: item.geofence_name || item.nearest_location_name || null,
+    location_label: item.location_label || null,
+    nearest_location_name: item.nearest_location_name || item.geofence_name || null,
+    nearest_distance: item.nearest_distance ?? null,
+    nearest_radius: item.nearest_radius ?? null,
+    radius_m: item.radius_m ?? item.nearest_radius ?? null,
+    distance_to_center_m: item.distance_to_center_m ?? null,
+    meters_outside: item.meters_outside ?? null,
+    boundary_ambiguous: item.boundary_ambiguous === true,
+    confidence: item.confidence || null,
+    display_category: item.display_category || null,
+    age_seconds: item.age_seconds ?? null,
+    server_now: item.server_now ?? null,
+    freshness: item.freshness || null,
+    sync_status: item.sync_status || null,
+    last_seen: item.recorded_at,
+    is_clocked_in: item.is_clocked_in === true,
+    tracking_unavailable_reason: item.tracking_unavailable_reason || null,
+    has_fix: item.recorded_at != null,
+  }
+}
+
+/**
  * Strict recorded_at ascending order. Both the timeline and the map polyline
  * consume this, so a backfilled row (recorded earlier, uploaded later) can
  * never be drawn after a fix that was captured after it.
@@ -308,19 +411,33 @@ export function formatDistance(meters) {
  * "outside" is always a checkable statement rather than an assertion.
  */
 /**
- * A fix whose GPS error is larger than the fence radius cannot, on its own,
- * prove inside or outside. This never changes the verdict — resolve_employee_location()
- * owns that — it only says out loud that the reading is imprecise.
+ * TRUE only when the fix's GPS error circle actually reaches across the fence
+ * boundary, so the reading cannot on its own prove inside or outside.
+ *
+ * This NEVER changes the verdict — the server owns that — it only decides
+ * whether the honest "(low GPS accuracy)" note is shown. The old test was
+ * `accuracy > radius`, which is true for almost every reading (a 100 m fix
+ * against a 20 m fence) and therefore printed the note on a point 11.7 km OUTSIDE
+ * the fence, where accuracy cannot possibly change the verdict.
+ *
+ * The server now computes `boundary_ambiguous` as
+ * `abs(distance - radius) <= accuracy`; this helper trusts that field whenever
+ * it is present and falls back to the same formula only for a row from an older
+ * RPC that does not send it.
  */
 export function isLowAccuracy(point) {
   if (!point) return false
+  // Trust the server when it spoke (employee_live_positions_v4 always does).
+  if (typeof point.boundary_ambiguous === 'boolean') return point.boundary_ambiguous
   const accuracy = point.accuracy
   const radius = point.nearest_radius
+  const distance = point.distance_to_center_m ?? point.nearest_distance
   if (accuracy == null || radius == null) return false
   const a = Number(accuracy)
   const r = Number(radius)
-  if (!Number.isFinite(a) || !Number.isFinite(r)) return false
-  return a > r
+  const d = Number(distance)
+  if (!Number.isFinite(a) || !Number.isFinite(r) || !Number.isFinite(d)) return false
+  return Math.abs(d - r) <= a
 }
 
 function withLowAccuracy(detail, low) {

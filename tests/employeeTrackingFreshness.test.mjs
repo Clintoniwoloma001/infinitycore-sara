@@ -85,8 +85,16 @@ check('classification is boundary-inclusive and never invents a state', () => {
 })
 check('the live tab imports its thresholds from the config, not its own copy', () => {
   assert.match(page, /from '\.\.\/\.\.\/config\/trackingFreshness'/)
-  assert.match(page, /rowFreshness/)
-  assert.match(page, /countFreshness/)
+  // The suffix wording and the aging helpers still come from the config, so no
+  // component declares its own copy of either.
+  assert.match(page, /LOW_ACCURACY_SUFFIX/)
+  assert.match(page, /classifyAgeSeconds\(ageSecondsOf\(/)
+  assert.match(page, /describeFreshness/)
+  // The chip/verdict logic itself moved to the server's display_category, so a
+  // component-level freshness counter is deliberately gone: what counted
+  // freshness while labelling the chips "Inside/Outside" was the reported defect.
+  assert.ok(!/countFreshness/.test(page))
+  assert.ok(!/rowFreshness/.test(page))
   // No component may hard-code the numbers.
   assert.ok(
     !/\b30\s*\*\s*60\b|\b6\s*\*\s*60\b|\b45\s*minutes?\b/.test(page),
@@ -237,18 +245,30 @@ check('the service still does no geofence math', () => {
 })
 
 console.log('\n6. The live tab says what is actually true')
-check('the header counts live / delayed / stale as Inside / Outside / Stale / No data chips', () => {
-  // Badges read Inside / Outside / Stale / No data (screenshot spec) but the
-  // COUNTS behind them must still be the freshness buckets from the ONE
-  // config — a two-day-old fix can never land in the "Inside" number.
-  assert.match(page, /\{counts\.live\} Inside/)
-  assert.match(page, /\{counts\.delayed\} Outside/)
-  assert.match(page, /\{counts\.stale\} Stale/)
-  assert.match(page, /\{counts\.none\} No data/)
-  assert.match(page, /freshness-counts/)
-  // The counts come from countFreshness over the whole row set, so every row
-  // lands in exactly one bucket (see the countFreshness tests in section 3).
-  assert.match(page, /countFreshness\(rows, elapsed\)/)
+check('the header chips count the SAME category the badges show', () => {
+  // THIS IS THE REPORTED BUG, AND THE OLD VERSION OF THIS TEST PINNED IT.
+  //
+  // The chips used to be labelled `Inside` / `Outside` / `Stale` / `No data`
+  // while being fed `countFreshness().live/.delayed/.stale/.none` — i.e. they
+  // counted HOW OLD each fix is, but promised HOW NEAR each fix was. So a
+  // device with exactly one live fix printed "1 Inside" even though that fix
+  // was 11.7 km outside Head Office and its row badge correctly read Outside.
+  //
+  // Both sides now read the ONE server field `display_category`. The chips
+  // count it, the badges switch on it, and the sum adds up because the
+  // categories are mutually exclusive.
+  assert.match(page, /countDisplayCategories\(/)
+  assert.match(page, /\{scopedCounts\.inside\} Inside/)
+  assert.match(page, /\{scopedCounts\.outside\} Outside/)
+  assert.match(page, /\{scopedCounts\.stale\} Stale/)
+  assert.match(page, /display-category-counts/)
+  // No freshness bucket may feed a chip label any more.
+  assert.ok(!/counts\.live\} Inside/.test(page))
+  assert.ok(!/counts\.delayed\} Outside/.test(page))
+  assert.ok(!/counts\.none\} No data/.test(page))
+  // Exactly one category per row, so the arithmetic is checkable:
+  // inside + outside + stale + unconfigured === rows listed.
+  assert.ok(!/'no_data'/.test(page))
 })
 check('a stale fix is grey + "Last known", never a green Inside pill', () => {
   assert.match(page, /Last known/)
@@ -257,8 +277,14 @@ check('a stale fix is grey + "Last known", never a green Inside pill', () => {
   // The bright pill is only rendered for live/delayed rows.
   assert.ok(/FRESHNESS\.STALE/.test(page), 'stale is branched on explicitly')
 })
-check('an employee with no fix is shown, not omitted', () => {
-  assert.match(page, /No location yet/)
+check('an employee with no fix is not listed by the live tab at all', () => {
+  // employee_live_positions_v4 inner-joins the newest fix, so the 224 employees
+  // who have never reported are simply not rows of this table. The single-source
+  // test pins the full contract; here we assert the page no longer renders a
+  // placeholder row for them and never claims to be showing all employees.
+  assert.ok(!/No location yet/.test(page))
+  assert.match(page, /reporting in the last \$\{RECENT_HOURS\} h/)
+  assert.ok(!/\$\{total\} tracked/.test(page))
 })
 check('the list refreshes every 30s while visible and on focus', () => {
   assert.match(page, /POLL_MS = 30000/)
@@ -350,10 +376,23 @@ check('the drawer states gaps and never draws a route between points', () => {
   assert.match(map, /valid\.length >= 2/)
   assert.ok(!/Math\.(sin|cos|acos|asin)/.test(map), 'the map never recomputes inside/outside')
 })
-check('a low-accuracy fix says so instead of pretending to be exact', () => {
+check('a low-accuracy fix says so only when it is genuinely ambiguous', () => {
   assert.match(configSource, /LOW_ACCURACY_SUFFIX = '\(low GPS accuracy\)'/)
   assert.match(serviceSource, /export function isLowAccuracy/)
-  // accuracy 120m vs a 50m fence -> the suffix must appear on the detail line.
+  // THE DEFECT: the note used to appear whenever accuracy > radius. A 120 m fix
+  // against a 50 m fence qualified — and so did a fix 9.2 km OUTSIDE it, where
+  // accuracy cannot possibly change the verdict.
+  const farOutside = { accuracy: 120, nearest_radius: 50, nearest_distance: 9200, distance_to_center_m: null, boundary_ambiguous: false }
+  assert.strictEqual(mod.isLowAccuracy(farOutside), false)
+  // It is shown only when the error circle actually straddles the boundary.
+  const ambiguous = { accuracy: 30, nearest_radius: 50, distance_to_center_m: 40, boundary_ambiguous: true }
+  assert.strictEqual(mod.isLowAccuracy(ambiguous), true)
+  // An older row without the server flag falls back to the same boundary test.
+  const legacyAmbiguous = { accuracy: 30, nearest_radius: 50, distance_to_center_m: 40 }
+  assert.strictEqual(mod.isLowAccuracy(legacyAmbiguous), true)
+  const legacyPrecise = { accuracy: 30, nearest_radius: 50, distance_to_center_m: 9200 }
+  assert.strictEqual(mod.isLowAccuracy(legacyPrecise), false)
+  // The verdict itself is untouched by the accuracy note.
   const status = mod.describeGeofenceStatus({
     inside_geofence: false,
     accuracy: 120,
@@ -361,18 +400,7 @@ check('a low-accuracy fix says so instead of pretending to be exact', () => {
     nearest_location_name: 'HEAD OFFICE',
     nearest_distance: 9200,
   })
-  assert.match(status.detail, /low GPS accuracy/)
-  assert.strictEqual(status.lowAccuracy, true)
-  // The verdict itself is untouched by the accuracy note.
-  const precise = mod.describeGeofenceStatus({
-    inside_geofence: false,
-    accuracy: 10,
-    nearest_radius: 50,
-    nearest_location_name: 'HEAD OFFICE',
-    nearest_distance: 9200,
-  })
-  assert.ok(!/low GPS accuracy/.test(precise.detail))
-  assert.strictEqual(precise.lowAccuracy, false)
+  assert.strictEqual(status.tone, 'outside')
   const inside = mod.describeGeofenceStatus({
     inside_geofence: true,
     accuracy: 10,

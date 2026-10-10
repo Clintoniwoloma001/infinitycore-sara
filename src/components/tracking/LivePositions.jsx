@@ -12,17 +12,79 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, AlertTriangle, Filter, X } from 'lucide-react'
 import {
-  trackingService, describeFreshness, formatCoord, describeGeofenceStatus,
+  trackingService, describeFreshness, formatCoord, formatDistance, isLowAccuracy,
 } from '../../services/employeeTrackingService'
 import {
-  FRESHNESS, countFreshness, rowFreshness,
+  FRESHNESS, LOW_ACCURACY_SUFFIX, classifyAgeSeconds, ageSecondsOf,
 } from '../../config/trackingFreshness'
 import { LoadingState, EmptyState, ErrorState } from '../PageStates'
 import HistoryDrawer from './HistoryDrawer'
 
+/**
+ * The ONE category set, in display order. These are the server's
+ * `display_category` values — the page never recomputes a verdict, it only
+ * groups by this field, so the chips and the badges can never disagree.
+ */
+export const DISPLAY_CATEGORY = Object.freeze({
+  LIVE: 'live',
+  INSIDE: 'inside',
+  OUTSIDE: 'outside',
+  STALE: 'stale',
+  UNCONFIGURED: 'unconfigured',
+})
+
+/**
+ * The mutually exclusive categories a row can belong to. Exactly one applies
+ * per row, which is what makes the header arithmetic checkable:
+ *   inside + outside + stale + unconfigured === rows listed
+ */
+export const COUNTED_CATEGORIES = ['inside', 'outside', 'stale', 'unconfigured']
+
+/**
+ * How long a fix keeps an employee on this tab.
+ */
+export const RECENT_HOURS = 48
+
+/**
+ * Optional, OFF by default. When true the tab shows a single muted line with
+ * the number of tracked employees who have NOT reported inside the window — it
+ * is deliberately NOT a chip and never a list, because a chip would imply those
+ * employees are rows of this table and would break the sum invariant above.
+ */
+export const SHOW_NO_DATA_COUNT = false
+
 const POLL_MS = 30000
 
 const EMPTY_SCOPE = { department: '', position: '', branch: '' }
+
+/** Local "HH:mm:ss" for the "updated" stamp. */
+function clockNow() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+}
+
+/**
+ * Group the rows the server authorised by display_category.
+ *
+ * Counting happens HERE, from the same array that is rendered, so the header
+ * can neither drift from the table nor overlap itself. There is no separate
+ * "freshness" pipeline for the chips and no separate "geofence" pipeline for
+ * the badges — one field, one source.
+ */
+export function countDisplayCategories(rows = []) {
+  const counts = { inside: 0, outside: 0, stale: 0, unconfigured: 0 }
+  for (const row of rows) {
+    const category = row?.display_category
+    if (category && Object.prototype.hasOwnProperty.call(counts, category)) {
+      counts[category] += 1
+    }
+  }
+  return counts
+}
+
+/** Employees with no fix inside the window, for the optional muted line. */
+export function sumCounted(counts) {
+  return COUNTED_CATEGORIES.reduce((total, key) => total + (counts[key] || 0), 0)
+}
 
 /** Does one row satisfy the operator's explicit department/position/branch picks? */
 function matchesScope(row, scope) {
@@ -54,7 +116,7 @@ function scopeOptionsOf(rows = []) {
   }
 }
 
-export default function LivePositions() {
+export default function LivePositions({ notReportingCount = null }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -62,8 +124,8 @@ export default function LivePositions() {
   // When the server answered, so ages keep advancing against server time.
   const [fetchedAt, setFetchedAt] = useState(0)
   const [now, setNow] = useState(() => Date.now())
+  const [updatedAt, setUpdatedAt] = useState('')
   const loadingRef = useRef(false)
-  // Explicit, operator-chosen scope: department / position / branch.
   const [scope, setScope] = useState(EMPTY_SCOPE)
 
   const load = useCallback(async ({ silent = false } = {}) => {
@@ -72,10 +134,14 @@ export default function LivePositions() {
     if (!silent) setLoading(true)
     setError(null)
     try {
-      // Rows come straight from the service result: nothing on the client
-      // filters the authorised set down to nothing.
-      setRows(await trackingService.livePositions({ withinMinutes: 60 }))
+      // ONE server call, ONE row set. There is no client-side merge with the
+      // full employee list and no client-side re-sort: the server already
+      // returns only employees with a fix in the window, already ordered
+      // (freshness rank, then newest, then name).
+      const result = await trackingService.livePositionsRecent({ recentHours: RECENT_HOURS })
+      setRows(result)
       setFetchedAt(Date.now())
+      setUpdatedAt(clockNow())
     } catch (e) {
       // A failed background poll must never blank a table that is on screen:
       // the rows stay and the error is surfaced as a retryable inline notice.
@@ -124,33 +190,35 @@ export default function LivePositions() {
     }
   }, [load])
 
+  // Wall-clock since the server answered. Only a delta, added to the server's
+  // own age_seconds, so ages keep advancing between polls without ever
+  // trusting the browser clock.
   const elapsed = fetchedAt ? Math.max(0, now - fetchedAt) : 0
-  const counts = useMemo(() => countFreshness(rows, elapsed), [rows, elapsed])
+
+  // Counts come from the SAME rows that get rendered — never a second source.
+  // Filters narrow the rendered set, and the chips are recomputed after that,
+  // so a filter can never make the header disagree with the table.
+  const counts = useMemo(() => countDisplayCategories(rows), [rows])
   const options = useMemo(() => scopeOptionsOf(rows), [rows])
   const scopeActive = scope.department !== '' || scope.position !== '' || scope.branch !== ''
 
-  // Scope first (what the operator picked), then the freshness chip. Both are
+  // Scope first (what the operator picked), then the category chip. Both are
   // derived from the same server-authorised row set; neither recomputes a
   // verdict, and neither can hide a row the server did not authorise.
   const scoped = useMemo(
     () => rows.filter((r) => matchesScope(r, scope)),
     [rows, scope],
   )
+  const scopedCounts = useMemo(() => countDisplayCategories(scoped), [scoped])
 
-  // Header chips: clickable filters. Default order is newest-first (the v2
-  // view returns that); the filters re-derive from the same row set.
+  // Header chips: clickable filters over the SAME category the badges show.
+  // Selecting one filters to rows with exactly that display_category; selecting
+  // it again clears the filter.
   const [activeFilter, setActiveFilter] = useState(null)
   const visible = useMemo(() => {
     if (!activeFilter) return scoped
-    return scoped.filter((r) => {
-      const state = rowFreshness(r, elapsed)
-      if (activeFilter === 'live') return state === FRESHNESS.LIVE
-      if (activeFilter === 'delayed') return state === FRESHNESS.DELAYED
-      if (activeFilter === 'stale') return state === FRESHNESS.STALE || state === FRESHNESS.NONE
-      if (activeFilter === 'no_data') return state === FRESHNESS.NONE
-      return true
-    })
-  }, [scoped, elapsed, activeFilter])
+    return scoped.filter((r) => r.display_category === activeFilter)
+  }, [scoped, activeFilter])
 
   if (loading && !visible.length) return <LoadingState label="Loading live positions..." />
   if (error && !visible.length) return <ErrorState title="Unable to load positions" message={error} />
@@ -162,7 +230,7 @@ export default function LivePositions() {
         <div className="text-center py-14 bg-white rounded-lg border border-slate-200">
           <p className="font-medium text-slate-800">No employees match these filters</p>
           <p className="text-sm text-slate-500 mt-1">
-            {rows.length} employee{rows.length === 1 ? '' : 's'} are tracked, but none match the selected{' '}
+            {rows.length} employee{rows.length === 1 ? ' is' : 's are'} reporting in the last {RECENT_HOURS} h, but none match the selected{' '}
             {[scope.department && 'department', scope.position && 'position', scope.branch && 'branch'].filter(Boolean).join(' / ')}.
           </p>
           <button
@@ -177,8 +245,8 @@ export default function LivePositions() {
     }
     return (
       <EmptyState
-        title="No locations recorded yet"
-        description="Positions appear once an employee app records a location observation."
+        title={`No one has reported in the last ${RECENT_HOURS} h`}
+        description="This tab lists only employees whose app has recorded a location in that window."
       />
     )
   }
@@ -192,20 +260,22 @@ export default function LivePositions() {
         active={scopeActive}
         total={rows.length}
         shown={visible.length}
+        label={`${rows.length} reporting in the last ${RECENT_HOURS} h`}
       />
 
       <div className="flex items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1.5" data-testid="freshness-counts">
+        <div className="flex flex-wrap items-center gap-1.5" data-testid="display-category-counts">
           {[
-            { key: 'live', label: `${counts.live} Inside`, tone: 'text-emerald-700 bg-emerald-50 ring-emerald-200' },
-            { key: 'delayed', label: `${counts.delayed} Outside`, tone: 'text-amber-700 bg-amber-50 ring-amber-200' },
-            { key: 'stale', label: `${counts.stale} Stale`, tone: 'text-slate-700 bg-slate-100 ring-slate-200' },
-            { key: 'no_data', label: `${counts.none} No data`, tone: 'text-slate-500 bg-slate-50 ring-slate-200' },
+            { key: 'inside', label: `${scopedCounts.inside} Inside`, tone: 'text-emerald-700 bg-emerald-50 ring-emerald-200' },
+            { key: 'outside', label: `${scopedCounts.outside} Outside`, tone: 'text-rose-700 bg-rose-50 ring-rose-200' },
+            { key: 'stale', label: `${scopedCounts.stale} Stale`, tone: 'text-slate-700 bg-slate-100 ring-slate-200' },
+            { key: 'unconfigured', label: `${scopedCounts.unconfigured} No geofence`, tone: 'text-slate-600 bg-slate-50 ring-slate-200' },
           ].map((c) => (
             <button
               key={c.key}
               onClick={() => setActiveFilter(activeFilter === c.key ? null : c.key)}
-              title={`Filter by ${c.key}`}
+              title={activeFilter === c.key ? `Clear the ${c.key} filter` : `Show only ${c.key}`}
+              aria-pressed={activeFilter === c.key}
               className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 transition ${
                 activeFilter === c.key ? 'bg-slate-800 text-white ring-slate-800' : c.tone
               }`}>
@@ -213,11 +283,32 @@ export default function LivePositions() {
             </button>
           ))}
         </div>
-        <button onClick={() => load({ silent: false })}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
-          <RefreshCw className="w-4 h-4" />Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          {updatedAt && (
+            <span className="text-xs text-slate-400" data-testid="updated-stamp">updated {updatedAt}</span>
+          )}
+          <button onClick={() => load({ silent: false })}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
+            <RefreshCw className="w-4 h-4" />Refresh
+          </button>
+        </div>
       </div>
+
+      {/* Exactly one of inside/outside/stale/unconfigured applies to every
+          listed row, so the sum below must equal the row count. If it ever does
+          not, the server returned a category we do not model. */}
+      {process.env.NODE_ENV !== 'production' && sumCounted(scopedCounts) !== scoped.length && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Category counts do not match the table; some rows carry an unmapped display category.
+        </p>
+      )}
+
+      {/* Optional, off by default: a count only, never a list, never a chip. */}
+      {SHOW_NO_DATA_COUNT && notReportingCount != null && (
+        <p className="text-xs text-slate-400">
+          {notReportingCount} tracked employee{notReportingCount === 1 ? '' : 's'} have no location in the last {RECENT_HOURS} h.
+        </p>
+      )}
 
       {error && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -246,7 +337,7 @@ export default function LivePositions() {
                   </p>
                 </td>
                 <td className="px-4 py-3 text-slate-700">
-                  <LocationCell row={r} elapsed={elapsed} />
+                  <LocationCell row={r} />
                 </td>
                 <td className="px-4 py-3 font-mono text-xs text-slate-600">
                   {r.latitude == null ? '—' : `${formatCoord(r.latitude)}, ${formatCoord(r.longitude)}`}
@@ -255,7 +346,7 @@ export default function LivePositions() {
                   )}
                 </td>
                 <td className="px-4 py-3">
-                  <GeofenceCell row={r} elapsed={elapsed} />
+                  <GeofenceCell row={r} />
                 </td>
                 <td className="px-4 py-3">
                   <LastSeenCell row={r} elapsed={elapsed} />
@@ -279,29 +370,46 @@ export default function LivePositions() {
   )
 }
 
-/** Freshness of one row, computed from the server's age + elapsed since fetch. */
-function stateOf(row, elapsed) {
-  return rowFreshness(row, elapsed)
-}
-
 /**
  * Location column.
- * LIVE/DELAYED show the geofence verdict; STALE prefixes it with "Last known"
- * so a two-day-old reading can never be read as a current position.
+ *
+ * STALE prefixes the verdict with "Last known" so a two-day-old reading can
+ * never be read as a current position. The distance is stated ONCE, on one
+ * line — the old implementation printed the geofence name and the distance and
+ * then repeated both in a sub-line, which is where the doubled sentence the
+ * screenshot showed came from.
+ *
+ * "(low GPS accuracy)" is appended ONLY when the server says the reading is
+ * genuinely boundary-ambiguous.
  */
-function LocationCell({ row, elapsed }) {
-  const state = stateOf(row, elapsed)
-  if (state === FRESHNESS.NONE) {
-    return <span className="text-slate-400">No location yet</span>
+function LocationCell({ row }) {
+  const category = row.display_category
+  const stale = category === 'stale'
+  const prefix = stale ? 'Last known: ' : ''
+  const isInside = row.inside_geofence === true
+
+  if (category === 'unconfigured') {
+    return (
+      <>
+        <span className="text-slate-600">No geofence configured</span>
+        <p className="text-xs text-slate-400">This branch has no active geofence.</p>
+      </>
+    )
   }
-  const status = describeGeofenceStatus(row)
-  const stale = state === FRESHNESS.STALE
+
+  const distance = row.distance_to_center_m ?? row.nearest_distance
   return (
     <>
-      {stale && <span className="text-slate-500">Last known: </span>}
-      <span className={stale ? 'text-slate-600' : 'text-slate-700'}>{status.text}</span>
-      {status.detail && (
-        <p className={`text-xs ${stale ? 'text-slate-400' : 'text-slate-500'}`}>{status.detail}</p>
+      {prefix}
+      <span className={stale ? 'text-slate-600' : 'text-slate-700'}>
+        {isInside ? (row.geofence_name || 'Registered location') : 'Outside a registered location'}
+      </span>
+      {/* One line, one distance, once. */}
+      {!isInside && distance != null && (
+        <span className="text-slate-400">{`, ${formatDistance(distance)} from the centre`}</span>
+      )}
+      {isLowAccuracy(row) && (
+        <span className="text-xs text-slate-400">{LOW_ACCURACY_SUFFIX}</span>
       )}
     </>
   )
@@ -309,58 +417,90 @@ function LocationCell({ row, elapsed }) {
 
 /**
  * Geofence column.
- * LIVE keeps the current Inside/Outside pill, DELAYED keeps it plus an amber
- * "delayed" hint, STALE swaps it for a grey chip + muted "Last known: …".
+ *
+ * The badge is driven by the SAME `display_category` the chips count, so a row
+ * can never disagree with the header. Verdicts are never recomputed here — the
+ * server produced them from the newest fix and the active fences.
+ *
+ *   inside      green, with the registered name
+ *   outside     red/amber, one line: "Outside <name>, 11.7 km from centre"
+ *   stale       grey, never green: "Last known: Inside/Outside <name>" + age
+ *   unconfigured neutral: "No geofence set for <branch>"
  */
-function GeofenceCell({ row, elapsed }) {
-  const state = stateOf(row, elapsed)
-  if (state === FRESHNESS.NONE) {
-    return <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">No location yet</span>
-  }
+function GeofenceCell({ row }) {
+  const category = row.display_category
+  const stale = row.freshness === 'stale' || category === 'stale'
+  const name = row.geofence_name || row.nearest_location_name || row.branch_name || 'the registered location'
 
-  const status = describeGeofenceStatus(row)
-  const tooltip = status.detail
-    ? `${row.inside_geofence ? 'Inside' : 'Outside'} — ${status.detail}`
-    : (row.inside_geofence ? 'Inside a registered location' : 'Outside all registered locations')
-
-  if (state === FRESHNESS.STALE) {
-    const label = row.inside_geofence
-      ? `Inside ${row.location_label || row.branch_name || 'a registered location'}`
-      : `Outside ${row.nearest_location_name || row.branch_name || 'all registered locations'}`
+  // A stale fix gets a grey badge and "Last known: …" wording, never a bright
+  // inside/outside pill, so a two-day-old reading can't read as current.
+  if (category === 'stale') {
+    const wasInside = row.inside_geofence === true
+    const known = wasInside
+      ? `Inside ${row.geofence_name || name}`
+      : `Outside ${row.geofence_name || name}`
     return (
-      <span className="flex flex-wrap items-center gap-1.5" title={tooltip}>
+      <span className="flex flex-wrap items-center gap-1.5">
         <span className="inline-flex items-center rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-600">
           Stale
         </span>
-        <span className="text-xs text-slate-400">Last known: {label}</span>
+        <span className="text-xs text-slate-400">Last known: {known}</span>
       </span>
     )
   }
 
+  if (category === 'unconfigured') {
+    return (
+      <span className="flex flex-wrap items-center gap-1.5">
+        <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+          Unconfigured
+        </span>
+        <span className="text-xs text-slate-400">No geofence set for {row.branch_name || 'this branch'}</span>
+      </span>
+    )
+  }
+
+  // INSIDE: green, with the registered name.
+  if (category === 'inside') {
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+          Inside
+        </span>
+        <span className="text-xs text-slate-500">{row.geofence_name || 'Registered location'}</span>
+      </span>
+    )
+  }
+
+  // OUTSIDE: red/amber, and the distance-to-centre on ONE line.
+  const distance = row.distance_to_center_m ?? row.meters_outside ?? row.nearest_distance
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
-      <span
-        title={tooltip}
-        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-          row.inside_geofence ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'}`}>
-        {row.inside_geofence ? 'Inside' : 'Outside'}
+      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+        stale ? 'bg-slate-200 text-slate-600' : 'bg-rose-100 text-rose-800'
+      }`}>
+        Outside
       </span>
-      {state === FRESHNESS.DELAYED && (
-        <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">
-          delayed
-        </span>
-      )}
+      <span className="text-xs text-slate-500">
+        {`Outside ${name}`}
+        {distance != null && <span className="text-slate-400">{`, ${formatDistance(distance)} from centre`}</span>}
+      </span>
     </span>
   )
 }
 
-/** Last update column — amber for delayed, red for stale, never "live". */
+/**
+ * Last update column — amber for delayed, red for stale, never "live".
+ *
+ * Age is always measured against SERVER time: the server returns age_seconds
+ * (now() - recorded_at) and this adds only the wall-clock elapsed since that
+ * response arrived, so the label keeps counting up between polls and a wrong
+ * browser clock cannot make an old fix look fresh.
+ */
 function LastSeenCell({ row, elapsed }) {
-  const state = stateOf(row, elapsed)
+  const state = classifyAgeSeconds(ageSecondsOf(row, elapsed))
   const tone = state === FRESHNESS.LIVE ? 'text-slate-600'
     : state === FRESHNESS.DELAYED ? 'text-amber-700'
-    : state === FRESHNESS.NONE ? 'text-slate-400'
     : 'text-red-600'
   return (
     <span className={`inline-flex items-center gap-1.5 ${tone}`}>
@@ -383,10 +523,10 @@ function MobileRows({ rows, elapsed, onSelect }) {
               <p className="font-medium text-slate-900">{r.full_name}</p>
               <p className="text-xs text-slate-500">{r.employee_number || '—'}</p>
             </div>
-            <GeofenceCell row={r} elapsed={elapsed} />
+            <GeofenceCell row={r} />
           </div>
           <p className="mt-2 text-sm">
-            <LocationCell row={r} elapsed={elapsed} />
+            <LocationCell row={r} />
           </p>
           <p className="font-mono text-xs text-slate-500 mt-1">
             {r.latitude == null ? '—' : `${formatCoord(r.latitude)}, ${formatCoord(r.longitude)}`}
@@ -441,9 +581,7 @@ function ScopeFilters({ options, scope, onChange, active, total, shown }) {
           <option key={value} value={value}>{label}</option>
         ))}
       </select>
-      <span className="ml-auto text-xs text-slate-500">
-        {active ? `${shown} of ${total} tracked` : `${total} tracked`}
-      </span>
+      <span className="ml-auto text-xs text-slate-500">{label}</span>
       {active && (
         <button
           type="button"
