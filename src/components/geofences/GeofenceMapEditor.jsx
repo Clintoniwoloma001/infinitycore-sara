@@ -1,7 +1,7 @@
 import React, { useEffect, useReducer, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { Lock, LockOpen, Loader2, Save, XCircle, Move } from 'lucide-react'
+import { Lock, LockOpen, Loader2, Save, XCircle, Move, MapPin } from 'lucide-react'
 import RadiusControl from './RadiusControl'
 import {
   createFenceGeometry,
