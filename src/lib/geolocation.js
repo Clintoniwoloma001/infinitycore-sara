@@ -33,6 +33,22 @@ export const GPS_OPTIONS = {
   timeout: 15000,
 }
 
+// Retry options — the behaviour the buttons had BEFORE they were centralised
+// (CoverageTester used maximumAge 30 s, GeofenceMapEditor 10 s). A desktop or
+// laptop has no GPS: the OS serves a network fix, and a strict
+// `maximumAge: 0` request frequently fails with POSITION_UNAVAILABLE even
+// though a recent fix is sitting in the browser's cache and is perfectly good
+// for placing a fence or testing coverage. So the strict request is only the
+// FIRST attempt — if it fails for a reason that means "no fresh fix right
+// now", we retry once allowing a recent network fix instead of surfacing an
+// error the user never saw before.
+export const GPS_FALLBACK_OPTIONS = {
+  enableHighAccuracy: false,
+  // Recent enough to be this session's own position, not yesterday's.
+  maximumAge: 60000,
+  timeout: 20000,
+}
+
 /** One actionable sentence for a failed GPS acquisition. */
 export function gpsErrorMessage(error) {
   if (typeof window !== 'undefined' && window.isSecureContext === false) {
@@ -59,6 +75,17 @@ export function gpsErrorMessage(error) {
 /**
  * Acquire one current position.
  *
+ * Two attempts, in order:
+ *   1. Strict — high accuracy, no cached fix (`GPS_OPTIONS`). On a GPS device
+ *      this is the fence-grade fix we want.
+ *   2. Fallback — only if attempt 1 failed with POSITION_UNAVAILABLE or
+ *      TIMEOUT (never for PERMISSION_DENIED or an unsupported browser): retry
+ *      allowing a recent network fix (`GPS_FALLBACK_OPTIONS`). This is the
+ *      behaviour the buttons had before they were centralised, and without it
+ *      every desktop/laptop — which has no GPS and often cannot produce a
+ *      brand-new fix on demand — reports "Your position could not be
+ *      determined" even though the browser knows exactly where it is.
+ *
  * Rejects with a GeolocationPositionError-shaped object, so callers only need
  * `gpsErrorMessage(err)` — distinct reasons stay distinct.
  */
@@ -70,9 +97,19 @@ export function requestGpsPosition(options = {}) {
       reject(err)
       return
     }
-    navigator.geolocation.getCurrentPosition(resolve, reject, {
-      ...GPS_OPTIONS,
-      ...options,
+    const ask = (opts) =>
+      new Promise((res, rej) => {
+        navigator.geolocation.getCurrentPosition(res, rej, opts)
+      })
+    ask({ ...GPS_OPTIONS, ...options }).then(resolve, (err) => {
+      // code 2 = POSITION_UNAVAILABLE, code 3 = TIMEOUT. Both mean "no fresh
+      // fix right now", which is exactly the case a recent cached / low-power
+      // network fix answers. code 1 (PERMISSION_DENIED) must never retry.
+      if (err && (err.code === 2 || err.code === 3)) {
+        ask({ ...GPS_OPTIONS, ...GPS_FALLBACK_OPTIONS, ...options }).then(resolve, reject)
+      } else {
+        reject(err)
+      }
     })
   })
 }
