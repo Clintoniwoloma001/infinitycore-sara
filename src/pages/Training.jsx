@@ -326,6 +326,7 @@ function SessionMeetingPanel({ session, onClose, onRefresh, userId }) {
   const hasMeeting = Boolean(session.meeting_url)
   const connectionFailed = /OAuth|not connected|not_configured/i.test(error || '')
 
+<<<<<<< HEAD
   // Listen for OAuth completion from the popup window. After receiving the
   // message, re-verify the connection server-side.
   useEffect(() => {
@@ -343,16 +344,22 @@ function SessionMeetingPanel({ session, onClose, onRefresh, userId }) {
   }, [])
 
   const connectGoogle = () => {
+=======
+  const connectGoogle = async () => {
+>>>>>>> satellite/sara-meet
     if (!userId) {
       setError('You must be signed in to connect your Google account.')
       return
     }
-    const { url, error: connectError } = connectGoogleCalendar(userId)
-    if (!url) {
-      setError(connectError || 'Google OAuth is not configured (VITE_GOOGLE_CLIENT_ID is missing).')
+    const { ok, error: connectError } = await connectGoogleCalendar()
+    if (!ok) {
+      setError(connectError || 'Google OAuth is not configured (GOOGLE_CLIENT_ID is missing).')
       return
     }
+<<<<<<< HEAD
     const popup = window.open(url, '_blank', 'width=520,height=640')
+=======
+>>>>>>> satellite/sara-meet
     setNotice('Complete the Google consent in the new window, then click Generate Meeting Link again — or paste a manual link below.')
     // Fallback: if postMessage doesn't fire, poll for popup closure.
     if (popup) {
@@ -666,11 +673,16 @@ function CreateTraining({ form, set, employees, venues, options, busy, onSubmit,
     }
   }
 
-  const connectGoogle = () => {
+  const connectGoogle = async () => {
     if (!userId) { setMeetingError('You must be signed in to connect your Google account.'); return }
+<<<<<<< HEAD
     const { url, error: connectError } = connectGoogleCalendar(userId)
     if (!url) { setMeetingError(connectError || 'Google OAuth is not configured (VITE_GOOGLE_CLIENT_ID is missing).'); return }
     const popup = window.open(url, '_blank', 'width=520,height=640')
+=======
+    const { ok, error: connectError } = await connectGoogleCalendar()
+    if (!ok) { setMeetingError(connectError || 'Google OAuth is not configured (GOOGLE_CLIENT_ID is missing).'); return }
+>>>>>>> satellite/sara-meet
     setMeetingOk('Complete the Google consent in the new window, then generate the meeting link again — or paste a manual link below.')
     // Fallback: if postMessage doesn't fire, poll for popup closure.
     if (popup) {
