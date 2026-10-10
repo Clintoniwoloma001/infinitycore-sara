@@ -10,7 +10,7 @@
 // without the operator having to guess. Realtime is deliberately NOT used:
 // employee_location_events is not in the supabase_realtime publication.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { RefreshCw, AlertTriangle } from 'lucide-react'
+import { RefreshCw, AlertTriangle, Filter, X } from 'lucide-react'
 import {
   trackingService, describeFreshness, formatCoord, describeGeofenceStatus,
 } from '../../services/employeeTrackingService'
@@ -22,6 +22,38 @@ import HistoryDrawer from './HistoryDrawer'
 
 const POLL_MS = 30000
 
+const EMPTY_SCOPE = { department: '', position: '', branch: '' }
+
+/** Does one row satisfy the operator's explicit department/position/branch picks? */
+function matchesScope(row, scope) {
+  if (scope.department && (row.department || '') !== scope.department) return false
+  if (scope.position && (row.position || '') !== scope.position) return false
+  if (scope.branch && (row.branch_id || '') !== scope.branch) return false
+  return true
+}
+
+/**
+ * The options an operator can pick from. They are derived from the rows the
+ * SERVER already authorised — never from a client-side table read — so a filter
+ * can never offer (or hide) a person the caller is not allowed to see.
+ */
+function scopeOptionsOf(rows = []) {
+  const departments = new Map()
+  const positions = new Map()
+  const branches = new Map()
+  for (const r of rows) {
+    if (r.department) departments.set(r.department, r.department)
+    if (r.position) positions.set(r.position, r.position)
+    if (r.branch_id) branches.set(r.branch_id, r.branch_name || r.branch_id)
+  }
+  const byLabel = (entries) => entries.sort((a, b) => String(a[1]).localeCompare(String(b[1])))
+  return {
+    departments: byLabel([...departments.entries()]),
+    positions: byLabel([...positions.entries()]),
+    branches: byLabel([...branches.entries()]),
+  }
+}
+
 export default function LivePositions() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -31,6 +63,8 @@ export default function LivePositions() {
   const [fetchedAt, setFetchedAt] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const loadingRef = useRef(false)
+  // Explicit, operator-chosen scope: department / position / branch.
+  const [scope, setScope] = useState(EMPTY_SCOPE)
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (loadingRef.current) return
@@ -92,13 +126,23 @@ export default function LivePositions() {
 
   const elapsed = fetchedAt ? Math.max(0, now - fetchedAt) : 0
   const counts = useMemo(() => countFreshness(rows, elapsed), [rows, elapsed])
+  const options = useMemo(() => scopeOptionsOf(rows), [rows])
+  const scopeActive = scope.department !== '' || scope.position !== '' || scope.branch !== ''
+
+  // Scope first (what the operator picked), then the freshness chip. Both are
+  // derived from the same server-authorised row set; neither recomputes a
+  // verdict, and neither can hide a row the server did not authorise.
+  const scoped = useMemo(
+    () => rows.filter((r) => matchesScope(r, scope)),
+    [rows, scope],
+  )
 
   // Header chips: clickable filters. Default order is newest-first (the v2
   // view returns that); the filters re-derive from the same row set.
   const [activeFilter, setActiveFilter] = useState(null)
   const visible = useMemo(() => {
-    if (!activeFilter) return rows
-    return rows.filter((r) => {
+    if (!activeFilter) return scoped
+    return scoped.filter((r) => {
       const state = rowFreshness(r, elapsed)
       if (activeFilter === 'live') return state === FRESHNESS.LIVE
       if (activeFilter === 'delayed') return state === FRESHNESS.DELAYED
@@ -106,11 +150,31 @@ export default function LivePositions() {
       if (activeFilter === 'no_data') return state === FRESHNESS.NONE
       return true
     })
-  }, [rows, elapsed, activeFilter])
+  }, [scoped, elapsed, activeFilter])
 
   if (loading && !visible.length) return <LoadingState label="Loading live positions..." />
   if (error && !visible.length) return <ErrorState title="Unable to load positions" message={error} />
   if (!visible.length) {
+    // Rows exist but the picks exclude them: say that, and offer the way out.
+    // The generic "no locations recorded" empty state would be a lie here.
+    if (rows.length > 0 && scopeActive) {
+      return (
+        <div className="text-center py-14 bg-white rounded-lg border border-slate-200">
+          <p className="font-medium text-slate-800">No employees match these filters</p>
+          <p className="text-sm text-slate-500 mt-1">
+            {rows.length} employee{rows.length === 1 ? '' : 's'} are tracked, but none match the selected{' '}
+            {[scope.department && 'department', scope.position && 'position', scope.branch && 'branch'].filter(Boolean).join(' / ')}.
+          </p>
+          <button
+            type="button"
+            onClick={() => setScope(EMPTY_SCOPE)}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+          >
+            <X className="w-4 h-4" />Clear filters
+          </button>
+        </div>
+      )
+    }
     return (
       <EmptyState
         title="No locations recorded yet"
@@ -121,6 +185,15 @@ export default function LivePositions() {
 
   return (
     <div className="space-y-4">
+      <ScopeFilters
+        options={options}
+        scope={scope}
+        onChange={setScope}
+        active={scopeActive}
+        total={rows.length}
+        shown={visible.length}
+      />
+
       <div className="flex items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1.5" data-testid="freshness-counts">
           {[
@@ -328,6 +401,58 @@ function MobileRows({ rows, elapsed, onSelect }) {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+/**
+ * Department / position / branch scope for the live tab.
+ *
+ * The options come from the authorised row set itself, so a filter can never
+ * offer a person the operator may not see, and the "shown of tracked" count
+ * makes it obvious when a pick is hiding rows. Nothing here decides freshness
+ * or inside/outside — those verdicts stay with the server.
+ */
+function ScopeFilters({ options, scope, onChange, active, total, shown }) {
+  const set = (key) => (event) => onChange((prev) => ({ ...prev, [key]: event.target.value }))
+  const selectCls = 'h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-sm text-slate-700 focus:border-[#009944] focus:outline-none focus:ring-2 focus:ring-[#009944]/30'
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2" data-testid="tracking-scope-filters">
+      <Filter className="w-4 h-4 text-slate-400" aria-hidden />
+      <span className="text-xs font-medium uppercase tracking-wide text-slate-400">Filters</span>
+      <label className="sr-only" htmlFor="tracking-filter-department">Department</label>
+      <select id="tracking-filter-department" className={selectCls} value={scope.department} onChange={set('department')}>
+        <option value="">All departments</option>
+        {options.departments.map(([value, label]) => (
+          <option key={value} value={value}>{label}</option>
+        ))}
+      </select>
+      <label className="sr-only" htmlFor="tracking-filter-position">Position</label>
+      <select id="tracking-filter-position" className={selectCls} value={scope.position} onChange={set('position')}>
+        <option value="">All positions</option>
+        {options.positions.map(([value, label]) => (
+          <option key={value} value={value}>{label}</option>
+        ))}
+      </select>
+      <label className="sr-only" htmlFor="tracking-filter-branch">Branch</label>
+      <select id="tracking-filter-branch" className={selectCls} value={scope.branch} onChange={set('branch')}>
+        <option value="">All branches</option>
+        {options.branches.map(([value, label]) => (
+          <option key={value} value={value}>{label}</option>
+        ))}
+      </select>
+      <span className="ml-auto text-xs text-slate-500">
+        {active ? `${shown} of ${total} tracked` : `${total} tracked`}
+      </span>
+      {active && (
+        <button
+          type="button"
+          onClick={() => onChange({ ...EMPTY_SCOPE })}
+          className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+        >
+          <X className="w-3.5 h-3.5" />Clear
+        </button>
+      )}
     </div>
   )
 }

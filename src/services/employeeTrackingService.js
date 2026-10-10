@@ -91,6 +91,9 @@ export const trackingService = {
         || item.employee_id
         || 'Staff Member',
       branch_name: item.branch_name || 'Head Office',
+      // The row's own branch id, so the live tab can filter by branch without
+      // re-deriving it from a name (names repeat across branch codes).
+      branch_id: item.branch_id ?? null,
       // Fields the UI already consumed from v2
       inside_geofence: item.inside_geofence,
       location_label: item.location_label,

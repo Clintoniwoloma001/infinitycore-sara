@@ -212,19 +212,24 @@ check('is_stale, age_seconds, server_now and uploaded_at survive normalization',
 check('the empty-state path is a genuinely empty array, nothing else', () => {
   assert.match(serviceSource, /unwrap\(data, error, \[\]\)/)
   assert.match(serviceSource, /Array\.isArray\(result\)/)
-  // The page may re-derive the visible set ONLY behind an explicit,
-  // user-activated header chip (activeFilter). With no chip selected the full
-  // authorised row set must reach the table untouched — nothing narrows it
-  // silently (the original sin: rows.filter(r => !r.is_stale)).
-  assert.match(page, /if \(!activeFilter\) return rows/,
+  // The page may re-derive the visible set ONLY behind explicit, user-activated
+  // controls: the scope selects (department / position / branch) and the
+  // freshness chip (activeFilter). With neither applied the full authorised row
+  // set must reach the table untouched — nothing narrows it silently (the
+  // original sin: rows.filter(r => !r.is_stale)).
+  assert.match(page, /if \(!activeFilter\) return scoped/,
     'an unfiltered view must return every authorised row')
-  const visibleDef = page.slice(page.indexOf('const visible = useMemo'), page.indexOf('}, [rows, elapsed, activeFilter])'))
-  assert.ok(/rows\.filter\(/.test(visibleDef),
+  const visibleDef = page.slice(page.indexOf('const visible = useMemo'), page.indexOf('}, [scoped, elapsed, activeFilter])'))
+  assert.ok(/scoped\.filter\(/.test(visibleDef),
     'chip filtering re-derives from the same row set')
-  assert.ok(!/rows\.filter\(/.test(page.slice(0, page.indexOf('const visible = useMemo'))),
-    'nothing before the chip filter may narrow the authorised set')
+  // The only thing that may narrow the row set before the chip filter is the
+  // operator's own scope selection — and it is always visible in the UI, with
+  // a Clear action and a "no employees match these filters" empty state.
+  assert.match(page, /matchesScope\(row, scope\)/, 'scope narrowing is the named, explicit helper')
   assert.ok(!/is_stale\)/.test(visibleDef),
     'freshness is never dropped client-side; chips filter, they never hide')
+  assert.ok(!/rows\.filter\(\(?r?\)? => !r\.is_stale/.test(page),
+    'the original silent stale-hiding filter is gone')
 })
 check('the service still does no geofence math', () => {
   assert.ok(!/Math\.(sin|cos|acos|asin)/.test(serviceSource),

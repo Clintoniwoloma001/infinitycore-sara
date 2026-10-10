@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { CheckCircle2, Crosshair, Loader2, Radar, XCircle } from 'lucide-react'
+import { gpsErrorMessage, requestGpsPosition } from '../../lib/geolocation'
 import {
   geofenceService,
   geofenceErrorMessage,
@@ -17,19 +18,6 @@ function positionIcon() {
     iconSize: [22, 22],
     iconAnchor: [11, 11],
   })
-}
-
-function gpsErrorMessage(error) {
-  if (error?.code === 1) {
-    return 'Location access was denied. Allow location for this site, or enter coordinates manually below.'
-  }
-  if (error?.code === 2) {
-    return 'Your location could not be determined. Check your GPS or network connection, or enter coordinates manually.'
-  }
-  if (error?.code === 3) {
-    return 'The location request timed out. Please try again, or enter coordinates manually.'
-  }
-  return 'Unable to get your location. Please try again, or enter coordinates manually.'
 }
 
 /**
@@ -156,28 +144,22 @@ export default function CoverageTester({ fences = [], branchId, onBranchChange }
     }
   }
 
-  const useMyLocation = () => {
+  const useMyLocation = async () => {
     if (!branchId) {
       setError('Choose a branch to test against.')
       return
     }
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      setError('Your browser does not support location detection. Enter coordinates manually below.')
-      return
-    }
     setGpsBusy(true)
     setError(null)
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setGpsBusy(false)
-        runTest({ lat: pos.coords.latitude, lng: pos.coords.longitude })
-      },
-      (err) => {
-        setGpsBusy(false)
-        setError(gpsErrorMessage(err))
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 },
-    )
+    try {
+      // Same shared acquisition as every other GPS button: bounded timeout, no
+      // cached fix, and the real reason surfaced when it fails.
+      const position = await requestGpsPosition()
+      runTest({ lat: position.coords.latitude, lng: position.coords.longitude })
+    } catch (err) {
+      setGpsBusy(false)
+      setError(gpsErrorMessage(err))
+    }
   }
 
   const runManual = () => {

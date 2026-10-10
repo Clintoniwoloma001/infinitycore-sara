@@ -1,5 +1,5 @@
 import React from 'react'
-import { MapPinned } from 'lucide-react'
+import { Loader2, MapPinned, MapPin } from 'lucide-react'
 import Modal from './Modal'
 import { LoadingState, ErrorState } from '../PageStates'
 import { branchDisplayName, formatRadius } from '../../services/geofenceService'
@@ -9,8 +9,13 @@ import { branchDisplayName, formatRadius } from '../../services/geofenceService'
  * list_branch_geofences() is offered here; picking one opens the map
  * editor with that branch's stored coordinates (or the app centre when
  * the branch has none yet).
+ *
+ * "Use my location" is ALWAYS offered (it used to be rendered only after a fix
+ * already existed, so a first fix could never be requested from here). While
+ * it is acquiring, the button shows progress and is disabled — a tap can no
+ * longer look like a dead button.
  */
-export default function AddFenceDialog({ open, branches, loading, error, onRetry, onSelect, onClose, myPosition, onUseMyLocation }) {
+export default function AddFenceDialog({ open, branches, loading, error, onRetry, onSelect, onClose, myPosition, myLocationBusy = false, myLocationError = null, onUseMyLocation }) {
   return (
     <Modal open={open} onClose={onClose} width="max-w-xl">
       <div className="p-5">
@@ -21,18 +26,27 @@ export default function AddFenceDialog({ open, branches, loading, error, onRetry
           These branches do not have a fence yet. Choose one to place it on the map.
         </p>
 
-        {myPosition && onUseMyLocation ? (
+        {onUseMyLocation ? (
           <button
             type="button"
             onClick={onUseMyLocation}
-            className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200"
+            disabled={myLocationBusy}
+            className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-60 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200"
           >
-            <MapPin className="w-4 h-4" />
-            Use my location
+            {myLocationBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <MapPin className="w-4 h-4" />}
+            {myLocationBusy ? 'Finding you…' : myPosition ? 'Re-locate me' : 'Use my location'}
           </button>
-        ) : myPosition ? (
+        ) : null}
+
+        {myPosition ? (
           <p className="mb-3 text-xs text-emerald-600 dark:text-emerald-400">
             Your location is pinned at {myPosition.lat.toFixed(6)}, {myPosition.lng.toFixed(6)} · tap a branch to place its fence around it.
+          </p>
+        ) : null}
+
+        {myLocationError ? (
+          <p role="alert" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            {myLocationError}
           </p>
         ) : null}
 

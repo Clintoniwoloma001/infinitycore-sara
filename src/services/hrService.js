@@ -157,8 +157,18 @@ export const hrService = {
       .insert([interviewData])
       .select()
 
-    if (error) throw error
-    return data[0]
+    if (!error) return data[0]
+
+    // A Super Admin (and any role the INSERT policy forgot) hits
+    // `new row violates row-level security policy for table "hr_interviews"`.
+    // The guarded SECURITY DEFINER RPC writes the SAME row under its own role
+    // gate — HR roles only, Super Admin included — so scheduling keeps working
+    // on a database whose INSERT policy has not been patched yet. Any other
+    // failure (constraint, connection) is still the caller's to see.
+    if (!isRowLevelSecurityError(error)) throw error
+    const row = await scheduleInterviewViaRpc(interviewData)
+    if (row == null) throw error
+    return row
   },
 
   async listInterviews(candidateId) {
@@ -209,4 +219,66 @@ export const hrService = {
     if (error) throw error
     return data[0]
   },
+}
+
+/**
+ * True for an RLS refusal — SQLSTATE 42501, or the message PostgREST/Supabase
+ * returns for it. Both forms are matched so the guarded write path is taken
+ * even when a proxy rewrites the code.
+ */
+function isRowLevelSecurityError(error) {
+  if (!error) return false
+  if (error.code === '42501') return true
+  return /row[- ]level security/i.test(String(error.message || ''))
+}
+
+/**
+ * The guarded write path for an interview: `hr_schedule_recruitment_interview`
+ * is SECURITY DEFINER with the same role gate the Recruitment pipeline uses
+ * (super_admin / admin / head_of_human_resources / hr_officer), so it inserts
+ * the row even on a database whose direct-INSERT policy has not been widened.
+ *
+ * Returns null when the RPC does not exist (never-applied pipeline schema) so
+ * the caller can surface the original RLS error instead of a "function not
+ * found" one. Fields the RPC does not carry (email override, notification and
+ * external meeting columns) are applied with a follow-up UPDATE — the UPDATE
+ * policy already admits every HR role, Super Admin included.
+ */
+async function scheduleInterviewViaRpc(interviewData) {
+  const d = interviewData || {}
+  const { data, error } = await supabase.rpc('hr_schedule_recruitment_interview', {
+    p_candidate_id: d.candidate_id,
+    p_data: {
+      candidate_name: d.candidate_name,
+      candidate_email: d.candidate_email,
+      position: d.position,
+      interview_type: d.interview_type,
+      location: d.location,
+      platform: d.platform,
+      meeting_url: d.meeting_url,
+      scheduled_date: d.scheduled_date,
+      duration_minutes: d.duration_minutes,
+      interviewer_id: d.interviewer_id,
+      notes: d.interview_instructions,
+      interview_round: d.interview_round,
+    },
+  })
+
+  if (error) {
+    if (error.code === 'PGRST202' || error.code === '404') return null
+    throw error
+  }
+
+  const row = Array.isArray(data) ? data[0] : data
+  if (row == null) return null
+
+  const leftovers = {}
+  for (const [key, value] of Object.entries(interviewData || {})) {
+    if (key === 'candidate_id') continue
+    if (value === '' || value === undefined) continue
+    leftovers[key] = value
+  }
+
+  if (Object.keys(leftovers).length === 0) return row
+  return (await hrService.updateInterview(row.id, leftovers)) || row
 }

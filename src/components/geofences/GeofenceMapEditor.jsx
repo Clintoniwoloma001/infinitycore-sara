@@ -3,6 +3,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { Lock, LockOpen, Loader2, Save, XCircle, Move, MapPin } from 'lucide-react'
 import RadiusControl from './RadiusControl'
+import { gpsErrorMessage, positionToCentre, requestGpsPosition } from '../../lib/geolocation'
 import {
   createFenceGeometry,
   fenceGeometryReducer,
@@ -49,7 +50,19 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
   const [state, dispatch] = useReducer(
     fenceGeometryReducer,
     initial,
-    (init) => createFenceGeometry(init),
+    (init) => {
+      const geometry = createFenceGeometry(init)
+      // A fix held by the Add-Fence dialog (from "Use my location") seeds the
+      // state machine, so the fence opens ON the operator: the same
+      // 'set-my-position' action the GPS button dispatches, never a manual
+      // centre rewrite. A bad/missing fix is ignored, not coerced to 0,0.
+      const held = initialMyPosition
+      if (held == null) return geometry
+      const lat = Number(held.lat)
+      const lng = Number(held.lng)
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return geometry
+      return fenceGeometryReducer(geometry, { type: 'set-my-position', center: { lat, lng } })
+    },
   )
 
   const containerRef = useRef(null)
@@ -61,27 +74,22 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
 
   // ---- GPS / "Use my location" state -------------------------------------
   const [locationError, setLocationError] = useState(null)
+  const [locating, setLocating] = useState(false)
 
   const useMyLocation = async () => {
-    if (navigator.geolocation == null) {
-      setLocationError('Geolocation is not supported by this browser.')
-      return
-    }
+    // Bounded request, no cached fix, and the real reason on failure
+    // (denied / unavailable / timeout / insecure origin) — see src/lib/geolocation.js.
+    setLocating(true)
+    setLocationError(null)
     try {
-      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 20000,
-          maximumAge: 10000,
-        })
-      })
-      const center = { lat: pos.coords.latitude, lng: pos.coords.longitude }
-      setLocationError(null)
+      const position = await requestGpsPosition()
       // Snap the fence circle onto the user's location so the fence starts
       // exactly where the admin is, and clear any previous error.
-      dispatch({ type: 'set-my-position', center })
+      dispatch({ type: 'set-my-position', center: positionToCentre(position) })
     } catch (err) {
-      setLocationError('Could not get a GPS fix. Drag the pin manually on the map.')
+      setLocationError(gpsErrorMessage(err))
+    } finally {
+      setLocating(false)
     }
   }
 
@@ -94,15 +102,9 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
   // Later geometry changes are pushed into the layers by the effect below.
   useEffect(() => {
     if (mapRef.current || !containerRef.current) return undefined
-    const start = createFenceGeometry(initial)
-
-    // If the Add-Fence dialog handed down a held "my position" (from the
-    // "Use my location" button), pin the green marker there immediately so
-    // the fence circle is drawn around the user the moment the editor opens.
-    if (initialMyPosition != null) {
-      const centre = toCentre(initialMyPosition)
-      if (centre) dispatch({ type: 'set-my-position', center: centre })
-    }
+    // `state` already carries a held GPS fix (the reducer's init function above),
+    // so the map opens centred on the operator instead of on the branch centre.
+    const start = state
 
     const map = L.map(containerRef.current, {
       center: [start.pin.lat, start.pin.lng],
@@ -298,21 +300,34 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
 
         {/* ---- GPS / "Use my location" ---- */}
         {locationError ? (
-          <p className="text-xs text-rose-600 dark:text-rose-400">{locationError}</p>
+          <div className="space-y-2">
+            <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{locationError}</p>
+            <button
+              type="button"
+              onClick={useMyLocation}
+              disabled={locating}
+              className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-60 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200"
+            >
+              {locating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MapPin className="w-3.5 h-3.5" />}
+              {locating ? 'Finding you…' : 'Try again'}
+            </button>
+          </div>
         ) : state.myPosition ? (
           <div className="flex flex-wrap justify-end gap-2">
             <button
               type="button"
               onClick={useMyLocation}
-              className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200"
+              disabled={locating}
+              className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-60 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200"
             >
-              <Save className="w-3.5 h-3.5" />
-              Re-locate
+              {locating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              {locating ? 'Finding you…' : 'Re-locate'}
             </button>
             <button
               type="button"
               onClick={stopMyLocation}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300"
+              disabled={locating}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60 dark:border-slate-600 dark:text-slate-300"
             >
               <XCircle className="w-3.5 h-3.5" />
               Stop
@@ -322,10 +337,11 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
           <button
             type="button"
             onClick={useMyLocation}
+            disabled={locating}
             className="inline-flex items-center gap-2 rounded-lg bg-[#009944] px-4 py-2 text-sm font-medium text-white hover:bg-[#007a36] disabled:opacity-60"
           >
-            <MapPin className="w-4 h-4" />
-            Use my location
+            {locating ? <Loader2 className="w-4 h-4 animate-spin" /> : <MapPin className="w-4 h-4" />}
+            {locating ? 'Finding you…' : 'Use my location'}
           </button>
         )}
 

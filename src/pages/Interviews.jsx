@@ -347,16 +347,15 @@ export default function Interviews() {
                 </div>
                 <div className="space-y-1 text-xs text-slate-600">
                   {createResult.steps.interview && <p>✓ Interview record created</p>}
-                  {createResult.errors.map((err, i) => (
-                    <p key={i} className="text-rose-600">✕ {err}</p>
-                  ))}
                   {createResult.steps.meeting?.status === 'created' && <p>✓ {form.platform} meeting created — {createResult.steps.meeting.meetingUrl?.slice(0, 50)}...</p>}
                   {createResult.steps.meeting?.status === 'not_connected' && <p>⚠ {form.platform} not connected — manual link needed</p>}
                   {createResult.steps.meeting?.status === 'not_configured' && <p>⚠ {form.platform} not configured — manual link needed</p>}
                   {createResult.steps.email?.status === 'sent' && <p>✓ Candidate notification sent</p>}
                   {createResult.steps.email?.status === 'not_configured' && <p>⚠ Email provider not configured</p>}
                   {createResult.steps.email?.status === 'failed' && <p>⚠ Email failed — you can resend later</p>}
-                  {createResult.errors.map((e, i) => <p key={i} className="text-amber-600">⚠ {e}</p>)}
+                  {createResult.errors.map((err, i) => (
+                    <p key={i} className="text-rose-600">✕ {err}</p>
+                  ))}
                 </div>
               </div>
             )}

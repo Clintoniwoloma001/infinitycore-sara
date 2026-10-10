@@ -89,7 +89,8 @@
     "test:mpr-scoring": "node --test tests/performanceScoring.test.mjs",
     "test:mpr-export": "node --test tests/performanceExport.test.mjs",
     "test:performance-filters": "node tests/performancePeriodFilters.test.mjs",
-    "test:tracking-freshness": "node tests/employeeTrackingFreshness.test.mjs"
+    "test:tracking-freshness": "node tests/employeeTrackingFreshness.test.mjs",
+    "test:interviews-tracking-gps": "node tests/interviewsRlsTrackingFiltersGps.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",
