@@ -74,7 +74,13 @@ export default function CoverageTester({ fences = [], branchId, onBranchChange }
     mapRef.current = map
     circleRef.current = circle
 
+    // Leaflet has to be told the container's size once layout has actually
+    // happened. Without this the map can be created while its box is still 0px
+    // and then renders blank, which reads as "the map is missing".
+    const raf = requestAnimationFrame(() => map.invalidateSize())
+
     return () => {
+      cancelAnimationFrame(raf)
       map.remove()
       mapRef.current = null
       circleRef.current = null
@@ -241,7 +247,7 @@ export default function CoverageTester({ fences = [], branchId, onBranchChange }
       <div className="grid grid-cols-1 gap-5 p-5 lg:grid-cols-2">
         <div
           ref={containerRef}
-          className="h-72 w-full rounded-lg border border-slate-200 dark:border-slate-700"
+          className="relative z-0 h-72 w-full rounded-lg border border-slate-200 dark:border-slate-700"
           aria-label="Map showing the fence under test and the tested point"
         />
 

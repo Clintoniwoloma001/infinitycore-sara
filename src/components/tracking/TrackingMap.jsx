@@ -67,7 +67,14 @@ export default function TrackingMap({
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(map)
     mapRef.current = map
-    return () => { map.remove(); mapRef.current = null; layerRef.current = null }
+    // The drawer mounts this map lazily, so its box can still be 0px the
+    // instant L.map() runs. invalidateSize() after layout keeps the map from
+    // rendering blank — same fix as the geofence editor.
+    const frame = requestAnimationFrame(() => map.invalidateSize())
+    return () => {
+      cancelAnimationFrame(frame)
+      map.remove(); mapRef.current = null; layerRef.current = null
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -154,7 +161,7 @@ export default function TrackingMap({
   return (
     <div
       ref={containerRef}
-      className={`w-full h-96 rounded-lg border border-slate-200 ${className}`}
+      className={`relative z-0 w-full h-96 rounded-lg border border-slate-200 ${className}`}
       role="img"
       aria-label="Map of recorded movement with registered geofences"
     />

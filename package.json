@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "homepage": "https://clintoniwoloma001.github.io/infinitycore-sara",
   "type": "module",
-  "description": "Infinity Bank Operations Platform \u2014 Vite + React + Supabase SARA AI ENEABLED",
+  "description": "Infinity Bank Operations Platform — Vite + React + Supabase SARA AI ENEABLED",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -108,6 +108,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@babel/parser": "^8.0.7",
     "@playwright/test": "^1.63.0",
     "@vitejs/plugin-react": "^4.3.2",
     "autoprefixer": "^10.4.20",

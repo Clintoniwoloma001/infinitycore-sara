@@ -267,14 +267,34 @@ export function fenceGeometryReducer(state, action) {
     case 'set-my-position': {
       const myPosition = toCentre(action.center)
       if (!myPosition) return state
-      // Placing the fence ON the user's location: snap the circle onto them
-      // so the fence starts exactly where the admin is.
+      // Placing the fence ON the user's location. The pin, the circle and the
+      // coordinate read-out all snap to the acquired fix, so the fence starts
+      // exactly where the admin is standing.
+      //
+      // THE PIN MUST MOVE TOO. This action used to move only `myPosition` and
+      // `circle`, while `fenceCircleCentre()` renders from `state.pin` whenever
+      // the circle is locked — and locked is the default. So tapping "Use my
+      // location" moved the green dot and nothing else: the pin stayed on the
+      // branch (or fallback) centre, the dashed circle stayed there with it, and
+      // the map never went to the operator. The fix moves the pin, which is the
+      // single source the locked circle follows.
+      //
+      // The radius, the lock state and the branch are untouched: relocating
+      // never resets a configured radius.
       return {
         ...state,
         myPosition,
+        pin: { ...myPosition },
+        circle: state.locked ? { ...myPosition } : state.circle,
         locating: false,
-        circle: state.locked ? { ...myPosition } : (state.circle || myPosition),
       }
+    }
+    case 'clear-my-position': {
+      // "Stop" — release the held live fix. This has to be its own action:
+      // dispatching 'set-my-position' with a null centre used to fall straight
+      // through toCentre()'s null guard and return the SAME state, so the button
+      // did nothing at all and the live marker stayed where it was.
+      return { ...state, myPosition: null, locating: false }
     }
     case 'toggle-locating': {
       return { ...state, locating: !state.locating }

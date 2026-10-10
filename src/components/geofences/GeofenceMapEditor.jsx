@@ -83,9 +83,16 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
     setLocationError(null)
     try {
       const position = await requestGpsPosition()
-      // Snap the fence circle onto the user's location so the fence starts
-      // exactly where the admin is, and clear any previous error.
-      dispatch({ type: 'set-my-position', center: positionToCentre(position) })
+      const centre = positionToCentre(position)
+      if (mapRef.current) {
+        dispatch({ type: 'set-my-position', center: centre })
+      } else {
+        // The map is not up yet (the mount effect has not run). Hold the fix so
+        // the init effect applies it as soon as the map exists, rather than
+        // dropping it and opening on the stale centre.
+        setPendingCentre(centre)
+        dispatch({ type: 'set-my-position', center: centre })
+      }
     } catch (err) {
       setLocationError(gpsErrorMessage(err))
     } finally {
@@ -93,10 +100,26 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
     }
   }
 
+  // "Stop" — release the held live fix. It never called getCurrentPosition in
+  // the first place (there is no watch to clear), so its real job is to drop the
+  // pending position so the green live marker goes away and the fence stays
+  // exactly where the admin put it. Dispatching 'clear-my-position' — NOT a
+  // null 'set-my-position', which the reducer's null guard swallowed, leaving
+  // this button completely inert.
   const stopMyLocation = () => {
-    dispatch({ type: 'set-my-position', center: { lat: null, lng: null } })
+    dispatch({ type: 'clear-my-position' })
     setLocationError(null)
   }
+
+  // A fix that arrives BEFORE the map exists is held here, then applied the
+  // moment the map is ready. Without this, a tap on "Use my location" that wins
+  // the race against the mount effect would be lost and the map would open on
+  // the stale branch centre with no way to tell anything had gone wrong.
+  const [pendingCentre, setPendingCentre] = useState(null)
+  // The centre the map was last pointed at, so a radius edit or a lock toggle
+  // (which also fire this effect) does not yank the map out of the operator's
+  // hands. Only a genuine move of the centre recentres the view.
+  const viewCentreRef = useRef(null)
 
   // Create the map, pin, circle and (unlocked) handle exactly once.
   // Later geometry changes are pushed into the layers by the effect below.
@@ -167,6 +190,29 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
 
     map.fitBounds(circle.getBounds(), { padding: [40, 40], maxZoom: 17 })
 
+    // Seed the camera-tracking ref with where the map just opened, so the state
+    // effect can tell a GENUINE centre change from a radius drag or a lock
+    // toggle. It must not be seeded with the held fix: the ref has to hold the
+    // centre the CAMERA is on, and the camera is on the branch centre here.
+    viewCentreRef.current = { lat: centre.lat, lng: centre.lng }
+
+    // A fix that arrived before this effect ran is applied to the camera now.
+    // The geometry is already in `state` (the reducer ran), so only the view is
+    // outstanding. Held either as `pendingCentre` (tap won the race) or as the
+    // seeded `start.myPosition` (handed in from the Add-Fence dialog).
+    const held = pendingCentre ?? start.myPosition ?? null
+    if (held) {
+      const at = { lat: Number(held.lat), lng: Number(held.lng) }
+      viewCentreRef.current = at
+      map.setView([at.lat, at.lng], Math.max(map.getZoom(), 16), { animate: false })
+    }
+
+    // The editor is drawn right after a click, so its container often has 0
+    // height the instant L.map() runs. A map created at 0px never gets the right
+    // viewport and renders blank until something forces a relayout.
+    const raf = requestAnimationFrame(() => map.invalidateSize())
+    setPendingCentre(null)
+
     mapRef.current = map
     pinRef.current = pin
     circleRef.current = circle
@@ -186,7 +232,8 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Push reducer state into the Leaflet layers.
+  // Push reducer state into the Leaflet layers, and move the viewport when — and
+  // only when — the centre actually changed.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -209,10 +256,31 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
     if (myMarker) {
       myMarker.setLatLng([state.myPosition?.lat ?? state.pin.lat, state.myPosition?.lng ?? state.pin.lng])
     }
+
+    // Only a real change of the fence centre moves the camera. A radius drag, a
+    // lock toggle or the marker walking to a live fix all run this effect too,
+    // and recentring on those would fight the operator.
+    if (
+      centre
+      && viewCentreRef.current
+      && (Math.abs(viewCentreRef.current.lat - centre.lat) > 1e-9
+        || Math.abs(viewCentreRef.current.lng - centre.lng) > 1e-9)
+    ) {
+      viewCentreRef.current = { lat: centre.lat, lng: centre.lng }
+      map.setView([centre.lat, centre.lng], Math.max(map.getZoom(), 16), { animate: true })
+    }
   }, [state])
 
   const centre = fenceCircleCentre(state) || state.pin
   const radius = parseRadius(state.radiusMeters, 'm')
+
+  // `relative z-0` on the map container is LOAD-BEARING, not decoration.
+  // Leaflet's panes carry z-index 200–700 and its controls 800–1000; a container
+  // with NEITHER `position` NOR `z-index` does not form a stacking context, so
+  // those values escape into the ROOT stacking context and compete directly with
+  // any dialog's z-50. That is why the map used to paint OVER the "Add a branch
+  // fence" modal and its branch list. `relative z-0` traps the pane z-indexes
+  // inside this element, so a modal above it always wins.
 
   const handleSave = () => {
     if (radius.error || busy) return
@@ -268,7 +336,7 @@ export default function GeofenceMapEditor({ branch, initial, isActive = true, bu
 
       <div
         ref={containerRef}
-        className="h-[420px] w-full border-b border-slate-100 dark:border-slate-700"
+        className="relative z-0 h-[420px] w-full border-b border-slate-100 dark:border-slate-700"
         aria-label={`Map editor for the ${branch?.branchName || ''} branch fence`}
       />
 

@@ -14,12 +14,43 @@ import { branchDisplayName, formatRadius } from '../../services/geofenceService'
  * already existed, so a first fix could never be requested from here). While
  * it is acquiring, the button shows progress and is disabled — a tap can no
  * longer look like a dead button.
+ *
+ * LAYOUT (the reported fix): the branch list is the scrolling region and the
+ * Cancel action lives in the dialog FOOTER, pinned outside that scroller.
+ * Previously the whole panel scrolled, so with many branches the Cancel button
+ * and the lower rows rode away with it and the tester map behind could be seen
+ * through the gap. The list now owns its own `min-h-0 flex-1 overflow-y-auto`
+ * box, so every row and every Add button stays reachable at any viewport size.
  */
-export default function AddFenceDialog({ open, branches, loading, error, onRetry, onSelect, onClose, myPosition, myLocationBusy = false, myLocationError = null, onUseMyLocation }) {
+export default function AddFenceDialog({
+  open,
+  branches,
+  loading,
+  error,
+  onRetry,
+  onSelect,
+  onClose,
+  myPosition,
+  myLocationBusy = false,
+  myLocationError = null,
+  onUseMyLocation,
+}) {
+  const footer = (
+    <div className="flex justify-end">
+      <button
+        type="button"
+        onClick={onClose}
+        className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
+      >
+        Cancel
+      </button>
+    </div>
+  )
+
   return (
-    <Modal open={open} onClose={onClose} width="max-w-xl">
+    <Modal open={open} onClose={onClose} width="max-w-xl" footer={footer}>
       <div className="p-5">
-        <h2 id="gf-add-title" className="text-base font-semibold text-slate-900 dark:text-slate-100">
+        <h2 id="gf-add-title" className="pr-8 text-base font-semibold text-slate-900 dark:text-slate-100">
           Add a branch fence
         </h2>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
@@ -31,7 +62,7 @@ export default function AddFenceDialog({ open, branches, loading, error, onRetry
             type="button"
             onClick={onUseMyLocation}
             disabled={myLocationBusy}
-            className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-60 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200"
+            className="mb-3 mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-60 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200"
           >
             {myLocationBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <MapPin className="w-4 h-4" />}
             {myLocationBusy ? 'Finding you…' : myPosition ? 'Re-locate me' : 'Use my location'}
@@ -50,7 +81,7 @@ export default function AddFenceDialog({ open, branches, loading, error, onRetry
           </p>
         ) : null}
 
-        <div className="mt-4 max-h-[55vh] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
           {loading && <LoadingState label="Loading branches..." />}
           {!loading && error && (
             <div className="p-4">
@@ -72,7 +103,7 @@ export default function AddFenceDialog({ open, branches, loading, error, onRetry
             </div>
           )}
           {!loading && !error && branches.length > 0 && (
-            <ul className="divide-y divide-slate-100 dark:divide-slate-700">
+            <ul className="max-h-[40vh] divide-y divide-slate-100 overflow-y-auto dark:divide-slate-700">
               {branches.map((branch) => (
                 <li key={branch.id}>
                   <button
@@ -100,16 +131,6 @@ export default function AddFenceDialog({ open, branches, loading, error, onRetry
               ))}
             </ul>
           )}
-        </div>
-
-        <div className="mt-4 flex justify-end">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
-          >
-            Cancel
-          </button>
         </div>
       </div>
     </Modal>
