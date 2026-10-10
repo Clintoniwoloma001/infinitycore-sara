@@ -97,6 +97,21 @@ select
   r->'best'->0->>'full_name' as best_name
 from public.director_top_staff('2026-09-01','2026-09-30') r;
 
+-- HARD ASSERTION: at least one fully-measured staff member is ranked, and the
+-- row is FLAT (s.full_name directly on the element, not under .f).
+do $$
+declare v_best jsonb := public.director_top_staff('2026-09-01','2026-09-30')->'best';
+begin
+  if jsonb_array_length(v_best) < 1 then
+    raise exception 'FAIL top_staff best empty: %', v_best;
+  end if;
+  if v_best->0->>'full_name' is null or v_best->0->>'grade' is null then
+    raise exception 'FAIL top_staff row not flat/graded: %', v_best->0;
+  end if;
+  raise notice 'PASS top_staff: best=% score=% grade=% (flat)',
+    v_best->0->>'full_name', v_best->0->>'overall_score', v_best->0->>'grade';
+end $$;
+
 rollback;
 
 \echo '=== ROLLED BACK — director_metric_values back to 0 ==='

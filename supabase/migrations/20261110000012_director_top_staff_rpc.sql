@@ -89,7 +89,9 @@ begin
   where (sc.engine->>'complete')::boolean is true;  -- only fully-measured are ranked
 
   -- Bank-wide best N (highest overall score, tie -> lower PAR %, then name).
-  select coalesce(jsonb_agg(x order by x.rn), '[]'::jsonb) into v_best
+  -- Rows are FLAT (the inner `f` jsonb), not {"rn":..,"f":{..}}: the web/mobile
+  -- clients and the RPC test read s.full_name / s.overall_score directly.
+  select coalesce(jsonb_agg(x.f order by x.rn), '[]'::jsonb) into v_best
   from (
     select row_number() over (order by (f->>'overall_score')::numeric desc nulls last,
                                        (f->>'par_pct')::numeric asc nulls last, f->>'full_name') as rn, f
@@ -99,7 +101,8 @@ begin
   ) x;
 
   -- Bank-wide worst N (lowest overall score, tie -> higher PAR %, then name).
-  select coalesce(jsonb_agg(x order by x.rn), '[]'::jsonb) into v_worst
+  -- Flat rows, same reason as `best` above.
+  select coalesce(jsonb_agg(x.f order by x.rn), '[]'::jsonb) into v_worst
   from (
     select row_number() over (order by (f->>'overall_score')::numeric asc nulls last,
                                        (f->>'par_pct')::numeric desc nulls last, f->>'full_name') as rn, f

@@ -37,7 +37,10 @@ insert into public.director_metric_values (employee_id, as_of_date, metric_key, 
 -- disbursement_value target+actual, portfolio target, caseload target+actual.
 insert into public.mpr_targets (employee_id, metric_code, period_label, target_value, actual_value, status) values
   ('7fd5aae5-dc51-4778-82db-463eecc1c6b5','disbursement_value','2026-09',6000000,5000000,'approved'),
-  ('7fd5aae5-dc51-4778-82db-463eecc1c6b5','total_outstanding_principal','2026-09',600000000,null,'approved'),
+  -- actual_value MUST be populated: compute_mpr_score reads target then
+  -- OVERWRITES v_portfolio with actual_value, so a NULL actual leaves the PAR
+  -- denominator NULL -> par score missing -> complete=false forever.
+  ('7fd5aae5-dc51-4778-82db-463eecc1c6b5','total_outstanding_principal','2026-09',600000000,600000000,'approved'),
   ('7fd5aae5-dc51-4778-82db-463eecc1c6b5','pass_watch','2026-09',0,10000000,'approved'),
   ('7fd5aae5-dc51-4778-82db-463eecc1c6b5','substandard','2026-09',0,2000000,'approved'),
   ('7fd5aae5-dc51-4778-82db-463eecc1c6b5','doubtful','2026-09',0,1000000,'approved'),
@@ -84,6 +87,44 @@ select
   public.director_top_staff('2026-09-01','2026-09-30')->'best'->0->>'full_name' as best_name,
   public.director_top_staff('2026-09-01','2026-09-30')->'best'->0->>'overall_score' as best_score,
   public.director_top_staff('2026-09-01','2026-09-30')->'best'->0->>'grade' as best_grade;
+
+-- ============================================================================
+-- HARD ASSERTIONS — this test must FAIL loudly, not just print numbers.
+--   A) score is complete + graded (PAR denominators really load)
+--   B) best row is FLAT (s.full_name, not {"f":{...},"rn":n})
+--   C) scorecards portfolio == direct SQL sum (recon 1)
+-- ============================================================================
+do $$
+declare
+  v_score jsonb;
+  v_best jsonb;
+  v_rpc numeric; v_sql numeric;
+begin
+  v_score := public.compute_mpr_score('7fd5aae5-dc51-4778-82db-463eecc1c6b5','2026-09','4506c7ab-265e-4fb4-a6e3-210f56fc351c'::uuid);
+  if not coalesce((v_score->>'complete')::boolean, false) then
+    raise exception 'FAIL score not complete: %', v_score;
+  end if;
+  if v_score->>'grade' is null then
+    raise exception 'FAIL score has no grade: %', v_score;
+  end if;
+
+  v_best := public.director_top_staff('2026-09-01','2026-09-30')->'best';
+  if jsonb_array_length(v_best) <> 1 then
+    raise exception 'FAIL best_count expected 1: %', v_best;
+  end if;
+  if v_best->0->>'full_name' is null or v_best->0->>'overall_score' is null then
+    raise exception 'FAIL best row is not flat: %', v_best->0;
+  end if;
+
+  v_rpc := (public.director_scorecards('2026-09-01','2026-09-30')->'portfolio'->>'value')::numeric;
+  select sum(value) into v_sql from public.director_metric_values
+    where as_of_date='2026-09-30' and metric_key='portfolio';
+  if v_rpc is distinct from v_sql then
+    raise exception 'FAIL recon1 portfolio % vs %', v_rpc, v_sql;
+  end if;
+
+  raise notice 'PASS recon assertions: score complete+graded, best row flat, portfolio match';
+end $$;
 
 rollback;
 select count(*) as values_after_rollback from public.director_metric_values;
