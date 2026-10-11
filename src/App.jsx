@@ -4,6 +4,8 @@ import { useAuth, AuthProvider } from './hooks/useAuth'
 import AttendanceTerminal from './pages/AttendanceTerminal'
 import LeaveBooking from './pages/LeaveBooking'
 import Audit from './pages/Audit'
+import AuditCommandCenter from './pages/audit/AuditCommandCenter'
+import DepartmentAudit from './pages/audit/DepartmentAudit'
 import AutomationCommandCentre from './pages/AutomationCommandCentre'
 import TrainingAttendance from './pages/TrainingAttendance'
 import Layout from './components/Layout'
@@ -91,6 +93,8 @@ const pageComponents = {
   Dashboard,
   DirectorDashboard,
   Audit,
+  AuditCommandCenter,
+  DepartmentAudit,
   AutomationCommandCentre,
   EmployeeTracking,
   GeofenceSettings,

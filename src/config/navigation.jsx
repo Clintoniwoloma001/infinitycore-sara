@@ -18,6 +18,7 @@ import {
   ListChecks,
   ScrollText,
   Settings,
+  SearchCheck,
   ShieldCheck,
   Star,
   Target,
@@ -136,7 +137,16 @@ export const routeConfig = [
     section: 'Audit & Compliance',
     department: DEPARTMENTS.AUDIT,
     items: [
-      { label: 'Audit Workspace', path: '/audit', icon: ShieldCheck, element: 'Audit', permissions: [PERMISSIONS.AUDIT_MONITORING_READ] },
+      // Restricted. The ROUTE shows the menu entry for Head-of-Audit
+      // permission holders, and get_audit_command_center() REFUSES everyone
+      // else in the database - a hidden menu entry was never the boundary.
+      { label: 'Audit Command Centre', path: '/audit/command-center', icon: SearchCheck, element: 'AuditCommandCenter', permissions: [PERMISSIONS.AUDIT_COMMAND_CENTER_READ] },
+      // Each Head of Department sees THEIR OWN scope; the RPC resolves the
+      // department from the caller's own profiles row.
+      { label: "My Department's Audit", path: '/audit/department', icon: Building2, element: 'DepartmentAudit', permissions: [PERMISSIONS.AUDIT_DEPARTMENT_READ] },
+      // Shared workspace. Gate mirrors is_audit_workspace_member(): the audit
+      // department's staff plus the monitor-holders above.
+      { label: 'Audit Workspace', path: '/audit', icon: ShieldCheck, element: 'Audit', permissions: [PERMISSIONS.AUDIT_MONITORING_READ], auditWorkspaceGate: true },
     ],
   },
   {

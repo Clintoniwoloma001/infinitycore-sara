@@ -14,8 +14,9 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   ShieldCheck, Plus, CalendarClock, ClipboardList, CheckCircle2, Loader2, X,
+  ListChecks, Gavel, MessageSquareWarning,
 } from 'lucide-react'
-import { auditService, REGULATORY_STATUS, FINDING_STATUS, fmtDate } from '../services/auditService'
+import { auditService, REGULATORY_STATUS, FINDING_STATUS, ASSIGNMENT_STATUS, SUBMISSION_STATUS, fmtDate } from '../services/auditService'
 import { employeeService } from '../services/employeeService'
 import { LoadingState, ErrorState, EmptyState } from '../components/PageStates'
 import { useAuth } from '../hooks/useAuth'
@@ -74,7 +75,13 @@ const BLANK_FIND = {
 export default function Audit() {
   const { hasPermission, profile } = useAuth()
   const [params, setParams] = useSearchParams()
-  const tab = params.get('tab') === 'findings' ? 'findings' : 'regulatory'
+  // Shared-workspace tabs ('obligations' / 'review') are only offered when the
+  // server admitted this account; otherwise the param falls back to the first
+  // register so a bookmarked link never lands on an unavailable tab.
+  const rawTab = params.get('tab')
+  const tab = (rawTab === 'obligations' || rawTab === 'review') && !workspace
+    ? 'regulatory'
+    : rawTab || 'regulatory'
 
   // Read is gated server-side too; this only decides whether to show buttons.
   const canManage = hasPermission('audit.monitoring.manage')
@@ -93,6 +100,14 @@ export default function Audit() {
   const [closeoutNotes, setCloseoutNotes] = useState('')
   const [regForm, setRegForm] = useState(BLANK_REG)
   const [findForm, setFindForm] = useState(BLANK_FIND)
+  // The shared Audit Workspace (Phase 72): obligations, my assignments and the
+  // review queue. The server refuses non-members with AUDIT_FORBIDDEN; that is
+  // NOT an error here - it simply means this account keeps the two registers
+  // below and loses the two shared tabs. Nothing else about the page changes.
+  const [workspace, setWorkspace] = useState(null)
+  const [draft, setDraft] = useState({})
+  const [returning, setReturning] = useState(null)
+  const [returnReason, setReturnReason] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -102,8 +117,47 @@ export default function Audit() {
     } catch (e) { setError(e.message) } finally { setLoading(false) }
   }, [])
 
+  // The shared workspace loads SEPARATELY and softly: a refusal (the server's
+  // role check) or a network failure leaves the registers above untouched.
+  const loadWorkspace = useCallback(async () => {
+    try {
+      const w = await auditService.workspace()
+      if (w && w.ok !== false) setWorkspace(w)
+    } catch { setWorkspace(null) }
+  }, [])
+
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadWorkspace() }, [loadWorkspace])
   useEffect(() => { employeeService.list().then(setEmployees).catch(() => setEmployees([])) }, [])
+
+  // ---- Shared workspace actions (Phase 72) --------------------------------
+  const acknowledge = async (assignmentId) => {
+    setFormError(null); setBusy(true)
+    try { await auditService.acknowledgeAssignment(assignmentId); await loadWorkspace() }
+    catch (err) { setFormError(err.message) } finally { setBusy(false) }
+  }
+
+  const submitResponse = async (assignmentId, isFinal = true) => {
+    setFormError(null); setBusy(true)
+    try {
+      const response = (draft[assignmentId] || '').trim()
+      if (!response) { setFormError('Type your response before submitting.'); setBusy(false); return }
+      await auditService.submitResponse(assignmentId, {
+        payload: { response }, files: [], isFinal,
+      })
+      setDraft((d) => ({ ...d, [assignmentId]: '' }))
+      await loadWorkspace()
+    } catch (err) { setFormError(err.message) } finally { setBusy(false) }
+  }
+
+  const reviewSubmission = async (submissionId, decision) => {
+    setFormError(null); setBusy(true)
+    try {
+      await auditService.reviewSubmission(submissionId, decision, returnReason.trim() || null, [])
+      setReturning(null); setReturnReason('')
+      await loadWorkspace()
+    } catch (err) { setFormError(err.message) } finally { setBusy(false) }
+  }
 
   const saveReg = async (e) => {
     e.preventDefault(); setFormError(null); setBusy(true)
@@ -146,7 +200,18 @@ export default function Audit() {
 
   const regSummary = reg?.summary || {}
   const findSummary = findings?.summary || {}
+  // Derived from the workspace payload; empty until the server admits us.
+  const myAssignments = workspace?.my_assignments || []
+  const schedule = workspace?.schedule || []
+  const reviewQueue = workspace?.review_queue || []
+  // The two shared tabs appear only for workspace members. `workspace` is null
+  // for an account the server refuses (or a fetch failure), so a refused role
+  // sees exactly what it saw before Phase 72 - the two registers.
   const tabs = [
+    ...(workspace ? [
+      { id: 'obligations', label: 'Obligations & submissions', icon: ListChecks },
+      ...(reviewQueue.length > 0 ? [{ id: 'review', label: 'Review queue', icon: Gavel }] : []),
+    ] : []),
     { id: 'regulatory', label: 'Regulatory monitoring', icon: CalendarClock },
     { id: 'findings', label: 'Audit findings', icon: ClipboardList },
   ]
@@ -315,6 +380,166 @@ export default function Audit() {
         </>
       )}
 
+
+      {!loading && !error && tab === 'obligations' && workspace && (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Stat label="My assignments" value={myAssignments.length} />
+            <Stat label="Awaiting acknowledgement"
+              value={myAssignments.filter((a) => a.assignment_status === 'not_started').length} tone="amber" />
+            <Stat label="Awaiting my response"
+              value={myAssignments.filter((a) => ['not_started', 'acknowledged', 'returned_for_correction'].includes(a.assignment_status)).length} tone="amber" />
+          </div>
+
+          <div className={card}>
+            <h2 className="mb-3 text-sm font-semibold text-slate-800">Assigned to me</h2>
+            {myAssignments.length === 0 ? (
+              <EmptyState title="Nothing assigned to you"
+                description="Obligations the Audit office issues to you personally will appear here, with your own deadlines." />
+            ) : (
+              <div className="space-y-3">
+                {myAssignments.map((a) => (
+                  <div key={a.assignment_id} className="rounded-xl border border-slate-200 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div className="font-medium text-slate-900">{a.title}</div>
+                        <div className="text-xs text-slate-500">
+                          {a.reference} · {a.department}
+                          {a.acknowledgement_deadline ? ` · acknowledge by ${a.acknowledgement_deadline}` : ''}
+                          {a.submission_deadline ? ` · submit by ${a.submission_deadline}` : ''}
+                          {a.days_until_due != null && a.submission_deadline
+                            ? ` · ${a.days_until_due >= 0 ? `${a.days_until_due}d left` : `${Math.abs(a.days_until_due)}d late`}`
+                            : ''}
+                        </div>
+                        {a.instructions && (
+                          <p className="mt-1 max-w-2xl text-xs text-slate-500">{a.instructions}</p>
+                        )}
+                      </div>
+                      <Chip map={ASSIGNMENT_STATUS} value={a.assignment_status} />
+                    </div>
+                    {a.required_documents?.length > 0 && (
+                      <ul className="mt-2 list-disc pl-5 text-xs text-slate-600">
+                        {a.required_documents.map((d, i) => <li key={i}>{typeof d === 'string' ? d : d?.name || JSON.stringify(d)}</li>)}
+                      </ul>
+                    )}
+                    <div className="mt-3 flex flex-wrap items-end gap-2">
+                      {a.assignment_status === 'not_started' && (
+                        <button disabled={busy} onClick={() => acknowledge(a.assignment_id)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                          <MessageSquareWarning className="w-4 h-4" />Acknowledge receipt
+                        </button>
+                      )}
+                      {['not_started', 'acknowledged', 'returned_for_correction'].includes(a.assignment_status) && (
+                        <>
+                          <textarea rows={2} placeholder="Type your response, or describe the document you are attaching"
+                            value={draft[a.assignment_id] || ''}
+                            onChange={(e) => setDraft((d) => ({ ...d, [a.assignment_id]: e.target.value }))}
+                            className="min-w-[260px] flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          <button disabled={busy} onClick={() => submitResponse(a.assignment_id, true)}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-[#009944] px-3 py-2 text-sm font-medium text-white hover:bg-[#007a36]">
+                            <CheckCircle2 className="w-4 h-4" />Submit response
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className={card}>
+            <h2 className="mb-3 text-sm font-semibold text-slate-800">Shared audit schedule</h2>
+            {schedule.length === 0 ? (
+              <EmptyState title="No active obligations"
+                description="The Assurance office has not issued any obligations yet." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+                    <tr>{['Reference', 'Obligation', 'Department', 'Owner', 'Due', 'SLA'].map((h) => (
+                      <th key={h} className="px-4 py-2 font-medium">{h}</th>
+                    ))}</tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {schedule.map((o) => (
+                      <tr key={o.assignment_id} className={o.sla_state === 'overdue' ? 'bg-red-50' : ''}>
+                        <td className="px-4 py-2.5 font-mono text-xs text-slate-600">{o.reference}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="font-medium text-slate-900">{o.title}</div>
+                          <div className="text-xs text-slate-500">{o.obligation_type}</div>
+                        </td>
+                        <td className="px-4 py-2.5 text-slate-600">{o.department}</td>
+                        <td className="px-4 py-2.5 text-slate-600">{o.owner_name || 'Unassigned'}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap text-slate-600">{o.submission_deadline || '—'}</td>
+                        <td className="px-4 py-2.5"><Chip map={ASSIGNMENT_STATUS} value={o.assignment_status} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {!loading && !error && tab === 'review' && workspace && (
+        <div className={card}>
+          <h2 className="mb-1 text-sm font-semibold text-slate-800">Submission review queue</h2>
+          <p className="mb-3 text-xs text-slate-500">
+            Responses waiting on an audit decision. A return for correction requires a reason and is recorded
+            against the submission and the assignment.
+          </p>
+          {reviewQueue.length === 0 ? (
+            <EmptyState title="Nothing awaiting review" description="Submissions will appear here the moment they arrive." />
+          ) : (
+            <div className="space-y-3">
+              {reviewQueue.map((r) => (
+                <div key={r.submission_id} className="rounded-xl border border-slate-200 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-medium text-slate-900">{r.obligation_title}</div>
+                      <div className="text-xs text-slate-500">
+                        {r.reference} · v{r.version} · {r.submitted_by_name} · {r.department}
+                      </div>
+                    </div>
+                    <Chip map={SUBMISSION_STATUS} value={r.status} />
+                  </div>
+                  {returning === r.submission_id ? (
+                    <div className="mt-2 space-y-2">
+                      <input value={returnReason} onChange={(e) => setReturnReason(e.target.value)}
+                        placeholder="Correction reason (required) — exactly what must change and why"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                      <div className="flex gap-2">
+                        <button disabled={busy || !returnReason.trim()}
+                          onClick={() => reviewSubmission(r.submission_id, 'returned_for_correction')}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-[#009944] px-3 py-2 text-sm font-medium text-white hover:bg-[#007a36]">
+                          <Gavel className="w-4 h-4" />Return for correction
+                        </button>
+                        <button onClick={() => { setReturning(null); setReturnReason('') }}
+                          className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700">Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button disabled={busy} onClick={() => reviewSubmission(r.submission_id, 'under_review')}
+                        className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Start review</button>
+                      <button disabled={busy} onClick={() => reviewSubmission(r.submission_id, 'accepted')}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50">
+                        <CheckCircle2 className="w-4 h-4" />Accept
+                      </button>
+                      <button disabled={busy} onClick={() => setReturning(r.submission_id)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-orange-300 px-3 py-2 text-sm text-orange-700 hover:bg-orange-50">
+                        <Gavel className="w-4 h-4" />Return for correction
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {showReg && (
         <Modal title="Add regulatory item" onClose={() => setShowReg(false)}>

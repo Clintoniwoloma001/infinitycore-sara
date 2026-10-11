@@ -68,6 +68,13 @@ export const PERMISSIONS = {
   LEAVE_SCHEDULE_CONFIGURE: 'leave.schedule.configure',
   AUDIT_MONITORING_READ: 'audit.monitoring.read',
   AUDIT_MONITORING_MANAGE: 'audit.monitoring.manage',
+  // Phase 72 - the three audit workspaces. The command-centre key is seeded to
+  // the Head of Audit (plus the two break-glass administrators) and enforced
+  // again inside its RPC.
+  AUDIT_COMMAND_CENTER_READ: 'audit.command_center.read',
+  AUDIT_OBLIGATIONS_MANAGE: 'audit.obligations.manage',
+  AUDIT_WORKSPACE_READ: 'audit.workspace.read',
+  AUDIT_DEPARTMENT_READ: 'audit.department.read',
   AUTOMATION_PORTFOLIO_READ: 'automation.portfolio.read',
   AUTOMATION_PORTFOLIO_MANAGE: 'automation.portfolio.manage',
 

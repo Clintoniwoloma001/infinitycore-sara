@@ -83,6 +83,98 @@ export const auditService = {
     })
     return unwrap(data, error, {})
   },
+
+  // ---- Phase 72: the three audit workspaces ----------------------------
+  //
+  // All three are SECURITY DEFINER RPCs that decide the caller's audience
+  // THEMSELVES: get_audit_command_center() refuses anyone who is not the Head
+  // of Audit, get_my_department_audit() reads the caller's OWN department from
+  // their profiles row, and get_audit_workspace() requires audit department
+  // membership. The navigation menu only decides what is offered; these RPCs
+  // are what actually refuse the request.
+  async commandCenter() {
+    const { data, error } = await supabase.rpc('get_audit_command_center')
+    return unwrap(data, error, {})
+  },
+
+  async myDepartmentAudit() {
+    const { data, error } = await supabase.rpc('get_my_department_audit')
+    return unwrap(data, error, {})
+  },
+
+  async workspace() {
+    const { data, error } = await supabase.rpc('get_audit_workspace')
+    return unwrap(data, error, {})
+  },
+
+  async slaSnapshot() {
+    const { data, error } = await supabase.rpc('audit_sla_snapshot')
+    return unwrap(data, error, {})
+  },
+
+  // ---- Phase 72: obligation writes --------------------------------------
+  async createObligation(f) {
+    const { data, error } = await supabase.rpc('create_audit_obligation', {
+      p_reference: f.reference,
+      p_title: f.title,
+      p_description: f.description || null,
+      p_instructions: f.instructions || null,
+      p_obligation_type: f.obligationType || 'regulatory_return',
+      p_department: f.department || 'audit',
+      p_accountable_owner_user_id: f.accountableOwnerId || null,
+      p_reporting_period: f.reportingPeriod || null,
+      p_source_document: f.sourceDocument || null,
+      p_source_reference: f.sourceReference || null,
+      p_issue_date: f.issueDate || null,
+      p_acknowledgement_deadline: f.acknowledgementDeadline || null,
+      p_submission_deadline: f.submissionDeadline || null,
+      p_review_deadline: f.reviewDeadline || null,
+      p_priority: f.priority || 'medium',
+      p_risk_rating: f.riskRating || 'medium',
+      p_requires_acknowledgement: f.requiresAcknowledgement !== false,
+      p_requires_submission: f.requiresSubmission !== false,
+      p_required_documents: f.requiredDocuments || [],
+      p_recurrence_rule: f.recurrenceRule || null,
+    })
+    return unwrap(data, error, {})
+  },
+
+  async issueObligation(obligationId, userId, acknowledgementDeadline, submissionDeadline) {
+    const { data, error } = await supabase.rpc('issue_audit_obligation', {
+      p_obligation_id: obligationId,
+      p_assigned_user_id: userId,
+      p_acknowledgement_deadline: acknowledgementDeadline || null,
+      p_submission_deadline: submissionDeadline || null,
+    })
+    return unwrap(data, error, {})
+  },
+
+  async acknowledgeAssignment(assignmentId) {
+    const { data, error } = await supabase.rpc('acknowledge_audit_obligation', {
+      p_assignment_id: assignmentId,
+    })
+    return unwrap(data, error, {})
+  },
+
+  async submitResponse(assignmentId, { payload = {}, files = [], isFinal = true } = {}) {
+    const { data, error } = await supabase.rpc('submit_audit_response', {
+      p_assignment_id: assignmentId,
+      p_payload: payload,
+      p_files: files,
+      p_is_final: isFinal,
+    })
+    return unwrap(data, error, {})
+  },
+
+  async reviewSubmission(submissionId, decision, correctionReason = null, fields = []) {
+    const { data, error } = await supabase.rpc('review_audit_submission', {
+      p_submission_id: submissionId,
+      p_decision: decision,
+      p_correction_reason: correctionReason,
+      p_correction_fields: fields,
+    })
+    return unwrap(data, error, {})
+  },
 }
 
 export const REGULATORY_STATUS = {
@@ -97,6 +189,52 @@ export const FINDING_STATUS = {
   in_progress: { label: 'In Progress', chip: 'bg-amber-100 text-amber-800', order: 2 },
   pending_closeout: { label: 'Pending Closeout', chip: 'bg-sky-100 text-sky-800', order: 3 },
   closed: { label: 'Closed', chip: 'bg-emerald-100 text-emerald-800', order: 4 },
+}
+
+// Assignment lifecycle (audit_obligation_assignments.status). Mirrors the
+// database CHECK constraint exactly.
+export const ASSIGNMENT_STATUS = {
+  not_started: { label: 'Not started', chip: 'bg-slate-100 text-slate-600' },
+  acknowledged: { label: 'Acknowledged', chip: 'bg-sky-100 text-sky-800' },
+  submitted: { label: 'Submitted', chip: 'bg-indigo-100 text-indigo-800' },
+  under_review: { label: 'Under review', chip: 'bg-amber-100 text-amber-800' },
+  returned_for_correction: { label: 'Returned for correction', chip: 'bg-orange-100 text-orange-800' },
+  resubmitted: { label: 'Resubmitted', chip: 'bg-indigo-100 text-indigo-800' },
+  accepted: { label: 'Accepted', chip: 'bg-emerald-100 text-emerald-800' },
+  closed: { label: 'Closed', chip: 'bg-emerald-100 text-emerald-800' },
+  rejected: { label: 'Rejected', chip: 'bg-red-100 text-red-800' },
+}
+
+// SLA states, all derived server-side (never computed in the browser, so the
+// UI, the reminder job and the Command Centre cannot disagree).
+export const SLA_STATE = {
+  closed: { label: 'Closed', chip: 'bg-emerald-100 text-emerald-800' },
+  not_due: { label: 'Not due', chip: 'bg-slate-100 text-slate-600' },
+  overdue: { label: 'Overdue', chip: 'bg-red-100 text-red-800' },
+  due_today: { label: 'Due today', chip: 'bg-amber-100 text-amber-800' },
+  due_soon: { label: 'Due soon', chip: 'bg-amber-50 text-amber-700' },
+  upcoming: { label: 'Upcoming', chip: 'bg-slate-100 text-slate-600' },
+}
+
+export const SUBMISSION_STATUS = {
+  draft: { label: 'Draft', chip: 'bg-slate-100 text-slate-600' },
+  submitted: { label: 'Submitted', chip: 'bg-indigo-100 text-indigo-800' },
+  under_review: { label: 'Under review', chip: 'bg-amber-100 text-amber-800' },
+  returned_for_correction: { label: 'Returned for correction', chip: 'bg-orange-100 text-orange-800' },
+  resubmitted: { label: 'Resubmitted', chip: 'bg-indigo-100 text-indigo-800' },
+  accepted: { label: 'Accepted', chip: 'bg-emerald-100 text-emerald-800' },
+  closed: { label: 'Closed', chip: 'bg-emerald-100 text-emerald-800' },
+  rejected: { label: 'Rejected', chip: 'bg-red-100 text-red-800' },
+}
+
+export const OBLIGATION_TYPE = {
+  audit_finding: 'Audit finding',
+  regulatory_return: 'Regulatory return',
+  regulatory_circular: 'Regulatory circular',
+  compliance_declaration: 'Compliance declaration',
+  evidence_request: 'Evidence request',
+  corrective_action: 'Corrective action',
+  custom: 'Custom',
 }
 
 export const AUTOMATION_STATUS = {

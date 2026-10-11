@@ -14,6 +14,7 @@ import {
   departmentsForRole, isSharedOnly, filterSectionsByDepartment,
 } from '../src/config/navigationConfig.js'
 import { ROLES, ROLE_PERMISSIONS } from '../src/constants/roles.js'
+import { PERMISSIONS } from '../src/constants/permissions.js'
 // navigation.jsx is JSX, which plain Node cannot import, so the wiring into it
 // is asserted from source below rather than executed.
 
@@ -204,6 +205,17 @@ const navGroups = [
 }))
 
 const groupOf = (path) => navGroups.find((g) => g.items.includes(path))
+const itemOf = (path) => {
+  const line = read('src/config/navigation.jsx')
+    .split('\n')
+    .find((l) => l.includes(`path: '${path}'`))
+  if (!line) return null
+  const item = {}
+  const perm = line.match(/permissions: \[([^\]]+)\]/)
+  if (perm) item.permissions = perm[1].split(',').map((s) => s.trim())
+  item.auditWorkspaceGate = /auditWorkspaceGate:\s*true/.test(line)
+  return item
+}
 
 check('the nav config is fully parsed', () => {
   assert.ok(navGroups.length >= 9, `only ${navGroups.length} groups parsed from navigation.jsx`)
@@ -249,6 +261,68 @@ check('the privileged attendance modules stay department-scoped', () => {
     assert.ok(group, `${path} is not in routeConfig`)
     assert.ok(group.department, `${path} must stay in a department-tagged group`)
   }
+})
+
+// ===========================================================================
+// Phase 72 - the three audit workspaces
+// ===========================================================================
+
+check('the three audit workspaces exist and are unique', () => {
+  for (const p of ['/audit', '/audit/command-center', '/audit/department']) {
+    const group = groupOf(p)
+    assert.ok(group, `${p} is not declared in routeConfig`)
+    assert.equal(group.department, DEPARTMENTS.AUDIT, `${p} must stay in the Audit department group`)
+  }
+})
+
+check('the Audit Command Centre is restricted on the server, not just hidden', () => {
+  const cc = itemOf('/audit/command-center')
+  assert.ok(cc, 'the command centre route is missing')
+  // The permission key the RPC enforces (is_audit_command_center_reader).
+  assert.ok(cc.permissions.includes('PERMISSIONS.AUDIT_COMMAND_CENTER_READ'),
+    'the restricted route must carry its permission key')
+  assert.equal(PERMISSIONS.AUDIT_COMMAND_CENTER_READ, 'audit.command_center.read',
+    'the client key must match the permission the database seeds')
+  // The page must not rely on the menu: its source contains the server refusal.
+  const page = read('src/pages/audit/AuditCommandCenter.jsx')
+  assert.match(page, /AUDIT_FORBIDDEN/, 'the page must render the server-side refusal')
+  // And the gate itself must live in the migration, where the data is.
+  const sql = read('supabase/migrations/20261111000001_audit_command_center_workspaces.sql')
+  assert.match(sql, /get_audit_command_center\(\)/)
+  assert.match(sql, /if not public\.is_audit_command_center_reader\(\) then[\s\S]*AUDIT_FORBIDDEN/,
+    'the RPC must refuse non-Head-of-Audit callers itself')
+})
+
+check("the department workspace never trusts a client department", () => {
+  const sql = read('supabase/migrations/20261111000001_audit_command_center_workspaces.sql')
+  // The caller's own department, read server-side; no p_department parameter.
+  assert.match(sql, /v_dept text := public\.current_department\(\);/)
+  const fn = sql.slice(sql.indexOf('create or replace function public.get_my_department_audit'))
+  assert.ok(!/p_department/.test(fn.slice(0, fn.indexOf('\n$$'))),
+    'get_my_department_audit takes no department argument - it reads the profile')
+})
+
+check('the shared Audit Workspace gate mirrors the server membership test', () => {
+  const ws = itemOf('/audit')
+  assert.ok(ws.auditWorkspaceGate, 'the workspace route must carry the department gate')
+  const ac = read('src/config/accessControl.js')
+  assert.match(ac, /auditWorkspaceGate/)
+  assert.match(ac, /auth\.profile\?\.department === 'audit'/,
+    'the gate must read the same department the server reads')
+})
+
+check('assignment writes go through role-checked RPCs, not client table access', () => {
+  const sql = read('supabase/migrations/20261111000001_audit_command_center_workspaces.sql')
+  // RLS grants READ ONLY; every write is a SECURITY DEFINER RPC.
+  assert.match(sql, /alter table public\.audit_obligations enable row level security;/)
+  const rlsBlock = sql.slice(sql.indexOf('ROW-LEVEL SECURITY'))
+  assert.ok(!/for insert|for update|for delete/.test(rlsBlock),
+    'no write policy may exist on the audit tables')
+  for (const rpc of ['acknowledge_audit_obligation', 'submit_audit_response', 'review_audit_submission']) {
+    assert.match(sql, new RegExp(`create or replace function public\\.${rpc}\\(`),
+      `${rpc} must exist as an RPC`)
+  }
+  assert.match(sql, /only the assigned person can acknowledge/i)
 })
 
 console.log('\nAll ' + n + ' checks passed.')

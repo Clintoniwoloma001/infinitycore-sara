@@ -63,6 +63,20 @@ export function canAccessRoute(route, auth) {
 
   if (auth.role === 'super_admin') return true
 
+  // 1a. The shared Audit Workspace is authorised the way the SERVER authorises
+  //     it (`is_audit_workspace_member()`): anyone whose profiles row places
+  //     them in the audit department may open it, alongside whoever holds the
+  //     route's audit permissions. Granting audit.workspace.read to every
+  //     `staff` account instead would advertise a link the server refuses - so
+  //     the gate reads the same department the server reads and keeps the two
+  //     decisions in agreement.
+  if (route.auditWorkspaceGate) {
+    if (auth.profile?.department === 'audit') return true
+    const required = route.permissions || []
+    if (!required.length) return false
+    return auth.hasAnyPermission(required)
+  }
+
   // 1b. A fixed role audience (Geofence Settings & Management). This is a
   //     closed list, not a grant: no Access Control key and no granular
   //     document can widen it. Failing closed for an unknown/absent role is
