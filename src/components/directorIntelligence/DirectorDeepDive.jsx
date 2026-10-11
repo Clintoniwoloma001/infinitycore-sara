@@ -26,7 +26,7 @@ export function DirectorDeepDive({ open, metricKey, data = {}, onClose }) {
 
   return (
     <div
-      className={`fixed inset-0 z-[80] flex justify-end bg-slate-950/50 backdrop-blur-sm transition ${open ? 'pointer-events-auto' : 'pointer-events-none'}`}
+      className={`fixed inset-0 z-[80] flex justify-end transition ${open ? 'bg-slate-950/50 backdrop-blur-sm pointer-events-auto' : 'pointer-events-none'}`}
       onClick={() => !open && onClose()}
     >
       <aside

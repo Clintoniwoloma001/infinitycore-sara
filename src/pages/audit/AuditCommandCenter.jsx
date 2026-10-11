@@ -16,7 +16,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
   SearchCheck, RefreshCw, Plus, AlertTriangle, Gavel, ClipboardCheck,
-  CheckCircle2, MessageSquareWarning, Send, Building2, CalendarClock,
+  CheckCircle2, MessageSquareWarning, Send, Building2, CalendarClock, Zap,
 } from 'lucide-react'
 import { auditService, ASSIGNMENT_STATUS, FINDING_STATUS, OBLIGATION_TYPE, SUBMISSION_STATUS } from '../../services/auditService'
 import { LoadingState, ErrorState, EmptyState } from '../../components/PageStates'
@@ -39,6 +39,7 @@ const RISK_TONE = { critical: 'red', high: 'red', medium: 'amber', low: 'slate' 
 
 export default function AuditCommandCenter() {
   const [data, setData] = useState(null)
+  const [register, setRegister] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [blocked, setBlocked] = useState(false)
@@ -49,6 +50,8 @@ export default function AuditCommandCenter() {
   const [formError, setFormError] = useState(null)
   const [returning, setReturning] = useState(null) // submission awaiting a correction reason
   const [returnReason, setReturnReason] = useState('')
+  const [registerFilter, setRegisterFilter] = useState('draft')
+  const [sweepResult, setSweepResult] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true); setError(null); setBlocked(false)
@@ -63,7 +66,20 @@ export default function AuditCommandCenter() {
     } finally { setLoading(false) }
   }, [])
 
+  // The register is a separate, restricted read: it fails with the same
+  // AUDIT_FORBIDDEN if the caller is not a command-centre reader, and is
+  // simply absent (not an error) otherwise.
+  const loadRegister = useCallback(async (status = registerFilter) => {
+    try {
+      setRegister(await auditService.obligationRegister(status))
+    } catch (e) {
+      if (/AUDIT_FORBIDDEN/i.test(e.message || '')) setRegister(null)
+      else setActionError(e.message)
+    }
+  }, [registerFilter])
+
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadRegister(registerFilter) }, [loadRegister, registerFilter])
 
   const createObligation = async (e) => {
     e.preventDefault(); setFormError(null)
@@ -90,6 +106,26 @@ export default function AuditCommandCenter() {
     try {
       await auditService.reviewSubmission(submissionId, decision, reason, [])
       setReturning(null); setReturnReason(''); load()
+    } catch (err) { setActionError(err.message) } finally { setBusy(false) }
+  }
+
+  // Activating an imported obligation is the validation gate: the statutory
+  // deadline has been confirmed as the current position by a Head of Audit.
+  const activate = async (obligationId, status) => {
+    setActionError(null); setBusy(true)
+    try {
+      await auditService.activateObligation(obligationId, status)
+      loadRegister(registerFilter); load()
+    } catch (err) { setActionError(err.message) } finally { setBusy(false) }
+  }
+
+  // The reminder sweep normally runs on pg_cron; this is the manual trigger
+  // for the same server job (same idempotency, same notifications).
+  const runSweep = async () => {
+    setActionError(null); setBusy(true)
+    try {
+      const r = await auditService.runReminderSweep()
+      setSweepResult(r); load()
     } catch (err) { setActionError(err.message) } finally { setBusy(false) }
   }
 
@@ -159,6 +195,89 @@ export default function AuditCommandCenter() {
         <KpiCard label="Awaiting review" value={s.awaiting_review} icon={Send} />
         <KpiCard label="Returned for correction" value={s.returned_for_correction} tone="amber" icon={Gavel} />
       </div>
+
+      <SectionCard
+        title="Obligation register (source documents)"
+        description="Imported from the audit department's working documents. Every row keeps its provenance; a draft row must be validated before it drives live notices."
+        action={(
+          <div className="flex items-center gap-2">
+            <select value={registerFilter} onChange={(e) => setRegisterFilter(e.target.value)}
+              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700">
+              <option value="draft">Awaiting validation</option>
+              <option value="active">Active</option>
+              <option value="paused">Paused</option>
+              <option value="archived">Archived</option>
+              <option value="">All</option>
+            </select>
+            <button onClick={runSweep} disabled={busy} className={ghostBtn} title="Run the reminder/escalation job now (the same idempotent job pg_cron runs)">
+              <Zap className="h-4 w-4" />Run reminder sweep
+            </button>
+          </div>
+        )}>
+        {sweepResult && (
+          <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            Sweep completed: {sweepResult.reminded ?? 0} reminded, {sweepResult.overdue_flagged ?? 0} overdue
+            flagged, {sweepResult.escalated ?? 0} escalated (as of {sweepResult.as_of}).
+          </p>
+        )}
+        <DataTable
+          columns={[
+            { key: 'ref', label: 'Reference' },
+            { key: 'title', label: 'Obligation' },
+            { key: 'type', label: 'Type' },
+            { key: 'dept', label: 'Department' },
+            { key: 'owner', label: 'Owner (source)' },
+            { key: 'recur', label: 'Recurrence' },
+            { key: 'next', label: 'Next / due' },
+            { key: 'remind', label: 'Reminder' },
+            { key: 'sla', label: 'SLA state' },
+            { key: 'status', label: 'Status' },
+            { key: 'act', label: '' },
+          ]}
+          rowCount={(register?.obligations || []).length}
+          empty="No obligations in this view.">
+          {(register?.obligations || []).map((o) => (
+            <tr key={o.id}>
+              <td className="px-3 py-2.5 font-mono text-xs text-slate-600">{o.reference}</td>
+              <td className="px-3 py-2.5">
+                <div className="font-medium text-slate-900">{o.title}</div>
+                <div className="text-xs text-slate-500">
+                  {o.source_document_type === 'audit_followup_report' ? 'Audit follow-up report'
+                    : o.source_document_type === 'regulatory_master_board' ? 'Regulatory master board'
+                      : o.source_document_type === 'regulatory_compliance_board' ? 'Regulatory compliance board'
+                        : o.source_document_type === 'regulatory_circular_tracker' ? 'Regulatory circular tracker'
+                          : 'Manual entry'}
+                  {o.source_document ? ` · ${o.source_document}` : ''}
+                </div>
+              </td>
+              <td className="px-3 py-2.5 text-slate-600">{OBLIGATION_TYPE[o.obligation_type] || o.obligation_type}</td>
+              <td className="px-3 py-2.5 text-slate-600">{o.department}</td>
+              <td className="px-3 py-2.5 text-slate-600">{o.source_owner_label || '—'}</td>
+              <td className="px-3 py-2.5 text-slate-600">{o.recurrence_rule || 'one-off'}</td>
+              <td className="px-3 py-2.5 whitespace-nowrap text-slate-600">{o.effective_deadline || '—'}</td>
+              <td className="px-3 py-2.5 text-slate-600">
+                <div>{o.reminder_lead_days}d lead</div>
+                <div className="text-xs text-slate-400">every {o.reminder_interval_days}d</div>
+              </td>
+              <td className="px-3 py-2.5"><SlaChip slaState={o.sla_state} /></td>
+              <td className="px-3 py-2.5">
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                  o.status === 'active' ? 'bg-emerald-100 text-emerald-800'
+                    : o.status === 'draft' ? 'bg-amber-100 text-amber-800'
+                      : 'bg-slate-100 text-slate-600'}`}>{o.status}</span>
+              </td>
+              <td className="px-3 py-2.5 text-right">
+                {o.status === 'draft' && (
+                  <button disabled={busy} onClick={() => activate(o.id, 'active')}
+                    className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50">
+                    Validate &amp; activate
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </DataTable>
+      </SectionCard>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <SectionCard

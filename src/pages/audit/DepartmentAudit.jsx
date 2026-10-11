@@ -139,7 +139,7 @@ export default function DepartmentAudit() {
                 {o.instructions && <div className="mt-0.5 max-w-md text-xs text-slate-400">{o.instructions}</div>}
               </td>
               <td className="px-3 py-2.5 text-slate-600">
-                <div>{o.owner_name || 'Unassigned'}</div>
+                <div>{o.owner_name || o.source_owner_label || 'Unassigned'}</div>
                 {o.owner_email && <div className="text-xs text-slate-400">{o.owner_email}</div>}
               </td>
               <td className="px-3 py-2.5 text-slate-600">
@@ -152,6 +152,9 @@ export default function DepartmentAudit() {
               </td>
               <td className="px-3 py-2.5 whitespace-nowrap text-slate-600">
                 {o.submission_deadline || '—'}
+                {o.recurrence_rule && o.recurrence_rule !== 'none' && (
+                  <div className="text-xs text-slate-400">{o.recurrence_rule}</div>
+                )}
                 {o.original_submission_deadline && o.original_submission_deadline !== o.submission_deadline && (
                   <div className="text-xs text-amber-700">
                     extended from {o.original_submission_deadline}
@@ -164,7 +167,11 @@ export default function DepartmentAudit() {
                   : (o.days_until_due ?? '—')}
               </td>
               <td className="px-3 py-2.5"><SlaChip slaState={o.sla_state} daysUntilDue={o.days_until_due} /></td>
-              <td className="px-3 py-2.5"><StatusChip map={ASSIGNMENT_STATUS} value={o.assignment_status} /></td>
+              <td className="px-3 py-2.5">
+                {o.assignment_id
+                  ? <StatusChip map={ASSIGNMENT_STATUS} value={o.assignment_status} />
+                  : <span className="text-xs text-slate-400">awaiting issue</span>}
+              </td>
             </tr>
           ))}
         </DataTable>

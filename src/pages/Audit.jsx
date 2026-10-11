@@ -72,9 +72,87 @@ const BLANK_FIND = {
   severity: 'medium', description: '', dueDate: '',
 }
 
+// ===========================================================================
+// The shared audit board: the same assignments the table shows, as the
+// workflow the audit team actually works - new, acknowledged, submitted,
+// under review, returned, done. One column per assignment status, so a card's
+// position IS its state and nothing can drift between the two.
+// ===========================================================================
+const BOARD_COLUMNS = [
+  { key: 'new', label: 'New', header: 'bg-slate-100 text-slate-700', statuses: ['not_started'] },
+  { key: 'acknowledged', label: 'Acknowledged', header: 'bg-sky-100 text-sky-800', statuses: ['acknowledged'] },
+  { key: 'submitted', label: 'Submitted', header: 'bg-indigo-100 text-indigo-800', statuses: ['submitted'] },
+  { key: 'review', label: 'Under review', header: 'bg-amber-100 text-amber-800', statuses: ['under_review', 'resubmitted'] },
+  { key: 'returned', label: 'Returned for correction', header: 'bg-orange-100 text-orange-800', statuses: ['returned_for_correction'] },
+  { key: 'done', label: 'Accepted / Closed', header: 'bg-emerald-100 text-emerald-800', statuses: ['accepted', 'closed', 'rejected'] },
+]
+
+function AuditBoard({ schedule }) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+      {BOARD_COLUMNS.map((col) => {
+        const cards = schedule.filter((s) => col.statuses.includes(s.assignment_status))
+        return (
+          <section key={col.key} className="flex min-h-[120px] flex-col rounded-2xl bg-slate-50/80 p-2">
+            <header className={`mb-2 flex items-center justify-between rounded-xl px-3 py-2 ${col.header}`}>
+              <span className="text-xs font-semibold">{col.label}</span>
+              <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-bold tabular-nums">{cards.length}</span>
+            </header>
+            <div className="space-y-2">
+              {cards.map((c) => {
+                const initials = (c.owner_name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase()
+                const overdue = c.sla_state === 'overdue'
+                return (
+                  <article key={c.assignment_id}
+                    className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="font-mono text-[10px] uppercase tracking-wide text-slate-400">{c.reference}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                        c.risk_rating === 'critical' ? 'bg-red-100 text-red-700'
+                          : c.risk_rating === 'high' ? 'bg-orange-100 text-orange-700'
+                            : c.risk_rating === 'medium' ? 'bg-amber-50 text-amber-700'
+                              : 'bg-slate-100 text-slate-600'}`}>{c.risk_rating || '—'}</span>
+                    </div>
+                    <h4 className="mt-1 text-sm font-medium leading-snug text-slate-900">{c.title}</h4>
+                    <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                      <span className="truncate">{c.department}</span>
+                      <span className="ml-2 flex items-center gap-1.5">
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[9px] font-bold text-slate-600">
+                          {initials}
+                        </span>
+                        <span className={`whitespace-nowrap ${overdue ? 'font-semibold text-red-600' : ''}`}>
+                          {c.submission_deadline
+                            ? `${new Date(`${String(c.submission_deadline).slice(0, 10)}T00:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}${c.days_until_due != null ? (c.days_until_due >= 0 ? ` · ${c.days_until_due}d` : ` · ${Math.abs(c.days_until_due)}d late`) : ''}`
+                            : 'No date'}
+                        </span>
+                      </span>
+                    </div>
+                  </article>
+                )
+              })}
+              {cards.length === 0 && (
+                <p className="rounded-xl border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-400">
+                  Nothing here
+                </p>
+              )}
+            </div>
+          </section>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function Audit() {
   const { hasPermission, profile } = useAuth()
   const [params, setParams] = useSearchParams()
+
+  // The shared Audit Workspace (Phase 72): obligations, my assignments and the
+  // review queue. The server refuses non-members with AUDIT_FORBIDDEN; that is
+  // NOT an error here - it simply means this account keeps the two registers
+  // below and loses the two shared tabs. Nothing else about the page changes.
+  const [workspace, setWorkspace] = useState(null)
+
   // Shared-workspace tabs ('obligations' / 'review') are only offered when the
   // server admitted this account; otherwise the param falls back to the first
   // register so a bookmarked link never lands on an unavailable tab.
@@ -82,11 +160,14 @@ export default function Audit() {
   const tab = (rawTab === 'obligations' || rawTab === 'review') && !workspace
     ? 'regulatory'
     : rawTab || 'regulatory'
+  const [draft, setDraft] = useState({})
+  const [returning, setReturning] = useState(null)
+  const [returnReason, setReturnReason] = useState('')
+  // View toggle on the obligations tab: the same assignments as a table or as
+  // the board the audit team works from day to day.
+  const [view, setView] = useState('board')
 
-  // Read is gated server-side too; this only decides whether to show buttons.
-  const canManage = hasPermission('audit.monitoring.manage')
-    || ['super_admin', 'admin', 'head_of_audit'].includes(profile?.role)
-
+  // Registers and UI state for the original two tabs
   const [reg, setReg] = useState(null)
   const [findings, setFindings] = useState(null)
   const [employees, setEmployees] = useState([])
@@ -100,14 +181,6 @@ export default function Audit() {
   const [closeoutNotes, setCloseoutNotes] = useState('')
   const [regForm, setRegForm] = useState(BLANK_REG)
   const [findForm, setFindForm] = useState(BLANK_FIND)
-  // The shared Audit Workspace (Phase 72): obligations, my assignments and the
-  // review queue. The server refuses non-members with AUDIT_FORBIDDEN; that is
-  // NOT an error here - it simply means this account keeps the two registers
-  // below and loses the two shared tabs. Nothing else about the page changes.
-  const [workspace, setWorkspace] = useState(null)
-  const [draft, setDraft] = useState({})
-  const [returning, setReturning] = useState(null)
-  const [returnReason, setReturnReason] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -449,10 +522,23 @@ export default function Audit() {
           </div>
 
           <div className={card}>
-            <h2 className="mb-3 text-sm font-semibold text-slate-800">Shared audit schedule</h2>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-slate-800">Shared audit schedule</h2>
+              <div className="inline-flex overflow-hidden rounded-lg border border-slate-300">
+                {[['table', 'Table'], ['board', 'Board']].map(([id, label]) => (
+                  <button key={id} onClick={() => setView(id)}
+                    className={`px-3 py-1.5 text-xs font-medium ${view === id
+                      ? 'bg-[#009944] text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
             {schedule.length === 0 ? (
               <EmptyState title="No active obligations"
                 description="The Assurance office has not issued any obligations yet." />
+            ) : view === 'board' ? (
+              <AuditBoard schedule={schedule} />
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">

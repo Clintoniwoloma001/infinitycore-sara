@@ -102,6 +102,31 @@ export const auditService = {
     return unwrap(data, error, {})
   },
 
+  // The obligation register - the imported source data plus the reminder /
+  // escalation configuration. Restricted to Head of Audit command-centre
+  // readers by the RPC itself.
+  async obligationRegister(status = null) {
+    const { data, error } = await supabase.rpc('get_audit_obligation_register', {
+      p_status: status,
+    })
+    return unwrap(data, error, { obligations: [], summary: {} })
+  },
+
+  async activateObligation(obligationId, status) {
+    // Validation gate: an obligation leaves 'draft' only when a Head of Audit
+    // confirms the statutory deadline, so imported historical dates never go
+    // live unverified.
+    const { data, error } = await supabase.rpc('set_audit_obligation_status', {
+      p_obligation_id: obligationId, p_status: status,
+    })
+    return unwrap(data, error, {})
+  },
+
+  async runReminderSweep() {
+    const { data, error } = await supabase.rpc('audit_obligation_reminder_sweep')
+    return unwrap(data, error, {})
+  },
+
   async workspace() {
     const { data, error } = await supabase.rpc('get_audit_workspace')
     return unwrap(data, error, {})
@@ -210,6 +235,7 @@ export const ASSIGNMENT_STATUS = {
 export const SLA_STATE = {
   closed: { label: 'Closed', chip: 'bg-emerald-100 text-emerald-800' },
   not_due: { label: 'Not due', chip: 'bg-slate-100 text-slate-600' },
+  not_issued: { label: 'Awaiting issue', chip: 'bg-slate-50 text-slate-500 ring-1 ring-slate-200' },
   overdue: { label: 'Overdue', chip: 'bg-red-100 text-red-800' },
   due_today: { label: 'Due today', chip: 'bg-amber-100 text-amber-800' },
   due_soon: { label: 'Due soon', chip: 'bg-amber-50 text-amber-700' },
