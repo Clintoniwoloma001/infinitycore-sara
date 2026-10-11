@@ -160,6 +160,11 @@ export default function Audit() {
   const tab = (rawTab === 'obligations' || rawTab === 'review') && !workspace
     ? 'regulatory'
     : rawTab || 'regulatory'
+
+  // Read is gated server-side too; this only decides whether to show buttons.
+  const canManage = hasPermission('audit.monitoring.manage')
+    || ['super_admin', 'admin', 'head_of_audit'].includes(profile?.role)
+
   const [draft, setDraft] = useState({})
   const [returning, setReturning] = useState(null)
   const [returnReason, setReturnReason] = useState('')
