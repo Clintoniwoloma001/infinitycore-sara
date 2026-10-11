@@ -127,6 +127,20 @@ export const auditService = {
     return unwrap(data, error, {})
   },
 
+  // ---- Phase 73: the canonical obligation read model ----------------------
+  //
+  // audit_obligation_states() is the ONE derived rollup (assignment count,
+  // completion %, outstanding persons, SLA state, board lifecycle). It is not
+  // executable by a browser: get_audit_obligation_overview() is the scoped,
+  // audited gate in front of it, and get_audit_workspace() uses the same
+  // rollup internally, so every screen reports the same numbers.
+  async obligationOverview(status = null) {
+    const { data, error } = await supabase.rpc('get_audit_obligation_overview', {
+      p_status: status,
+    })
+    return unwrap(data, error, { obligations: [], summary: {} })
+  },
+
   async workspace() {
     const { data, error } = await supabase.rpc('get_audit_workspace')
     return unwrap(data, error, {})
@@ -223,6 +237,20 @@ export const auditService = {
     return unwrap(data, error, {})
   },
 
+  // Issue ONE obligation to SEVERAL responsible persons in a single atomic
+  // call. Re-issuing the same people is a no-op (on conflict do nothing), so a
+  // retry can never duplicate an assignment or reset someone's live progress.
+  async assignObligationUsers(obligationId, userIds, acknowledgementDeadline, submissionDeadline) {
+    const ids = (Array.isArray(userIds) ? userIds : [userIds]).filter(Boolean)
+    const { data, error } = await supabase.rpc('audit_assign_obligation_users', {
+      p_obligation_id: obligationId,
+      p_user_ids: ids,
+      p_acknowledgement_deadline: acknowledgementDeadline || null,
+      p_submission_deadline: submissionDeadline || null,
+    })
+    return unwrap(data, error, {})
+  },
+
   async acknowledgeAssignment(assignmentId) {
     const { data, error } = await supabase.rpc('acknowledge_audit_obligation', {
       p_assignment_id: assignmentId,
@@ -248,6 +276,45 @@ export const auditService = {
       p_correction_fields: fields,
     })
     return unwrap(data, error, {})
+  },
+
+  // ---- Phase 73: live refresh ---------------------------------------------
+  //
+  // Every screen renders SERVER state, so a card moves when the ROWS move -
+  // never from optimistic local state. One channel per component, coalesced to
+  // a single refetch per burst, and removed on unmount so a closed page cannot
+  // keep a subscription open.
+  //
+  // RLS still applies to realtime delivery, so a caller only receives the
+  // changes their policies already permit; this narrows nothing and widens
+  // nothing.
+  subscribeToObligationChanges(onChange, { debounceMs = 250 } = {}) {
+    if (typeof onChange !== 'function') return () => {}
+    let pending = null
+    const fire = () => {
+      pending = null
+      onChange()
+    }
+    const schedule = () => {
+      if (pending !== null) return
+      pending = setTimeout(fire, debounceMs)
+    }
+    let channel = null
+    try {
+      channel = supabase
+        .channel('audit-obligations-live')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'audit_obligations' }, schedule)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'audit_obligation_assignments' }, schedule)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'audit_submissions' }, schedule)
+        .subscribe()
+    } catch {
+      return () => {}
+    }
+    return () => {
+      if (pending !== null) clearTimeout(pending)
+      pending = null
+      try { supabase.removeChannel(channel) } catch { /* already gone */ }
+    }
   },
 }
 

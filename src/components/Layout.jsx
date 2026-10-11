@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth'
 import { useTheme } from '../context/ThemeContext'
 import Logo from './Logo'
 import { canAccessRoute, routeConfig } from '../config/navigation'
+import { navActiveState } from '../config/activeRoute'
 import { filterSectionsByDepartment } from '../config/navigationConfig'
 import NotificationBell from './NotificationBell'
 import PersonAvatar from './messages/PersonAvatar'
@@ -80,10 +81,12 @@ export default function Layout({ children }) {
     navigate('/login')
   }
 
-  const isActive = (path) => {
-    if (path === '/') return location.pathname === '/'
-    return location.pathname === path || location.pathname.startsWith(`${path}/`)
-  }
+  // Every path the sidebar can actually render. The active item is resolved
+  // against the WHOLE set, not against a single path in isolation: that is what
+  // stops /audit and /audit/command-center both looking "current" when only
+  // /audit/command-center is on screen.
+  const navPaths = groups.flatMap((group) => group.items.map((item) => item.path))
+  const navState = (path) => navActiveState(location.pathname, path, navPaths)
 
   // Self identity for the sidebar avatar (real name + profile photo when set).
   useEffect(() => {
@@ -174,10 +177,22 @@ export default function Layout({ children }) {
               <div className="px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider text-white/35">{group.section}</div>
               <div className="space-y-1">
                 {group.items.map((item) => {
-                  const active = isActive(item.path)
+                  const state = navState(item.path)
+                  const active = state === 'active'
+                  // An ancestor of the current page (e.g. "Audit Workspace"
+                  // while the Command Centre is open) is shown as a parent, not
+                  // as a second active page.
+                  const isParent = state === 'parent'
                   const Icon = item.icon
                   return (
-                    <Link key={item.path} to={item.path} onClick={() => setOpen(false)} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${active ? 'bg-[#009944] text-white' : 'text-white/70 hover:bg-white/5 hover:text-white'}`}>
+                    <Link key={item.path} to={item.path} onClick={() => setOpen(false)}
+                      aria-current={active ? 'page' : undefined}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
+                        active
+                          ? 'bg-[#009944] text-white font-medium shadow-sm'
+                          : isParent
+                            ? 'bg-white/5 text-white ring-1 ring-inset ring-white/10'
+                            : 'text-white/70 hover:bg-white/5 hover:text-white'}`}>
                       <Icon className="w-[18px] h-[18px]" /> {item.label}
                     </Link>
                   )

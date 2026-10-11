@@ -13,16 +13,18 @@
 //
 // Every figure below is counted REAL rows by the RPC. Nothing is typed in by
 // hand and no chart is fabricated.
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   SearchCheck, RefreshCw, Plus, AlertTriangle, Gavel, ClipboardCheck,
   CheckCircle2, MessageSquareWarning, Send, Building2, CalendarClock, Zap,
-  Pencil, Pause, Undo2, Trash2, Loader2,
+  Pencil, Pause, Undo2, Trash2, Loader2, Users, UserPlus,
 } from 'lucide-react'
 import { auditService, ASSIGNMENT_STATUS, FINDING_STATUS, OBLIGATION_TYPE, SUBMISSION_STATUS } from '../../services/auditService'
 import { LoadingState, ErrorState, EmptyState } from '../../components/PageStates'
 import { KpiCard, SlaChip, StatusChip, SectionCard, Meter, DataTable } from './auditUi'
 import { useAuth } from '../../hooks/useAuth'
+import { workManagementService } from '../../services/workManagementService'
+import { summariseNames } from '../../domains/audit/obligationBoard'
 
 const card = 'rounded-2xl border border-slate-200 bg-white'
 const inputCls = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
@@ -137,7 +139,11 @@ export default function AuditCommandCenter() {
   const [formError, setFormError] = useState(null)
   const [returning, setReturning] = useState(null) // submission awaiting a correction reason
   const [returnReason, setReturnReason] = useState('')
-  const [registerFilter, setRegisterFilter] = useState('draft')
+  // 'All' on purpose: a newly created obligation is 'active' immediately
+  // (the table default), and defaulting to 'draft' made it invisible here the
+  // moment it was created - which is exactly the Command Centre / Workspace
+  // disconnect Phase 73 removes. The status filter below still narrows.
+  const [registerFilter, setRegisterFilter] = useState('')
   const [sweepResult, setSweepResult] = useState(null)
 
   // Obligation editing / validation (Phase 72c). `editMode` is 'edit' for a
@@ -148,6 +154,18 @@ export default function AuditCommandCenter() {
   const [editError, setEditError] = useState(null)
   // A pending status action awaiting confirmation: { kind, obligation }.
   const [confirm, setConfirm] = useState(null)
+
+  // Phase 73: the SAME canonical obligation rollup the Audit Workspace renders.
+  // Command Centre metrics, this register and the workspace board therefore all
+  // read one derived truth instead of three separate queries.
+  const [overview, setOverview] = useState(null)
+  // Assigning responsible persons: the same Head-of-Audit gate as create.
+  const [assignFor, setAssignFor] = useState(null)
+  const [assignIds, setAssignIds] = useState([])
+  const [assignAck, setAssignAck] = useState('')
+  const [assignSub, setAssignSub] = useState('')
+  const [assignError, setAssignError] = useState(null)
+  const [assignableUsers, setAssignableUsers] = useState([])
 
   // Who may act on an obligation. This is the SAME permission the server
   // enforces on create/update (audit.obligations.manage, granted to the Head
@@ -161,6 +179,11 @@ export default function AuditCommandCenter() {
     try {
       const res = await auditService.commandCenter()
       setData(res)
+      // The obligation rollup. It fails with AUDIT_FORBIDDEN for an account
+      // that can read the Command Centre but is not an audit-workspace member;
+      // that is soft here, exactly like the register below.
+      try { setOverview(await auditService.obligationOverview(null)) }
+      catch { setOverview(null) }
     } catch (e) {
       // The RPC raises AUDIT_FORBIDDEN for anyone without the role. This page
       // is the UI echo of that refusal - never a client-side decision.
@@ -183,6 +206,23 @@ export default function AuditCommandCenter() {
 
   useEffect(() => { load() }, [load])
   useEffect(() => { loadRegister(registerFilter) }, [loadRegister, registerFilter])
+
+  // The audience for an assignment is a real, ACTIVE account - the assignment
+  // row references profiles(id), so a person without an account cannot be made
+  // responsible for anything. Reuses the existing audience query.
+  useEffect(() => {
+    workManagementService.listUsersForAssignment()
+      .then(setAssignableUsers)
+      .catch(() => setAssignableUsers([]))
+  }, [])
+
+  // Live refresh: the counters and the register are re-fetched when the
+  // canonical rows change, never patched optimistically. Scoped to the audit
+  // tables and removed on unmount.
+  useEffect(() => auditService.subscribeToObligationChanges(() => {
+    load()
+    loadRegister(registerFilter)
+  }), [load, loadRegister, registerFilter])
 
   const createObligation = async (e) => {
     e.preventDefault(); setFormError(null)
@@ -210,6 +250,29 @@ export default function AuditCommandCenter() {
       await auditService.reviewSubmission(submissionId, decision, reason, [])
       setReturning(null); setReturnReason(''); load()
     } catch (err) { setActionError(err.message) } finally { setBusy(false) }
+  }
+
+  // ---- Phase 73: assigning responsible persons ---------------------------
+  // One obligation, several responsible people, ONE atomic server call. The
+  // obligation's completion is then derived from those assignments, so a
+  // single submitter can never look like a finished obligation.
+  const openAssign = (o) => {
+    setAssignError(null)
+    setAssignIds([])
+    setAssignAck(o.acknowledgement_deadline || '')
+    setAssignSub(o.effective_deadline || '')
+    setAssignFor(o)
+  }
+
+  const submitAssign = async (e) => {
+    e.preventDefault()
+    if (assignIds.length === 0) { setAssignError('Choose at least one responsible person.'); return }
+    setActionError(null); setAssignError(null); setBusy(true)
+    try {
+      await auditService.assignObligationUsers(assignFor.id, assignIds, assignAck || null, assignSub || null)
+      setAssignFor(null); setAssignIds([])
+      loadRegister(registerFilter); load()
+    } catch (err) { setAssignError(err.message) } finally { setBusy(false) }
   }
 
   // ---- Obligation editing + status actions (Phase 72c) --------------------
@@ -275,6 +338,17 @@ export default function AuditCommandCenter() {
     } catch (err) { setActionError(err.message) } finally { setBusy(false) }
   }
 
+  // The canonical rollup, keyed by obligation id, so this register and the
+  // Audit Workspace board render the SAME records. A hook must run on every
+  // render, so it is declared ABOVE the loading/blocked/error early returns -
+  // below them it is a conditional hook and React throws
+  // "Rendered more hooks than during the previous render".
+  const overviewById = useMemo(() => {
+    const map = new Map()
+    for (const row of (overview?.obligations || [])) map.set(row.id, row)
+    return map
+  }, [overview])
+
   if (loading) return <LoadingState label="Loading the Audit Command Centre..." />
   if (blocked) {
     return (
@@ -297,10 +371,13 @@ export default function AuditCommandCenter() {
   }
   if (error) return <ErrorState title="Unable to load the Audit Command Centre" message={error} />
 
-  const s = data?.summary || {}
+  // The canonical rollup, keyed by obligation id, so this register and the
+  // Audit Workspace board are the same records.
+  const overallCompletion = overview?.summary || {}
   const coverage = data?.acknowledgement_coverage || []
   const departments = data?.department_completion || []
   const horizon = data?.deadline_horizon || []
+  const s = data?.summary || {}
   const reviewQueue = data?.review_queue || []
   const findings = data?.high_risk_findings || []
   const obligations = data?.obligations || []
@@ -344,16 +421,16 @@ export default function AuditCommandCenter() {
 
       <SectionCard
         title="Obligation register (source documents)"
-        description="Imported from the audit department's working documents. Every row keeps its provenance; a draft row must be validated before it drives live notices."
+        description="Imported from the audit department's working documents. Every row keeps its provenance; a draft row must be validated before it drives live notices. Responsible persons, completion and the outstanding list come from the same rollup the Audit Workspace board renders."
         action={(
           <div className="flex items-center gap-2">
             <select value={registerFilter} onChange={(e) => setRegisterFilter(e.target.value)}
               className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700">
+              <option value="">All obligations</option>
               <option value="draft">Awaiting validation</option>
               <option value="active">Active</option>
               <option value="paused">Paused</option>
               <option value="archived">Archived</option>
-              <option value="">All</option>
             </select>
             <button onClick={runSweep} disabled={busy} className={ghostBtn} title="Run the reminder/escalation job now (the same idempotent job pg_cron runs)">
               <Zap className="h-4 w-4" />Run reminder sweep
@@ -378,11 +455,22 @@ export default function AuditCommandCenter() {
             { key: 'remind', label: 'Reminder' },
             { key: 'sla', label: 'SLA state' },
             { key: 'status', label: 'Status' },
+            { key: 'responsible', label: 'Responsible' },
+            { key: 'completion', label: 'Completion' },
+            { key: 'outstanding', label: 'Outstanding' },
             { key: 'act', label: '' },
           ]}
           rowCount={(register?.obligations || []).length}
           empty="No obligations in this view.">
-          {(register?.obligations || []).map((o) => (
+          {(register?.obligations || []).map((o) => {
+            // The canonical rollup row for this obligation. Absent only when the
+            // server refused the overview read - the register itself is intact.
+            const state = overviewById.get(o.id)
+            const total = Number(state?.assigned_count) || 0
+            const done = Number(state?.complete_count) || 0
+            const pct = Number(state?.completion_pct) || 0
+            const outstanding = state?.outstanding_names || []
+            return (
             <tr key={o.id}>
               <td className="px-3 py-2.5 font-mono text-xs text-slate-600">{o.reference}</td>
               <td className="px-3 py-2.5">
@@ -410,7 +498,37 @@ export default function AuditCommandCenter() {
                 <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
                   o.status === 'active' ? 'bg-emerald-100 text-emerald-800'
                     : o.status === 'draft' ? 'bg-amber-100 text-amber-800'
-                      : 'bg-slate-100 text-slate-600'}`}>{o.status}</span>
+                      : o.status === 'closed' ? 'bg-sky-100 text-sky-800'
+                        : 'bg-slate-100 text-slate-600'}`}>{o.status}</span>
+              </td>
+              <td className="px-3 py-2.5">
+                {state ? (
+                  <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                    <Users className="h-3.5 w-3.5 text-slate-400" />
+                    <span className="tabular-nums">{state.assigned_count}</span>
+                    <span className="text-slate-400">{state.assigned_count === 1 ? 'person' : 'persons'}</span>
+                  </div>
+                ) : <span className="text-xs text-slate-400">—</span>}
+              </td>
+              <td className="px-3 py-2.5">
+                {state ? (
+                  <div className="w-24">
+                    <div className="text-[11px] tabular-nums text-slate-600">
+                      {state.all_complete
+                        ? `${Math.round(pct)}% complete`
+                        : total === 0 ? 'No one assigned' : `${done}/${total} · ${Math.round(pct)}%`}
+                    </div>
+                    <Meter pct={pct} tone={pct >= 100 ? 'green' : pct >= 50 ? 'amber' : 'red'} />
+                  </div>
+                ) : <span className="text-xs text-slate-400">—</span>}
+              </td>
+              <td className="px-3 py-2.5 text-xs text-slate-600">
+                {state ? (
+                  total === 0
+                    ? <span className="text-amber-700">Assign responsible persons</span>
+                    : outstanding.length === 0 ? <span className="text-emerald-700">All complete</span>
+                      : summariseNames(outstanding)
+                ) : '—'}
               </td>
               <td className="px-3 py-2.5 text-right">
                 {canManage && (
@@ -428,9 +546,18 @@ export default function AuditCommandCenter() {
                     )}
                     {o.status === 'active' && (
                       <>
+                        <button disabled={busy} onClick={() => openAssign(o)} className={actBtn} title="Assign responsible persons">
+                          <UserPlus className="h-3.5 w-3.5" />Assign people
+                        </button>
                         <button disabled={busy} onClick={() => openEdit(o, 'edit')} className={actBtn}>
                           <Pencil className="h-3.5 w-3.5" />Edit
                         </button>
+                        {state?.all_complete && (
+                          <button disabled={busy} onClick={() => applyStatus(o, 'closed')} className={actBtnGreen}
+                            title="Every responsible person is complete. Closing is the Head of Audit's formal sign-off.">
+                            <CheckCircle2 className="h-3.5 w-3.5" />Close obligation
+                          </button>
+                        )}
                         <button disabled={busy} onClick={() => setConfirm({ kind: 'paused', obligation: o })} className={actBtn}>
                           <Pause className="h-3.5 w-3.5" />Pause
                         </button>
@@ -449,9 +576,51 @@ export default function AuditCommandCenter() {
                 )}
               </td>
             </tr>
-          ))}
+            )
+          })}
         </DataTable>
       </SectionCard>
+
+      {overallCompletion.obligations > 0 && (
+        <SectionCard
+          title="Obligation completion"
+          description="The same rollup the Audit Workspace board renders. An obligation is complete only when EVERY responsible person has satisfied the configured completion criteria.">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <KpiCard label="Obligations" value={overallCompletion.obligations ?? 0} icon={ClipboardCheck} />
+            <KpiCard label="Responsible persons" value={overallCompletion.assigned ?? 0} icon={Users} />
+            <KpiCard label="Satisfied" value={overallCompletion.satisfied ?? 0} tone="green" icon={CheckCircle2} />
+            <KpiCard label="Overall completion"
+              value={`${overallCompletion.completion_pct ?? 0}%`}
+              tone={(overallCompletion.completion_pct ?? 0) >= 80 ? 'green' : (overallCompletion.completion_pct ?? 0) >= 50 ? 'amber' : 'red'}
+              icon={SearchCheck} />
+          </div>
+          <div className="mt-4 space-y-2">
+            {(overview?.obligations || [])
+              .filter((o) => !o.all_complete && o.assigned_count > 0)
+              .slice(0, 8)
+              .map((o) => (
+                <div key={o.id} className="rounded-xl border border-slate-200 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <span className="font-medium text-slate-800">
+                      <span className="font-mono text-xs text-slate-400">{o.reference}</span> {o.title}
+                    </span>
+                    <span className="tabular-nums text-xs text-slate-500">
+                      {o.complete_count}/{o.assigned_count} · {Math.round(Number(o.completion_pct) || 0)}%
+                    </span>
+                  </div>
+                  <div className="mt-1"><Meter pct={o.completion_pct} tone={(Number(o.completion_pct) || 0) >= 50 ? 'amber' : 'red'} /></div>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Awaiting: {summariseNames(o.outstanding_names)}
+                    {o.lifecycle === 'needs_clarification' ? ' · correction outstanding' : ''}
+                  </p>
+                </div>
+              ))}
+            {(overview?.obligations || []).filter((o) => !o.all_complete && o.assigned_count > 0).length === 0 && (
+              <p className="text-sm text-slate-500">Every issued obligation is fully completed by its responsible persons.</p>
+            )}
+          </div>
+        </SectionCard>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <SectionCard
@@ -720,6 +889,67 @@ export default function AuditCommandCenter() {
           </div>
         </div>
       )}
+      {/* ---- Assign responsible persons (Phase 73) --------------------------- */}
+      {assignFor && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4">
+          <div className={`${card} my-8 w-full max-w-2xl p-5`}>
+            <h2 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
+              <UserPlus className="h-5 w-5 text-[#009944]" />Assign responsible persons
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              <span className="font-medium text-slate-700">{assignFor.reference}</span> — {assignFor.title}
+            </p>
+            <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              Completion is derived from these assignments, not from the number of submissions: an obligation is only
+              complete when EVERY responsible person has satisfied the configured completion criteria. One person
+              submitting on their own never closes it. Only accounts with an active profile can be made responsible.
+            </p>
+            <form onSubmit={submitAssign} className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label className={labelCls}>Responsible persons *</label>
+                <div className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-slate-300 p-2">
+                  {assignableUsers.length === 0 && (
+                    <p className="px-2 py-3 text-xs text-slate-500">No active accounts are available to assign.</p>
+                  )}
+                  {assignableUsers.map((u) => (
+                    <label key={u.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-slate-50">
+                      <input type="checkbox" className="rounded border-slate-300"
+                        checked={assignIds.includes(u.id)}
+                        onChange={(e) => setAssignIds((cur) => (
+                          e.target.checked ? [...cur, u.id] : cur.filter((x) => x !== u.id)
+                        ))} />
+                      <span className="text-slate-800">{u.full_name || u.email}</span>
+                      <span className="text-xs text-slate-400">{u.role}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {assignIds.length} selected · re-assigning someone who is already responsible changes nothing.
+                </p>
+              </div>
+              <div>
+                <label className={labelCls}>Acknowledgement deadline</label>
+                <input type="date" className={inputCls} value={assignAck}
+                  onChange={(e) => setAssignAck(e.target.value)} />
+              </div>
+              <div>
+                <label className={labelCls}>Submission deadline</label>
+                <input type="date" className={inputCls} value={assignSub}
+                  onChange={(e) => setAssignSub(e.target.value)} />
+              </div>
+              {assignError && <p className="sm:col-span-2 text-sm text-red-700">{assignError}</p>}
+              <div className="flex justify-end gap-2 sm:col-span-2">
+                <button type="button" onClick={() => setAssignFor(null)} className={ghostBtn}>Cancel</button>
+                <button type="submit" disabled={busy} className={primaryBtn}>
+                  {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Issue to {assignIds.length || 0} person{assignIds.length === 1 ? '' : 's'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* ---- Obligation edit / validate-and-activate modal (Phase 72c) ------- */}
       {editForm.id && (
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4">

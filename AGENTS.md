@@ -1219,3 +1219,150 @@ consumer below degrades gracefully until it exists.
   `test:bankone-parity`, `test:bankone-import`, `test:bankone-e2e`,
   `test:director-intelligence`, `test:mpr-scoring`, `test:mpr-export`,
   `test:rules-builder`, `npm run build` — all green.
+
+## Phase 73 — Audit Command Centre ↔ Audit Workspace sync, live Kanban board, sidebar fix
+- SQL migration: `supabase/migrations/20261111000004_audit_workspace_canonical_obligations.sql`
+  — run in Supabase SQL Editor AFTER `20261111000003`. Idempotent/additive,
+  `begin; … commit;`, nothing dropped, no audit row rewritten, no new status value.
+- **Root cause of the desync**: three screens read the same three tables with
+  three different JOINs.
+  `get_audit_command_center()` returned one row per **assignment**;
+  `get_audit_obligation_register()` returned one row per **obligation** but
+  defaulted its filter to `draft`, so an obligation created by the usual path
+  (table default `active`) was invisible in the register the moment it was made;
+  `get_audit_workspace()` built its `schedule` with an INNER join over
+  assignments hard-filtered to `o.status = 'active'`, so a **newly created
+  obligation with no responsible person yet appeared in no workspace view at
+  all**, and the board rendered one card **per assignment** with no completion
+  percentage and no notion of "who is still outstanding". There was also no
+  Submissions read in the workspace, and no obligation-level completion anywhere.
+- **One canonical read model** — `public.audit_obligation_states(p_status)`
+  (`setof jsonb`, SECURITY DEFINER, EXECUTE revoked from public/authenticated):
+  one row per non-archived obligation with
+  `assigned_count / complete_count / progress_count / completion_pct /
+  progress_pct / outstanding_names / assignees / sla_state / lifecycle`.
+  - COMPLETION RULE (computed once, in SQL — never in the browser):
+    `requires_submission` → a person is satisfied when the **assignment** is
+    `accepted`/`closed`; otherwise acknowledgement (`acknowledged_at`) is the
+    criterion. `submitted / under_review / resubmitted / returned_for_correction
+    / rejected` are NOT satisfied. The count is over **assignments**, so
+    repeated submissions by one person can never inflate it, and an obligation
+    with zero responsible persons is 0%, never 100%.
+  - LIFECYCLE (derived labels for the board columns; canonical statuses stay on
+    `audit_obligations.status` / `audit_obligation_assignments.status`):
+    `not_started` → Pending, `needs_clarification` → Needs clarification (a
+    submission was returned/rejected and is still open), `blocked` → Cannot
+    proceed (paused), `in_progress` → In progress, `awaiting_approval` →
+    Awaiting final review (every responsible person has responded, nothing is
+    accepted yet), `completed` → Completed (every responsible person satisfied).
+  - An obligation is **never auto-closed**: `status='closed'` stays the Head of
+    Audit's explicit, audited sign-off.
+- **Gates**: `public.get_audit_obligation_overview(p_status)` is the only
+  browser entry point to the rollup (command-centre reader / workspace member →
+  every obligation; department head → own department; anyone else → AUDIT_FORBIDDEN).
+  `public.get_audit_workspace()` is re-issued on the same rollup and now returns
+  `obligations`, `completion`, `schedule`, `submissions`, `my_assignments`,
+  `review_queue`, `outstanding_tasks`. The schedule is a jsonb FILTER over the
+  same rollup — derived, never inserted — so a refresh can never duplicate a
+  schedule entry. Recurrence is not expanded into invented occurrences: the
+  stored `recurrence_rule` text plus `next_occurrence` are rendered as written
+  (unresolved rule, reported below).
+- **Bulk assignment**: `public.audit_assign_obligation_users(p_obligation_id,
+  p_user_ids uuid[], p_acknowledgement_deadline, p_submission_deadline)` — same
+  Head-of-Audit gate as `issue_audit_obligation`, department resolved from the
+  assignee's OWN profile, `on conflict (obligation_id, assigned_user_id) do
+  nothing` so a retry can never duplicate an assignment or reset live progress,
+  one `AUDIT_OBLIGATION_ISSUED` audit row per new assignment. Assigning three
+  responsible persons is now ONE atomic call.
+- **Frontend**
+  - `src/domains/audit/obligationBoard.js` (new, pure ESM, node-testable):
+    BOARD_COLUMNS, LIFECYCLE, RISK_TONE, `completionSummary`,
+    `summariseNames` ("2 of 3 completed · 67% · Awaiting: Jane Doe +1 more"),
+    `initialsOf`, `recurrenceLabel`, `isBoardCard`, `hasSchedule`.
+  - `src/pages/Audit.jsx` — tabs **Obligations / Submissions / Shared audit
+    schedule / Board / Review queue** (+ the two legacy registers), each read
+    from the canonical rollup. Board = 6 colour-headed, count-bearing columns,
+    horizontally scrollable, white cards on a restrained background,
+    reference / short title / type / department / responsible-person avatars /
+    due date + countdown / risk badge / completion meter / "done of total" /
+    outstanding names / lifecycle / overdue badge. Clicking a card opens a
+    detail drawer with the full record, every assignee's status and the
+    obligation's submission history. **No drag-and-drop**: a card's column IS
+    its derived lifecycle, so it cannot be moved past the server's rules.
+  - Live updates: `auditService.subscribeToObligationChanges()` subscribes to
+    `postgres_changes` on `audit_obligations`, `audit_obligation_assignments`
+    and `audit_submissions`, coalesces bursts to one refetch and returns an
+    unsubscribe that removes the channel (called from a `useEffect`). A window
+    `focus` refetch covers anything Realtime did not deliver. Everything is
+    server-rendered — no optimistic local state — so a refresh is always correct.
+  - `src/pages/audit/AuditCommandCenter.jsx` — register now defaults to **All
+    obligations** (so a freshly created active obligation is discoverable),
+    gains Responsible persons / Completion / Outstanding columns from the same
+    rollup, an "Obligation completion" panel, an **Assign responsible persons**
+    modal, and a **Close obligation** action (re-uses the existing
+    `status='closed'` value) that only appears when every responsible person is
+    complete. Same realtime refresh.
+- **Sidebar fix (root cause)**: `src/components/Layout.jsx` marked an item
+  active with a PREFIX test — `location.pathname.startsWith(path + '/')` — and
+  `/audit` is a prefix of `/audit/command-center`, so "Audit Workspace" and
+  "Audit Command Centre" were both painted with the same green active-page
+  highlight. `/audit` + `/audit/command-center` + `/audit/department` is the
+  only prefix family in the whole navigation (verified against all 57 nav
+  paths). Fix: new pure module `src/config/activeRoute.js`
+  (`pathMatchesRoute` / `resolveActiveNav` / `navActiveState`) resolves the
+  active item against the WHOLE visible path set — the LONGEST matching prefix
+  is the active PAGE, a shorter ancestor gets a distinct, quieter "parent"
+  treatment (white/5 + inset ring, no green), and exactly one item is ever
+  green. Pure pathname matching, so direct URL, in-app nav and browser
+  back/forward all agree.
+- Test: `npm run test:audit-workspace-sync` —
+  `tests/auditWorkspaceKanbanSync.test.mjs` (45 checks: the real `activeRoute`
+  module incl. the old-predix-failure reproduction and a back/forward sequence;
+  a faithful JS mirror of the SQL lifecycle asserting acceptance Examples A–D,
+  the returned-for-correction case, the zero-assignment case and the
+  multiple-submissions-by-one-person case; board-model unit tests; migration
+  content + a real SQL lexer that checks dollar-quoting and parenthesis balance;
+  service/page wiring; and a guard that no new obligation status value is
+  invented). Regression: `npm run test:smart-navigation` (29),
+  `tests/auditObligationImport.test.mjs` (8), `npx playwright test
+  e2e/smoke.spec.js` (5 passed), `npm run build` — all green.
+- **Manual action**: run `20261111000004_…sql` in the Supabase SQL Editor
+  (hosted). Until it is applied the workspace degrades gracefully (empty
+  Obligations/Submissions/Board, "—" in the register completion columns) rather
+  than erroring.
+- Not verified here (no Postgres/Docker daemon reachable in this environment) —
+  **run the migration in the SQL Editor before judging behaviour**; the suite
+  above is content + logic, not a live-database run.
+- Two fixes applied after the first apply attempt (both now guarded by tests):
+  - SQL `42601: syntax error at or near "from"` (line 225) — the closing `)` of
+    `jsonb_build_object(` in `audit_obligation_states` was missing, so the select
+    list ran straight into `from`. The CTE `one` was also renamed to `canonical`
+    (clearer, and `one` is a parser-hostile name). The test's paren checker was
+    itself broken (its dollar-quote scanner never closed, so it always returned
+    0) — it now extracts each `create or replace function … $$;` block and checks
+    the signature and body separately, plus a self-test proving the detector
+    flags an unterminated `jsonb_build_object(`.
+  - `Rendered more hooks than during the previous render` — `overviewById`'s
+    `useMemo` sat BELOW `if (loading) return …` in `AuditCommandCenter.jsx`, so
+    the hook count changed once the payload arrived. All hooks now precede every
+    early return; `Audit.jsx` renders its loading state inline instead.
+    A new test scans both pages for any hook after the first early return.
+  - `Can't find variable: s` then `Cannot access 'obligations' before initialization`
+    — two more edit-time slips in the same refactor: the Phase 73 move dropped
+    `const s = data?.summary || {}` (the page still renders `s.active_obligations`
+    etc.), and the two register views were inserted ABOVE
+    `const obligations = workspace?.obligations || []`, so their `useMemo` read a
+    binding inside its temporal dead zone. Vite's build cannot see either — both
+    are runtime ReferenceErrors. Both are now guarded: a check that every derived
+    summary is declared before first use, and a `@babel/traverse` pass that fails
+    on any reference textually ahead of its own `const`/`let` declaration (proven
+    non-vacuous on a synthetic sample).
+- **Regulatory monitoring / Audit findings tabs were empty** because they read
+  `regulatory_items` / `audit_findings` — a separate Phase 71 table nobody
+  populated — while the real register lives in `audit_obligations`. Both tabs now
+  render the canonical obligations that carry the meaning: a `regulatory_*`
+  obligation is a regulatory return/circular, an `audit_finding` obligation is an
+  audit finding (`isRegulatoryObligation` / `isFindingObligation` in
+  `src/domains/audit/obligationBoard.js`, so a future `regulatory_*` type is
+  classified automatically). The legacy tables remain as the manual-entry path and
+  render below when populated, so nothing is lost.
