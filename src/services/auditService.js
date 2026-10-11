@@ -164,6 +164,55 @@ export const auditService = {
     return unwrap(data, error, {})
   },
 
+  // ---- Phase 72c: obligation edits + status actions ----------------------
+  //
+  // update_audit_obligation is the single write path for editing an obligation
+  // and (optionally) moving its status in the SAME call, so the Command
+  // Centre's Activate saves the Head of Audit's edits and activates as one
+  // decision rather than two. Every field is optional: a null means "leave
+  // this alone", which is what lets Pause / Send back / Delete send nothing
+  // but p_status.
+  //
+  // The status values below are the ones the obligations table ALREADY carries
+  // ('draft','active','paused','archived','closed') - none is invented here.
+  // "Send back" intentionally reuses 'draft', which the register already
+  // displays as "Awaiting validation", and "Delete" reuses 'archived' rather
+  // than a hard delete that would cascade away the assignments and
+  // submissions.
+  async updateObligation(obligationId, fields = {}) {
+    const f = fields || {}
+    const { data, error } = await supabase.rpc('update_audit_obligation', {
+      p_obligation_id: obligationId,
+      p_reference: f.reference ?? null,
+      p_title: f.title ?? null,
+      p_description: f.description ?? null,
+      p_instructions: f.instructions ?? null,
+      p_obligation_type: f.obligationType ?? null,
+      p_department: f.department ?? null,
+      p_accountable_owner_user_id: f.accountableOwnerId ?? null,
+      p_reporting_period: f.reportingPeriod ?? null,
+      p_source_document: f.sourceDocument ?? null,
+      p_source_reference: f.sourceReference ?? null,
+      p_issue_date: f.issueDate ?? null,
+      p_acknowledgement_deadline: f.acknowledgementDeadline ?? null,
+      p_submission_deadline: f.submissionDeadline ?? null,
+      p_review_deadline: f.reviewDeadline ?? null,
+      p_priority: f.priority ?? null,
+      p_risk_rating: f.riskRating ?? null,
+      p_requires_acknowledgement: f.requiresAcknowledgement ?? null,
+      p_requires_submission: f.requiresSubmission ?? null,
+      p_required_documents: f.requiredDocuments ?? null,
+      p_recurrence_rule: f.recurrenceRule ?? null,
+      p_next_occurrence: f.nextOccurrence ?? null,
+      p_reminder_lead_days: f.reminderLeadDays ?? null,
+      p_reminder_interval_days: f.reminderIntervalDays ?? null,
+      p_escalation_role: f.escalationRole ?? null,
+      p_escalation_delay_days: f.escalationDelayDays ?? null,
+      p_status: f.status ?? null,
+    })
+    return unwrap(data, error, {})
+  },
+
   async issueObligation(obligationId, userId, acknowledgementDeadline, submissionDeadline) {
     const { data, error } = await supabase.rpc('issue_audit_obligation', {
       p_obligation_id: obligationId,

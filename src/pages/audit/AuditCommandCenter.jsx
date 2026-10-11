@@ -17,10 +17,12 @@ import React, { useCallback, useEffect, useState } from 'react'
 import {
   SearchCheck, RefreshCw, Plus, AlertTriangle, Gavel, ClipboardCheck,
   CheckCircle2, MessageSquareWarning, Send, Building2, CalendarClock, Zap,
+  Pencil, Pause, Undo2, Trash2, Loader2,
 } from 'lucide-react'
 import { auditService, ASSIGNMENT_STATUS, FINDING_STATUS, OBLIGATION_TYPE, SUBMISSION_STATUS } from '../../services/auditService'
 import { LoadingState, ErrorState, EmptyState } from '../../components/PageStates'
 import { KpiCard, SlaChip, StatusChip, SectionCard, Meter, DataTable } from './auditUi'
+import { useAuth } from '../../hooks/useAuth'
 
 const card = 'rounded-2xl border border-slate-200 bg-white'
 const inputCls = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
@@ -37,7 +39,92 @@ const BLANK_OBLIGATION = {
 
 const RISK_TONE = { critical: 'red', high: 'red', medium: 'amber', low: 'slate' }
 
+// ---------------------------------------------------------------------------
+// The obligation action vocabulary.
+// ---------------------------------------------------------------------------
+// Every status below is a value the obligations table ALREADY carries
+// ('draft','active','paused','archived','closed'); none is invented here:
+//   * "Send back" reuses 'draft', which is exactly the "Awaiting validation"
+//     state the register already filters and displays.
+//   * "Delete" reuses 'archived' (soft delete). There is no 'deleted' status
+//     and no hard-delete path, because ON DELETE CASCADE would take the
+//     obligation's assignments and submissions with it.
+const OBLIGATION_ACTIONS = {
+  paused: {
+    key: 'paused',
+    label: 'Pause',
+    title: 'Pause this obligation?',
+    body: 'A paused obligation stops the reminder sweep and drops out of the active register. Nothing is lost — you can reactivate it at any time.',
+    confirmLabel: 'Pause obligation',
+  },
+  draft: {
+    key: 'draft',
+    label: 'Send back',
+    title: 'Send this obligation back for validation?',
+    body: 'The obligation returns to "Awaiting validation" so its statutory deadline can be re-checked by a Head of Audit before it goes live again.',
+    confirmLabel: 'Send back',
+  },
+  archived: {
+    key: 'archived',
+    label: 'Delete',
+    title: 'Delete this obligation?',
+    body: 'The obligation is archived and hidden from the register. Its issued assignments and submissions are kept — this is a soft delete, not a hard one.',
+    confirmLabel: 'Archive obligation',
+  },
+}
+
+// Small action-button styling, shared by the register rows and the modal.
+const actBtn = 'inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50'
+const actBtnGreen = 'inline-flex items-center gap-1 rounded border border-emerald-300 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50'
+const actBtnRed = 'inline-flex items-center gap-1 rounded border border-red-300 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50'
+
+// The editable shape of one obligation, filled from a register row.
+const BLANK_EDIT = {
+  id: null,
+  reference: '', title: '', description: '', instructions: '',
+  obligationType: 'regulatory_return', department: 'audit',
+  reportingPeriod: '', sourceDocument: '', sourceReference: '',
+  issueDate: '', acknowledgementDeadline: '', submissionDeadline: '',
+  reviewDeadline: '', priority: 'medium', riskRating: 'medium',
+  recurrenceRule: '', nextOccurrence: '',
+  reminderLeadDays: 7, reminderIntervalDays: 3,
+  escalationRole: '', escalationDelayDays: 3,
+}
+
+// A register row -> the editable form. `effective_deadline` is the server's
+// coalesce(submission_deadline, next_occurrence): when a row is recurring,
+// next_occurrence is what the register is showing, so the submission-deadline
+// box is deliberately left empty and the recurrence drives the date instead.
+function editFormFromRow(o) {
+  const isRecurringDriven = Boolean(o.next_occurrence) && o.next_occurrence === o.effective_deadline
+  return {
+    id: o.id,
+    reference: o.reference || '',
+    title: o.title || '',
+    description: o.description || '',
+    instructions: o.instructions || '',
+    obligationType: o.obligation_type || 'regulatory_return',
+    department: o.department || 'audit',
+    reportingPeriod: o.reporting_period || '',
+    sourceDocument: o.source_document || '',
+    sourceReference: o.source_reference || '',
+    issueDate: o.issue_date || '',
+    acknowledgementDeadline: o.acknowledgement_deadline || '',
+    submissionDeadline: isRecurringDriven ? '' : (o.effective_deadline || ''),
+    reviewDeadline: o.review_deadline || '',
+    priority: o.priority || 'medium',
+    riskRating: o.risk_rating || 'medium',
+    recurrenceRule: o.recurrence_rule || '',
+    nextOccurrence: o.next_occurrence || '',
+    reminderLeadDays: o.reminder_lead_days ?? 7,
+    reminderIntervalDays: o.reminder_interval_days ?? 3,
+    escalationRole: o.escalation_role || '',
+    escalationDelayDays: o.escalation_delay_days ?? 3,
+  }
+}
+
 export default function AuditCommandCenter() {
+  const { hasPermission, profile } = useAuth()
   const [data, setData] = useState(null)
   const [register, setRegister] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -52,6 +139,22 @@ export default function AuditCommandCenter() {
   const [returnReason, setReturnReason] = useState('')
   const [registerFilter, setRegisterFilter] = useState('draft')
   const [sweepResult, setSweepResult] = useState(null)
+
+  // Obligation editing / validation (Phase 72c). `editMode` is 'edit' for a
+  // plain field edit and 'validate' for the pre-activation review, which is
+  // the same form with an "Activate" footer instead of "Save changes".
+  const [editMode, setEditMode] = useState('edit')
+  const [editForm, setEditForm] = useState(BLANK_EDIT)
+  const [editError, setEditError] = useState(null)
+  // A pending status action awaiting confirmation: { kind, obligation }.
+  const [confirm, setConfirm] = useState(null)
+
+  // Who may act on an obligation. This is the SAME permission the server
+  // enforces on create/update (audit.obligations.manage, granted to the Head
+  // of Audit and the break-glass admins) - it widens nothing, it only decides
+  // whether the buttons are drawn for someone who could not use them anyway.
+  const canManage = hasPermission('audit.obligations.manage')
+    || ['super_admin', 'admin', 'head_of_audit'].includes(profile?.role)
 
   const load = useCallback(async () => {
     setLoading(true); setError(null); setBlocked(false)
@@ -117,6 +220,59 @@ export default function AuditCommandCenter() {
       await auditService.activateObligation(obligationId, status)
       loadRegister(registerFilter); load()
     } catch (err) { setActionError(err.message) } finally { setBusy(false) }
+  }
+
+  // ---- Obligation editing + status actions (Phase 72c) --------------------
+  const openEdit = (o, mode = 'edit') => {
+    setEditMode(mode)
+    setEditError(null)
+    setEditForm(editFormFromRow(o))
+  }
+
+  // The one write path for both saving an edit and activating from the review
+  // modal. Passing `status: 'active'` saves the field edits AND activates in a
+  // single call, so validation is one decision rather than two.
+  const saveObligation = async (status = null) => {
+    setEditError(null)
+    if (!editForm.reference.trim() || !editForm.title.trim()) {
+      setEditError('A reference and a title are required.'); return
+    }
+    setActionError(null); setBusy(true)
+    try {
+      await auditService.updateObligation(editForm.id, {
+        ...editForm,
+        reference: editForm.reference.trim(),
+        title: editForm.title.trim(),
+        // An emptied date box must clear the column, not be ignored.
+        submissionDeadline: editForm.submissionDeadline || null,
+        nextOccurrence: editForm.nextOccurrence || null,
+        acknowledgementDeadline: editForm.acknowledgementDeadline || null,
+        reviewDeadline: editForm.reviewDeadline || null,
+        issueDate: editForm.issueDate || null,
+        recurrenceRule: editForm.recurrenceRule || null,
+        escalationRole: editForm.escalationRole || null,
+        status,
+      })
+      setEditForm(BLANK_EDIT)
+      loadRegister(registerFilter); load()
+      return true
+    } catch (err) {
+      setEditError(err.message)
+      return false
+    } finally { setBusy(false) }
+  }
+
+  // Pause / Send back / Delete: a status-only change, no fields touched.
+  const applyStatus = async (obligation, status) => {
+    setActionError(null); setBusy(true)
+    try {
+      await auditService.updateObligation(obligation.id, { status })
+      setConfirm(null)
+      loadRegister(registerFilter); load()
+    } catch (err) {
+      setActionError(err.message)
+      setConfirm(null)
+    } finally { setBusy(false) }
   }
 
   // The reminder sweep normally runs on pg_cron; this is the manual trigger
@@ -267,11 +423,34 @@ export default function AuditCommandCenter() {
                       : 'bg-slate-100 text-slate-600'}`}>{o.status}</span>
               </td>
               <td className="px-3 py-2.5 text-right">
-                {o.status === 'draft' && (
-                  <button disabled={busy} onClick={() => activate(o.id, 'active')}
-                    className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50">
-                    Validate &amp; activate
-                  </button>
+                {canManage && (
+                  <div className="flex flex-wrap justify-end gap-1.5">
+                    {o.status === 'draft' && (
+                      <button disabled={busy} onClick={() => activate(o.id, 'active')}
+                        className={actBtnGreen}>
+                        <ClipboardCheck className="h-3.5 w-3.5" />Validate &amp; activate
+                      </button>
+                    )}
+                    {o.status === 'active' && (
+                      <>
+                        <button disabled={busy} onClick={() => openEdit(o, 'edit')} className={actBtn}>
+                          <Pencil className="h-3.5 w-3.5" />Edit
+                        </button>
+                        <button disabled={busy} onClick={() => setConfirm({ kind: 'paused', obligation: o })} className={actBtn}>
+                          <Pause className="h-3.5 w-3.5" />Pause
+                        </button>
+                        <button disabled={busy} onClick={() => setConfirm({ kind: 'draft', obligation: o })} className={actBtn}>
+                          <Undo2 className="h-3.5 w-3.5" />Send back
+                        </button>
+                        <button disabled={busy} onClick={() => setConfirm({ kind: 'archived', obligation: o })} className={actBtnRed}>
+                          <Trash2 className="h-3.5 w-3.5" />Delete
+                        </button>
+                      </>
+                    )}
+                    {!['draft', 'active'].includes(o.status) && (
+                      <span className="text-xs text-slate-400">No actions</span>
+                    )}
+                  </div>
                 )}
               </td>
             </tr>
@@ -546,6 +725,201 @@ export default function AuditCommandCenter() {
           </div>
         </div>
       )}
+      {/* ---- Obligation edit / validate-and-activate modal (Phase 72c) ------- */}
+      {editForm.id && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4">
+          <div className={`${card} my-8 w-full max-w-3xl p-5`}>
+            {(() => {
+              // The register row behind the form, for the read-only provenance
+              // and the server-computed SLA state (which is never editable).
+              const row = (register?.obligations || []).find((o) => o.id === editForm.id) || {}
+              return (
+                <>
+                  <h2 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
+                    <Pencil className="h-5 w-5 text-[#009944]" />
+                    Edit obligation
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Edit the obligation. Deadlines and reminder windows are the live legal position; the imported source wording below is preserved unchanged.
+                  </p>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    <span className="font-medium text-slate-700">{row.reference}</span>
+                    <span className="text-slate-300">·</span>
+                    <span>{OBLIGATION_TYPE[row.obligation_type] || row.obligation_type}</span>
+                    <span className="text-slate-300">·</span>
+                    <span>{row.department}</span>
+                    <span className="ml-auto flex items-center gap-2">
+                      <span className="text-slate-400">Owner (source)</span>
+                      <span className="font-medium text-slate-700">{row.source_owner_label || '—'}</span>
+                      <span className="text-slate-300">·</span>
+                      <SlaChip slaState={row.sla_state} />
+                    </span>
+                  </div>
+
+                  <form onSubmit={(e) => { e.preventDefault(); saveObligation(null) }}
+                    className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className={labelCls}>Reference</label>
+                      <input className={inputCls} value={editForm.reference}
+                        onChange={(e) => setEditForm({ ...editForm, reference: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Title</label>
+                      <input className={inputCls} value={editForm.title}
+                        onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Type</label>
+                      <select className={inputCls} value={editForm.obligationType}
+                        onChange={(e) => setEditForm({ ...editForm, obligationType: e.target.value })}>
+                        {Object.entries(OBLIGATION_TYPE).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Department</label>
+                      <input className={inputCls} value={editForm.department}
+                        onChange={(e) => setEditForm({ ...editForm, department: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Priority</label>
+                      <select className={inputCls} value={editForm.priority}
+                        onChange={(e) => setEditForm({ ...editForm, priority: e.target.value })}>
+                        {['low', 'medium', 'high', 'critical'].map((p) => <option key={p} value={p}>{p}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Risk rating</label>
+                      <select className={inputCls} value={editForm.riskRating}
+                        onChange={(e) => setEditForm({ ...editForm, riskRating: e.target.value })}>
+                        {['low', 'medium', 'high', 'critical'].map((r) => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Reporting period</label>
+                      <input className={inputCls} value={editForm.reportingPeriod}
+                        onChange={(e) => setEditForm({ ...editForm, reportingPeriod: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Recurrence rule</label>
+                      <input className={inputCls} value={editForm.recurrenceRule} placeholder="monthly:5"
+                        onChange={(e) => setEditForm({ ...editForm, recurrenceRule: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Next occurrence</label>
+                      <input type="date" className={inputCls} value={editForm.nextOccurrence}
+                        onChange={(e) => setEditForm({ ...editForm, nextOccurrence: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Submission deadline</label>
+                      <input type="date" className={inputCls} value={editForm.submissionDeadline}
+                        onChange={(e) => setEditForm({ ...editForm, submissionDeadline: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Acknowledgement deadline</label>
+                      <input type="date" className={inputCls} value={editForm.acknowledgementDeadline}
+                        onChange={(e) => setEditForm({ ...editForm, acknowledgementDeadline: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Review deadline</label>
+                      <input type="date" className={inputCls} value={editForm.reviewDeadline}
+                        onChange={(e) => setEditForm({ ...editForm, reviewDeadline: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Issue date</label>
+                      <input type="date" className={inputCls} value={editForm.issueDate}
+                        onChange={(e) => setEditForm({ ...editForm, issueDate: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Source document</label>
+                      <input className={inputCls} value={editForm.sourceDocument}
+                        onChange={(e) => setEditForm({ ...editForm, sourceDocument: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Source reference</label>
+                      <input className={inputCls} value={editForm.sourceReference} placeholder="Master Board S/N 1"
+                        onChange={(e) => setEditForm({ ...editForm, sourceReference: e.target.value })} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className={labelCls}>Obligation text</label>
+                      <textarea className={inputCls} rows={2} value={editForm.description}
+                        onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className={labelCls}>Instructions to recipients</label>
+                      <textarea className={inputCls} rows={2} value={editForm.instructions}
+                        onChange={(e) => setEditForm({ ...editForm, instructions: e.target.value })} />
+                    </div>
+
+                    <div className="sm:col-span-2 border-t border-slate-100 pt-3">
+                      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        Reminder &amp; escalation
+                      </h3>
+                      <div className="grid gap-3 sm:grid-cols-4">
+                        <div>
+                          <label className={labelCls}>Lead days</label>
+                          <input type="number" min="0" max="365" className={inputCls} value={editForm.reminderLeadDays}
+                            onChange={(e) => setEditForm({ ...editForm, reminderLeadDays: Number(e.target.value) })} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Every days</label>
+                          <input type="number" min="1" max="365" className={inputCls} value={editForm.reminderIntervalDays}
+                            onChange={(e) => setEditForm({ ...editForm, reminderIntervalDays: Number(e.target.value) })} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Escalation role</label>
+                          <input className={inputCls} value={editForm.escalationRole}
+                            onChange={(e) => setEditForm({ ...editForm, escalationRole: e.target.value })} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Escalate after days</label>
+                          <input type="number" min="0" max="365" className={inputCls} value={editForm.escalationDelayDays}
+                            onChange={(e) => setEditForm({ ...editForm, escalationDelayDays: Number(e.target.value) })} />
+                        </div>
+                      </div>
+                    </div>
+
+                    {editError && <p className="sm:col-span-2 text-sm text-red-700">{editError}</p>}
+                    <div className="flex justify-end gap-2 sm:col-span-2">
+                      <button type="button" onClick={() => setEditForm(BLANK_EDIT)} className={ghostBtn}>Cancel</button>
+                      <button type="submit" disabled={busy} className={primaryBtn}>
+                        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                        Save changes
+                      </button>
+                    </div>
+                  </form>
+                </>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* ---- Status-action confirmation (Pause / Send back / Delete) --------- */}
+      {confirm && (() => {
+        const a = OBLIGATION_ACTIONS[confirm.kind]
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+            <div className={`${card} w-full max-w-md p-5`}>
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
+                <AlertTriangle className="h-5 w-5 text-amber-500" />{a.title}
+              </h2>
+              <p className="mt-2 text-sm text-slate-600">
+                <span className="font-medium text-slate-800">{confirm.obligation.reference}</span>
+                {' — '}{confirm.obligation.title}
+              </p>
+              <p className="mt-1 text-sm text-slate-500">{a.body}</p>
+              <div className="mt-4 flex justify-end gap-2">
+                <button onClick={() => setConfirm(null)} className={ghostBtn}>Cancel</button>
+                <button disabled={busy} onClick={() => applyStatus(confirm.obligation, a.key)}
+                  className={confirm.kind === 'archived' ? actBtnRed : primaryBtn}>
+                  {busy && <Loader2 className="h-4 w-4 animate-spin" />}{a.confirmLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
