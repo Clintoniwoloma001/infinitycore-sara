@@ -212,16 +212,6 @@ export default function AuditCommandCenter() {
     } catch (err) { setActionError(err.message) } finally { setBusy(false) }
   }
 
-  // Activating an imported obligation is the validation gate: the statutory
-  // deadline has been confirmed as the current position by a Head of Audit.
-  const activate = async (obligationId, status) => {
-    setActionError(null); setBusy(true)
-    try {
-      await auditService.activateObligation(obligationId, status)
-      loadRegister(registerFilter); load()
-    } catch (err) { setActionError(err.message) } finally { setBusy(false) }
-  }
-
   // ---- Obligation editing + status actions (Phase 72c) --------------------
   const openEdit = (o, mode = 'edit') => {
     setEditMode(mode)
@@ -426,10 +416,15 @@ export default function AuditCommandCenter() {
                 {canManage && (
                   <div className="flex flex-wrap justify-end gap-1.5">
                     {o.status === 'draft' && (
-                      <button disabled={busy} onClick={() => activate(o.id, 'active')}
-                        className={actBtnGreen}>
-                        <ClipboardCheck className="h-3.5 w-3.5" />Validate &amp; activate
-                      </button>
+                      <>
+                        <button disabled={busy} onClick={() => openEdit(o, 'validate')}
+                          className={actBtnGreen}>
+                          <ClipboardCheck className="h-3.5 w-3.5" />Validate &amp; activate
+                        </button>
+                        <button disabled={busy} onClick={() => openEdit(o, 'edit')} className={actBtn}>
+                          <Pencil className="h-3.5 w-3.5" />Edit
+                        </button>
+                      </>
                     )}
                     {o.status === 'active' && (
                       <>
@@ -733,14 +728,19 @@ export default function AuditCommandCenter() {
               // The register row behind the form, for the read-only provenance
               // and the server-computed SLA state (which is never editable).
               const row = (register?.obligations || []).find((o) => o.id === editForm.id) || {}
+              const validating = editMode === 'validate'
               return (
                 <>
                   <h2 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
-                    <Pencil className="h-5 w-5 text-[#009944]" />
-                    Edit obligation
+                    {validating
+                      ? <ClipboardCheck className="h-5 w-5 text-[#009944]" />
+                      : <Pencil className="h-5 w-5 text-[#009944]" />}
+                    {validating ? 'Validate & activate obligation' : 'Edit obligation'}
                   </h2>
                   <p className="mt-1 text-xs text-slate-500">
-                    Edit the obligation. Deadlines and reminder windows are the live legal position; the imported source wording below is preserved unchanged.
+                    {validating
+                      ? 'Check every field against the source document before this obligation goes live. Once it is active it drives the reminder and escalation sweep, and its notices start going out.'
+                      : 'Edit the obligation. Deadlines and reminder windows are the live legal position; the imported source wording below is preserved unchanged.'}
                   </p>
 
                   <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
@@ -757,7 +757,7 @@ export default function AuditCommandCenter() {
                     </span>
                   </div>
 
-                  <form onSubmit={(e) => { e.preventDefault(); saveObligation(null) }}
+                  <form onSubmit={(e) => { e.preventDefault(); saveObligation(validating ? 'active' : null) }}
                     className="mt-4 grid gap-3 sm:grid-cols-2">
                     <div>
                       <label className={labelCls}>Reference</label>
@@ -884,7 +884,7 @@ export default function AuditCommandCenter() {
                       <button type="button" onClick={() => setEditForm(BLANK_EDIT)} className={ghostBtn}>Cancel</button>
                       <button type="submit" disabled={busy} className={primaryBtn}>
                         {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-                        Save changes
+                        {validating ? 'Activate' : 'Save changes'}
                       </button>
                     </div>
                   </form>
