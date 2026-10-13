@@ -8,13 +8,14 @@ import { formatCurrencyValue, formatPercent, formatCount } from './formatScoreca
  * the caller passes the data and a close handler; nothing here mutates state.
  *
  * Props:
- *   open       boolean
- *   metricKey  the human label prefix for the title
- *   data       jsonb from director_branch_breakdown (has .branches,
- *              .managers, .areas, .best, .worst)
- *   onClose    () => close
+ *   open          boolean
+ *   metricKey     the human label prefix for the title
+ *   data          jsonb from director_branch_breakdown (has .branches,
+ *                 .managers, .areas, .best, .worst)
+ *   onClose       () => close
+ *   onSelectBranch (branchId, branchName) => open branch staff table
  */
-export function DirectorDeepDive({ open, metricKey, data = {}, onClose }) {
+export function DirectorDeepDive({ open, metricKey, data = {}, onClose, onSelectBranch }) {
   const metricLabel = String(metricKey ?? 'metric')
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase())
@@ -71,7 +72,7 @@ export function DirectorDeepDive({ open, metricKey, data = {}, onClose }) {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {branches.map((b) => (
-                        <tr key={b.branch_id ?? b.id}>
+                        <tr key={b.branch_id ?? b.id} onClick={() => onSelectBranch && onSelectBranch(b.branch_id ?? b.id, b.branch_name ?? b.branch)} className="cursor-pointer hover:bg-slate-50">
                           <td className="px-2 py-1.5 text-slate-400">{b.rank ?? '—'}</td>
                           <td className="px-2 py-1.5 font-medium text-slate-900">{b.branch_name ?? b.branch}</td>
                           <td className="px-2 py-1.5 text-slate-500">{b.manager ?? '—'}</td>

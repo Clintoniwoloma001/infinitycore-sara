@@ -62,6 +62,10 @@ export function tenureLabel(joinDate, now = new Date()) {
 
 const pct = (v) => v == null ? '—' : `${Number(v).toFixed(Number(v) % 1 ? 1 : 0)}%`
 const label = (v) => String(v || '—').replaceAll('_', ' ')
+const optionLabel = (o) => {
+  if (!o || typeof o !== 'object') return o == null ? '' : String(o)
+  return o.branch_name || o.dept_name || o.designation_title || o.role_name || o.area_name || o.full_name || o.label || o.display_name || o.name || o.title || ''
+}
 const change = (current, previous) => Number(current || 0) - Number(previous || 0)
 const Delta = ({ value, suffix = ' pts' }) => value == null ? <span className="text-slate-400">No comparison</span> : (
   <span className={`inline-flex items-center gap-1 text-xs font-semibold ${value > 0 ? 'text-emerald-700' : value < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
@@ -107,7 +111,7 @@ function FilterBar({ filters, setFilters, options }) {
   const startBtnRef = useRef(null)
   const endBtnRef = useRef(null)
   const set = (key, value) => setFilters((f) => ({ ...f, [key]: value || '' }))
-  const select = (key) => <select aria-label={FILTER_LABEL[key]} className={`${input} min-w-36`} value={filters[key]} onChange={(e) => set(key,e.target.value)}><option value="">All {FILTER_LABEL[key]}</option>{(options?.[OPTION_KEY[key]] || []).map((o) => <option key={o.id} value={o.id}>{o.name || o.title}</option>)}</select>
+  const select = (key) => <select aria-label={FILTER_LABEL[key]} className={`${input} min-w-36`} value={filters[key]} onChange={(e) => set(key,e.target.value)}><option value="">All {FILTER_LABEL[key]}</option>{(options?.[OPTION_KEY[key]] || []).map((o) => <option key={o.id} value={o.id}>{optionLabel(o)}</option>)}</select>
   // Custom opens a real calendar instead of the inline inputs that were
   // clipped out of the horizontally scrolling filter bar, and seeds a working
   // range so the query re-runs immediately with a valid window.
@@ -207,13 +211,31 @@ export default function DirectorDashboard() {
   const [filters,setFilters] = useState({...EMPTY_FILTERS}); const [snapshot,setSnapshot] = useState(null)
   const [loading,setLoading] = useState(true); const [error,setError] = useState(''); const [employeeId,setEmployeeId] = useState(null)
   const [tab,setTab] = useState('overview'); const [department,setDepartment] = useState(null)
+  // Director Intelligence scorecards + deep-dive / branch staff tables
+  const [scorecards, setScorecards] = useState({})
+  const [scorecardsFetched, setScorecardsFetched] = useState(false)
+  const [deepDiveOpen, setDeepDiveOpen] = useState(false)
+  const [activeMetricKey, setActiveMetricKey] = useState(null)
+  const [deepDiveData, setDeepDiveData] = useState(null)
+  const [branchStaffOpen, setBranchStaffOpen] = useState(false)
+  const [activeBranchId, setActiveBranchId] = useState(null)
+  const [activeBranchName, setActiveBranchName] = useState('')
+  const [branchStaff, setBranchStaff] = useState([])
+  const [branchStaffColumns, setBranchStaffColumns] = useState(['overall_score'])
+  const [branchStaffSortDir, setBranchStaffSortDir] = useState('desc')
   // Department / branch drill-down panels
   const [departmentSnapshots, setDepartmentSnapshots] = useState([])
   const [isDepartmentDrillOpen, setIsDepartmentDrillOpen] = useState(false)
   const [isBranchDrillOpen, setIsBranchDrillOpen] = useState(false)
   const [departmentDrillName, setDepartmentDrillName] = useState('')
   const [branchDrillName, setBranchDrillName] = useState('')
-  const load = async () => { setLoading(true); setError(''); try { const range=dateWindow(filters.period,filters); setSnapshot(await directorIntelligenceService.getSnapshot({...filters,...range})); setDepartmentSnapshots(await bankonePortfolioService.listLatestDepartmentSnapshots()) } catch(e) { setError(e.message||'Director intelligence is unavailable. Apply the latest database migration.') } finally { setLoading(false) } }
+  const load = async () => { setLoading(true); setError(''); try { const range=dateWindow(filters.period,filters); setSnapshot(await directorIntelligenceService.getSnapshot({...filters,...range})); setDepartmentSnapshots(await bankonePortfolioService.listLatestDepartmentSnapshots())
+    const sc = await directorIntelligenceService.getScorecards(
+      range.startDate, range.endDate,
+      filters.area ? [filters.area] : null,
+      filters.department ? [filters.department] : null,
+      filters.role ? [filters.role] : null,
+    ); setScorecards(sc); setScorecardsFetched(true) } catch(e) { setError(e.message||'Director intelligence is unavailable. Apply the latest database migration.') } finally { setLoading(false) } }
   useEffect(()=>{ const t=setTimeout(load,180); return ()=>clearTimeout(t) },[filters.period,filters.department,filters.branchId,filters.area,filters.role,filters.designationId,filters.employeeId,filters.startDate,filters.endDate])
   const loadRef = useRef(load)
   useEffect(() => { loadRef.current = load })
@@ -223,6 +245,44 @@ export default function DirectorDashboard() {
   // stale panel can never be re-shown without a fresh user click.
   useEffect(() => { setIsBranchDrillOpen(false); setIsDepartmentDrillOpen(false) }, [filters])
   const range=useMemo(()=>dateWindow(filters.period,filters),[filters]); const staff=useMemo(()=>department?(snapshot?.staff||[]).filter(s=>s.department===department):snapshot?.staff||[],[snapshot,department])
+
+  // Director Intelligence deep-dive handlers
+  const scopeArgs = () => {
+    const r = range
+    return {
+      start: r.startDate, end: r.endDate,
+      areaIds: filters.area ? [filters.area] : null,
+      deptIds: filters.department ? [filters.department] : null,
+      posIds: filters.role ? [filters.role] : null,
+    }
+  }
+  const handleSelectMetric = async (key) => {
+    setActiveMetricKey(key)
+    const s = scopeArgs()
+    try {
+      const bd = await directorIntelligenceService.getBranchBreakdown(
+        s.start, s.end, null, s.areaIds, s.deptIds, s.posIds,
+      )
+      setDeepDiveData(bd)
+    } catch (e) { setDeepDiveData(null) }
+    setDeepDiveOpen(true)
+  }
+  const handleSelectBranch = async (branchId, branchName) => {
+    const r = range
+    setActiveBranchId(branchId); setActiveBranchName(branchName)
+    try {
+      const res = await directorIntelligenceService.getBranchStaff(
+        branchId, r.startDate, r.endDate,
+        scopeArgs().deptIds, scopeArgs().posIds,
+      )
+      setBranchStaff(Array.isArray(res) ? res : (res?.staff || []))
+    } catch { setBranchStaff([]) }
+    setBranchStaffOpen(true); setDeepDiveOpen(false)
+  }
+  const handleSortBranch = (col) => {
+    if (branchStaffColumns[0] === col) setBranchStaffSortDir(branchStaffSortDir === 'desc' ? 'asc' : 'desc')
+    else { setBranchStaffColumns([col]); setBranchStaffSortDir('desc') }
+  }
   // Executive titles (MD/CEO, Chairman, Director…) are roles, never departments.
   const filterOptions=useMemo(()=>({...(snapshot?.filters||{}),departments:filterDepartmentOptions(snapshot?.filters?.departments||[])}),[snapshot])
   const departmentRollup=useMemo(()=>filterDepartmentOptions(snapshot?.departments||[]),[snapshot])
@@ -237,7 +297,7 @@ export default function DirectorDashboard() {
     <BusinessRibbon summary={snapshot.summary}/>
     <div className="flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-800">{tabs.map(([id,name])=><button key={id} onClick={()=>{setTab(id);setDepartment(null);setIsBranchDrillOpen(false);setIsDepartmentDrillOpen(false)}} className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-semibold transition ${tab===id?'border-[#009944] text-[#009944]':'border-transparent text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>{name}</button>)}</div>
     {department&&<div className={`${panel} flex items-center justify-between px-5 py-3`}><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#009944]">Department intelligence</p><h2 className="font-semibold text-slate-900 dark:text-white">{department}</h2></div><button onClick={()=>setDepartment(null)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-4 w-4"/></button></div>}
-    {tab==='overview'&&<><DepartmentTable rows={departmentRollup} onSelect={(d)=>{setDepartment(d.name);setDepartmentDrillName(d.name);setIsDepartmentDrillOpen(true)}}/><div className="grid gap-5 xl:grid-cols-[1.45fr_1fr]"><ExecutiveTrend data={snapshot.trend}/><RolePerformance rows={snapshot.roles}/></div><div className="mt-5 grid gap-5 xl:grid-cols-2"><OrganizationTable title="Branch performance" rows={snapshot.branches} onSelect={(r)=>{setBranchDrillName(r.name);setIsBranchDrillOpen(true)}}/><OrganizationTable title="Area performance" rows={snapshot.areas}/></div>{isDepartmentDrillOpen&&<DepartmentDrillDownModal department={departmentDrillName} snapshots={departmentSnapshots} staff={snapshot?.staff||[]} onClose={()=>{setIsDepartmentDrillOpen(false);setDepartmentDrillName('')}}/>}{isBranchDrillOpen&&<BranchDetailModal branch={branchDrillName} branches={snapshot?.branches||[]} staff={snapshot?.staff||[]} onClose={()=>{setIsBranchDrillOpen(false);setBranchDrillName('')}}/>}</>}
+    {tab==='overview'&&<><DirectorScorecardCards scorecards={scorecards} fetched={scorecardsFetched} onSelectMetric={handleSelectMetric} onSelectBranch={handleSelectBranch}/><DepartmentTable rows={departmentRollup} onSelect={(d)=>{setDepartment(d.name);setDepartmentDrillName(d.name);setIsDepartmentDrillOpen(true)}}/><div className="grid gap-5 xl:grid-cols-[1.45fr_1fr]"><ExecutiveTrend data={snapshot.trend}/><RolePerformance rows={snapshot.roles}/></div><div className="mt-5 grid gap-5 xl:grid-cols-2"><OrganizationTable title="Branch performance" rows={snapshot.branches} onSelect={(r)=>{setBranchDrillName(r.name);setIsBranchDrillOpen(true)}}/><OrganizationTable title="Area performance" rows={snapshot.areas}/></div>{isDepartmentDrillOpen&&<DepartmentDrillDownModal department={departmentDrillName} snapshots={departmentSnapshots} staff={snapshot?.staff||[]} onClose={()=>{setIsDepartmentDrillOpen(false);setDepartmentDrillName('')}}/>}{isBranchDrillOpen&&<BranchDetailModal branch={branchDrillName} branches={snapshot?.branches||[]} staff={snapshot?.staff||[]} onClose={()=>{setIsBranchDrillOpen(false);setBranchDrillName('')}}/>}<DirectorDeepDive open={deepDiveOpen} metricKey={activeMetricKey} data={deepDiveData} onClose={()=>setDeepDiveOpen(false)} onSelectBranch={handleSelectBranch}/>{branchStaffOpen&&<DirectorBranchStaffTable staff={branchStaff} branchName={activeBranchName} period={range.startDate?.slice(0,7)} onSelectEmployee={setEmployeeId} columns={branchStaffColumns} sortDir={branchStaffSortDir} onSort={handleSortBranch}/>}</>}
     {tab==='attendance'&&<><AttendanceView staff={staff}/><div className="mt-5"><StaffTable rows={staff} onEmployee={setEmployeeId}/></div></>}
     {tab==='leave'&&<LeaveView rows={snapshot.leave} onEmployee={setEmployeeId}/>} 
     {tab==='performance'&&<><div className="grid gap-5 xl:grid-cols-[1.45fr_1fr]"><ExecutiveTrend data={snapshot.trend}/><RolePerformance rows={snapshot.roles}/></div><div className="mt-5"><StaffTable rows={staff} onEmployee={setEmployeeId}/></div></>}
