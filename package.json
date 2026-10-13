@@ -78,6 +78,7 @@
     "test:phase70-attendance": "node tests/phase70AttendanceTrackingLeave.test.mjs",
     "test:leave-booking": "node tests/phase70bLeaveBooking.test.mjs",
     "test:smart-navigation": "node tests/smartNavigation.test.mjs",
+    "test:audit-workspace-sync": "node tests/auditWorkspaceKanbanSync.test.mjs",
     "test:geofence-access": "node tests/geofenceAccess.test.mjs",
     "test:geofence-service": "node tests/geofenceService.test.mjs",
     "test:work-kpi-engine": "node tests/workKpiEngine.test.mjs",

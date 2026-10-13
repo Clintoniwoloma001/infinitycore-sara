@@ -4,6 +4,8 @@ import { useAuth, AuthProvider } from './hooks/useAuth'
 import AttendanceTerminal from './pages/AttendanceTerminal'
 import LeaveBooking from './pages/LeaveBooking'
 import Audit from './pages/Audit'
+import AuditCommandCenter from './pages/audit/AuditCommandCenter'
+import DepartmentAudit from './pages/audit/DepartmentAudit'
 import AutomationCommandCentre from './pages/AutomationCommandCentre'
 import TrainingAttendance from './pages/TrainingAttendance'
 import Layout from './components/Layout'
@@ -51,6 +53,8 @@ import Chat from './pages/Chat'
 import MessagesPage from './components/messages/MessagesPage'
 import CommunicationAdmin from './pages/CommunicationAdmin'
 import BankOneImportCenter from './pages/BankOneImportCenter'
+import DirectorMetricImport from './pages/DirectorMetricImport'
+import { DirectorIntelligenceDeepDive } from './pages/DirectorIntelligenceDeepDive'
 import BankOneImportReview from './pages/BankOneImportReview'
 import BankOneIntegration from './pages/BankOneIntegration'
 import Performance from './pages/Performance'
@@ -89,6 +93,8 @@ const pageComponents = {
   Dashboard,
   DirectorDashboard,
   Audit,
+  AuditCommandCenter,
+  DepartmentAudit,
   AutomationCommandCentre,
   EmployeeTracking,
   GeofenceSettings,
@@ -127,6 +133,8 @@ const pageComponents = {
   MessagesPage,
   CommunicationAdmin,
   BankOneImportCenter,
+  DirectorMetricImport,
+  DirectorIntelligenceDeepDive,
   BankOneImportReview,
   BankOneIntegration,
   Performance,

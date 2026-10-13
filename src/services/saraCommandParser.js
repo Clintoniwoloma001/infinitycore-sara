@@ -167,7 +167,16 @@ function isMyAttendanceQuestion(text) {
 
 function isMyLeaveBalanceQuestion(text) {
   const t = text.toLowerCase()
-  return /\b(my|how\s+much)\b.*\b(leave\s+balance|annual\s+leave|leave\s+days|leave\s+remaining|leave\s+left)\b/.test(t)
+  if (!/\bleave\b/.test(t)) return false
+  // "my", "how many" and "how much" all ask about MY OWN entitlement. Only
+  // "my" and "how much" were accepted before, which left every
+  // "how many <leave> ... do I have left" question unanswerable locally.
+  const opener = /\b(my|how many|how much)\b/
+  const subject = /\b(balance|annual\s*leave|days?|entitlement|remaining|left)\b/
+  if (!opener.test(t)) return false
+  if (subject.test(t)) return true
+  // "...leave do i have" / "...leave have i got"
+  return /\bdo i have\b|\bhave i (got|left)\b/.test(t)
 }
 
 function isMyLeaveRequestsQuestion(text) {
@@ -246,7 +255,11 @@ export function parseSaraCommand(raw) {
     return { intent: 'TRAINING_STATS', filters: { area: extractTrainingArea(text) } }
   }
 
-  if (/how many.*(leave|approval|pending)/i.test(text) || /count.*(leave|approval)/i.test(text)) {
+  // Count only what is actually PENDING / awaiting approval. The old test
+  // matched the bare word "leave", so "how many leave do i have left" — a
+  // question about entitlement — was answered with the number of pending
+  // approvals, which is a different question entirely.
+  if (/\b(how many|count|how much)\b[^?]*\b(pending|approvals?|awaiting)\b/i.test(text) || /^my pending/i.test(text)) {
     return { intent: 'COUNT_PENDING', filters: {} }
   }
 

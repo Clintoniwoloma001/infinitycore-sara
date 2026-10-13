@@ -21,7 +21,8 @@ import { subscribeSnapshotRefresh } from '../lib/snapshotSync'
 import { deriveDefaultPeriod } from '../domains/performance/periodDefaults'
 import {
   asRange, filterFromParams, formatDay, isoDate, periodRange, rangeOf, rowInRange,
-} from '../domains/performance/filterRange'
+ } from '../domains/performance/filterRange'
+import MprPerformance from './MprPerformance'
 
 const STATUS_COLORS = {
   exceeds_target: '#009944',
@@ -1232,6 +1233,7 @@ export default function Performance() {
           { id: 'metrics', label: 'Metrics & Targets' },
           { id: 'results', label: 'Results' },
           { id: 'calculate', label: 'Calculate' },
+          { id: 'mpr', label: 'MPR Performance' },
         ].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border ${tab === t.id ? 'bg-[#009944] text-white border-[#009944]' : 'bg-white text-slate-500 border-slate-200'}`}>
             {t.label}
@@ -1351,6 +1353,8 @@ export default function Performance() {
           </div>
         </div>
       )}
+
+       {tab === 'mpr' && <MprPerformance />}
 
       {/* Add Metric Modal */}
       {showAddMetric && (

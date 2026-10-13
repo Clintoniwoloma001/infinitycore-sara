@@ -10,7 +10,13 @@ import { useSaraVoice, speakText, cancelSpeech, MIC_STATES, SARA_WAKE_WORDS, pla
 import { useSaraAlerts, pushBrowserNotification, buildLeaveAlert } from '../../services/saraAlerts'
 import { formatDate } from '../../lib/utils'
 import { LEAVE_TYPE_LABELS } from '../../services/leaveBalanceService'
-import { requestSaraReply, requestSaraSummary, saraErrorMessage } from '../../services/saraChatService'
+import {
+  requestSaraReply,
+  requestSaraSummary,
+  saraErrorMessage,
+  degradedNotice,
+  SARA_COMMANDS,
+} from '../../services/saraChatService'
 
 export const PHASES = {
   IDLE: 'idle',           // ⚪ Idle
@@ -222,7 +228,12 @@ export default function Sara() {
       } else if (result.type === 'unknown') {
         try {
           const response = await requestSaraReply({ message: raw, history, route: location.pathname })
-          say(response.reply)
+          // If SARA had to fall back to the internal rules engine, say so and
+          // say WHY. A correct answer with no explanation looks like everything
+          // is healthy when a provider may be down or misconfigured — which is
+          // exactly the confusion that hid the broken model pin.
+          const notice = degradedNotice(response)
+          say(response.reply, notice ? { notice } : undefined)
         } catch (e) {
           say(saraErrorMessage(e))
         }
@@ -556,6 +567,11 @@ export default function Sara() {
                   <div key={i} className={`flex ${m.from === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-line ${m.from === 'user' ? 'bg-[#009944] text-white' : 'bg-white border border-slate-200 text-slate-700'}`}>
                       {m.text}
+                      {m.notice && (
+                        <p className="mt-1.5 text-[11px] leading-snug text-amber-700">
+                          {m.notice}
+                        </p>
+                      )}
                       {m.requests?.length > 0 && (
                         <div className="mt-2 space-y-1.5">
                           {m.requests.map((r) => <RequestCard key={r.id} r={r} />)}
@@ -611,6 +627,19 @@ export default function Sara() {
                     <Send className="w-4 h-4" />
                   </button>
                 </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {SARA_COMMANDS.map((c) => (
+                      <button
+                        key={c.example}
+                        type="button"
+                        onClick={() => handleCommand(c.example, 'text')}
+                        disabled={busy}
+                        className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
               </div>
             </>
           )}
