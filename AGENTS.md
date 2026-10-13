@@ -1366,3 +1366,67 @@ consumer below degrades gracefully until it exists.
   `src/domains/audit/obligationBoard.js`, so a future `regulatory_*` type is
   classified automatically). The legacy tables remain as the manual-entry path and
   render below when populated, so nothing is lost.
+
+## Phase — Zoho Mail OAuth foundation for Audit Automation (server-based, no send)
+- SQL migration: `supabase/migrations/20261114000000_zoho_mail_oauth_foundation.sql`
+  — run in Supabase SQL Editor after `20261111000004`. Idempotent/additive
+  (`begin; … commit;`). Widens `integration_connections` provider CHECK to admit
+  `'zoho_mail'`, adds `provider_account_id` (the Zoho sending accountId), and
+  creates `zoho_oauth_states` (server-generated, short-lived, single-use CSRF
+  state) with RLS enabled and `revoke all … from anon, authenticated` (service
+  role only). Stores NO plaintext secret.
+- **Server-based Application authorization-code flow** — deliberately NOT the
+  browser-built authorize URL used by Google/Zoom. Three Edge Functions, all
+  sharing pure logic in `supabase/functions/_shared/zoho-mail.mjs`:
+  - `zoho-oauth-start` (`verify_jwt=true`) builds the Zoho authorize URL
+    **server-side** (access_type=offline + prompt=consent + single-use `state`),
+    Head-of-Audit/admin only. The browser only opens the returned URL.
+  - `zoho-oauth-callback` (`verify_jwt=false`, browser redirect target) validates
+    + atomically consumes the `state`
+    (`update … where consumed_at is null and expires_at > now()` → unknown /
+    expired / replayed state updates ZERO rows → rejected), exchanges the code
+    **server-side only**, and stores the refresh token **AES-256-GCM encrypted**
+    in `integration_connections.encrypted_secret`. Never returns a token/secret.
+  - `zoho-mail-status` (`verify_jwt=true`, role-gated) backend-only status +
+    no-send verification test: decrypts the refresh token, refreshes an access
+    token, calls `GET /api/accounts` to read the sending `accountId` + permitted
+    From addresses for the Head of Audit to verify. **Never sends mail** and
+    never exposes a token/secret/encryption key.
+- **`.com` data center** (verified against current Zoho docs): authorize
+  `https://accounts.zoho.com/oauth/v2/auth`, token
+  `https://accounts.zoho.com/oauth/v2/token`, Mail API base
+  `https://mail.zoho.com/api/`, Get All Accounts `GET /api/accounts`.
+- **Least-privilege scopes** (verified): `ZohoMail.messages.CREATE` (Send Email
+  API — `.CREATE`, not `.ALL`) + `ZohoMail.accounts.READ` (Get All Accounts — the
+  least-privileged account-read scope, not `.ALL`). No full mailbox access.
+- **Callback URL is derived, never hard-coded**: `buildRedirectUri()` =
+  `${OAUTH_REDIRECT_BASE || SUPABASE_URL}/functions/v1/zoho-oauth-callback`.
+  For this project: `https://atzomqicwjufuxhfexxd.supabase.co/functions/v1/zoho-oauth-callback`
+  — register EXACTLY this in the Zoho API Console → Authorized redirect URIs.
+- **Secrets are server-side only** (`supabase secrets set`, never `VITE_*` /
+  `.env` / client bundle): `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`,
+  `ZOHO_TOKEN_ENCRYPTION_KEY` (32-byte base64/hex key you generate; encrypts the
+  refresh token at rest). `zoho-oauth-start` intentionally does NOT read the
+  client secret.
+- Frontend `src/services/zohoMailService.js` is intentionally THIN:
+  `connectZohoMail()` opens the server-built URL in a popup and awaits the
+  `zoho_oauth_complete` message; `getZohoMailStatus()` / `testZohoMailConnection()`
+  read the masked status. It never builds a Zoho URL and never holds a secret.
+- **Requirement 9 honored**: sending stays disabled (`readyToSend:false`); no
+  `/messages` POST exists anywhere in the flow; the Head of Audit must explicitly
+  authorize the connection and verify the accountId + From address before any
+  future send work is enabled.
+- Docs: `supabase/functions/zoho-mail/README.md` (callback URL, secret names,
+  exact scopes, deploy + safe no-send test procedure, negative security checks).
+- Test: `npm run test:zoho-mail` — `tests/zohoMailOauth.test.mjs` (17 checks:
+  .com endpoints, least-privilege scopes, server-side authorize, derived callback
+  URL, CSRF state, encrypted refresh-token storage, server-only secrets, no-send
+  invariants, account parser, AES-256-GCM round-trip, migration + config wiring).
+  All three Edge Functions transpile cleanly under esbuild; `npm run build` passes.
+- **Manual actions (Clinton):** (1) run the migration in the SQL Editor;
+  (2) `supabase secrets set ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET /
+  ZOHO_TOKEN_ENCRYPTION_KEY`; (3) register the exact callback URL + enable the two
+  scopes on the Zoho Server-based Application; (4) deploy the three functions;
+  (5) run the no-send Test connection as the Head of Audit and confirm the
+  accountId + From address before any sending is enabled.
+

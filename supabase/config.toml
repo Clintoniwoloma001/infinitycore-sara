@@ -472,3 +472,27 @@ entrypoint = "./functions/bankone-name-enquiry/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/oauth-callback/index.ts"
+
+# --- Zoho Mail OAuth (Audit Automation) — server-based authorization-code flow ---
+# zoho-oauth-start: builds the authorize URL SERVER-SIDE and issues a
+#   single-use CSRF state (JWT required — only Head of Audit / admin).
+# zoho-oauth-callback: browser redirect target from Zoho; validates + consumes
+#   the state, exchanges the code server-side, stores the refresh token
+#   AES-256-GCM encrypted. verify_jwt = false (it is not a Supabase-authenticated
+#   call; security is the single-use server-generated state).
+# zoho-mail-status: backend-only connection status / test (JWT + role gated).
+#   It NEVER sends email.
+[functions.zoho-oauth-start]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/zoho-oauth-start/index.ts"
+
+[functions.zoho-oauth-callback]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/zoho-oauth-callback/index.ts"
+
+[functions.zoho-mail-status]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/zoho-mail-status/index.ts"

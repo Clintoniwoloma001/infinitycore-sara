@@ -25,6 +25,7 @@ import { KpiCard, SlaChip, StatusChip, SectionCard, Meter, DataTable } from './a
 import { useAuth } from '../../hooks/useAuth'
 import { workManagementService } from '../../services/workManagementService'
 import { summariseNames } from '../../domains/audit/obligationBoard'
+import ZohoMailCard from './ZohoMailCard'
 
 const card = 'rounded-2xl border border-slate-200 bg-white'
 const inputCls = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
@@ -405,6 +406,11 @@ export default function AuditCommandCenter() {
       {actionError && (
         <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{actionError}</p>
       )}
+
+      {/* Zoho Mail connection (audit reminders). Self-contained (own hooks),
+          gated on the SAME set the server allows (super_admin/admin/head_of_audit).
+          Sending stays disabled; this only connects + verifies. */}
+      {canManage && <ZohoMailCard />}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <KpiCard label="Active obligations" value={s.active_obligations} icon={ClipboardCheck} />

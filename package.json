@@ -40,6 +40,7 @@
     "test:rules-builder": "node tests/performanceRulesBuilder.test.mjs",
     "test:profiles-unique": "node tests/profilesEmailUnique.test.mjs",
     "test:profiles-fk": "node tests/profilesAuthFk.test.mjs",
+    "test:zoho-mail": "node tests/zohoMailOauth.test.mjs",
     "test:privileges": "node tests/privilegeManagement.test.mjs",
     "test:hr-jobs": "node tests/hrJobsLifecycle.test.mjs",
     "hr:authoritative:build": "node scripts/build-authoritative-employees.mjs --emit",
