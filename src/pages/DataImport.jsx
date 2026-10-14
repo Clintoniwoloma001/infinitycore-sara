@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Check, Download, FileUp, Loader2, Play, RefreshCw, Trash2, X } from 'lucide-react'
+import { Building2, Check, Database, Download, FileSpreadsheet, FileUp, Loader2, Play, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState } from '../components/PageStates'
 import { date, status } from './hrShared'
@@ -35,6 +36,7 @@ async function readFile(file) {
 export default function DataImport() {
   const { hasPermission } = useAuth()
   const canExecute = hasPermission('data.import.execute')
+  const canBankoneTools = hasPermission('bankone.read')
 
   const [jobs, setJobs] = useState([])
   const [jobsLoading, setJobsLoading] = useState(true)
@@ -174,6 +176,19 @@ export default function DataImport() {
 
       {notice && <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{notice}</div>}
       {error && <div className="mb-5"><ErrorState message={error} /></div>}
+
+      {canBankoneTools && (
+        <div className="bg-white rounded-lg border border-slate-200 p-6 mb-8">
+          <h3 className="font-semibold text-slate-900 mb-1">Specialised import tools</h3>
+          <p className="text-sm text-slate-500 mb-4">BankOne portfolio batches, PAR review, provider sync and director metrics run in their own tools. This hub covers CSV/JSON migration of employees, customers, loans, repayments, payroll and recruitment.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <ImportToolLink to="/bankone-imports" icon={Database} title="BankOne Imports" description="Upload and map BankOne portfolio batches." />
+            <ImportToolLink to="/bankone-portfolio-review" icon={ShieldCheck} title="Portfolio Import Review" description="Verify and publish a staged PAR batch." />
+            <ImportToolLink to="/bankone-integration" icon={Building2} title="BankOne Integration" description="Provider connection and sync settings." />
+            <ImportToolLink to="/director-metric-import" icon={FileSpreadsheet} title="Metric Import" description="Import director metric spreadsheets." />
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-lg border border-slate-200 p-6 mb-8">
         <h3 className="font-semibold text-slate-900 mb-4">New import</h3>
@@ -389,4 +404,18 @@ export default function DataImport() {
 
 function baldHeaders(parsed) {
   return parsed.headers
+}
+
+function ImportToolLink({ to, icon: Icon, title, description }) {
+  return (
+    <Link to={to} className="group flex items-start gap-3 rounded-lg border border-slate-200 p-4 hover:border-[#009944] hover:bg-emerald-50/40 transition">
+      <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
+        <Icon className="w-5 h-5 text-[#009944]" />
+      </div>
+      <div>
+        <p className="text-sm font-medium text-slate-800 group-hover:text-[#009944]">{title}</p>
+        <p className="text-xs text-slate-500 mt-0.5">{description}</p>
+      </div>
+    </Link>
+  )
 }

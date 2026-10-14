@@ -21,9 +21,13 @@ export function DirectorDeepDive({ open, metricKey, data = {}, onClose, onSelect
     .replace(/\b\w/g, (c) => c.toUpperCase())
     .replace(/\b(Amount|Pct|Caseload|Count|Disbursement)\b/g, (w) => w.toLowerCase())
 
-  const branches = data.branches ?? []
-  const managers = data.managers ?? []
-  const areas = data.areas ?? []
+  // `data` arrives as null (useState(null) initial) until a metric is picked.
+  // A default param only covers `undefined`, so null-guard explicitly here —
+  // this was the "'a.branches' is null" crash on dashboard mount.
+  const payload = data || {}
+  const branches = payload.branches ?? []
+  const managers = payload.managers ?? []
+  const areas = payload.areas ?? []
 
   return (
     <div

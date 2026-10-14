@@ -160,14 +160,15 @@ Deno.serve(async (req) => {
     })
   }
 
-  // Upsert the connection row. We store the ENCRYPTED refresh token only; the
-  // access token is intentionally NOT persisted (short-lived; the status/test
-  // function refreshes on demand from the encrypted refresh token).
+  // Upsert the connection row PER USER (multi-mailbox): each account stores its
+  // OWN mailbox. The ENCRYPTED refresh token only is kept; the access token is
+  // intentionally NOT persisted (the status/test function refreshes on demand).
   const { data: existing } = await admin
     .from('integration_connections')
     .select('id')
     .eq('provider', PROVIDER)
     .eq('environment', ENVIRONMENT)
+    .eq('user_id', userId)
     .maybeSingle()
 
   const baseRow = {

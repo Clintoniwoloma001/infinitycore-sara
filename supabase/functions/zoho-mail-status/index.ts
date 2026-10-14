@@ -72,12 +72,14 @@ Deno.serve(async (req) => {
     return json({ error: 'forbidden', message: 'Not permitted to view Zoho Mail status.' }, 403)
   }
 
-  // Stored connection state (service-role read; RLS denies all client access).
+  // Stored connection state PER USER (service-role read; RLS denies all client
+  // access). Each account sees only its OWN mailbox connection.
   const { data: conn } = await admin
     .from('integration_connections')
     .select('connected, enabled, secret_hint, provider_account_id, last_connected_at, token_expires_at')
     .eq('provider', PROVIDER)
     .eq('environment', ENVIRONMENT)
+    .eq('user_id', user.id)
     .maybeSingle()
 
   const body = await req.json().catch(() => ({}))
@@ -115,6 +117,7 @@ Deno.serve(async (req) => {
     .select('encrypted_secret, token_expires_at')
     .eq('provider', PROVIDER)
     .eq('environment', ENVIRONMENT)
+    .eq('user_id', user.id)
     .maybeSingle()
 
   if (!full?.encrypted_secret) {
@@ -138,7 +141,7 @@ Deno.serve(async (req) => {
   })
 
   if (!tokenRes.ok) {
-    await admin.from('integration_connections').update({ connected: false }).eq('provider', PROVIDER).eq('environment', ENVIRONMENT)
+    await admin.from('integration_connections').update({ connected: false }).eq('provider', PROVIDER).eq('environment', ENVIRONMENT).eq('user_id', user.id)
     await admin.from('audit_logs').insert({
       action: 'ZOHO_MAIL_TEST_FAILED',
       entity_type: 'IntegrationConnection',
@@ -184,6 +187,7 @@ Deno.serve(async (req) => {
       .update({ provider_account_id: info.primaryAccount.accountId, last_success_at: new Date().toISOString() })
       .eq('provider', PROVIDER)
       .eq('environment', ENVIRONMENT)
+      .eq('user_id', user.id)
   }
 
   await admin.from('audit_logs').insert({
