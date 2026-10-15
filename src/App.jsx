@@ -54,7 +54,6 @@ import MessagesPage from './components/messages/MessagesPage'
 import CommunicationAdmin from './pages/CommunicationAdmin'
 import BankOneImportCenter from './pages/BankOneImportCenter'
 import DirectorMetricImport from './pages/DirectorMetricImport'
-import { DirectorIntelligenceDeepDive } from './pages/DirectorIntelligenceDeepDive'
 import BankOneImportReview from './pages/BankOneImportReview'
 import BankOneIntegration from './pages/BankOneIntegration'
 import Performance from './pages/Performance'
@@ -134,7 +133,6 @@ const pageComponents = {
   CommunicationAdmin,
   BankOneImportCenter,
   DirectorMetricImport,
-  DirectorIntelligenceDeepDive,
   BankOneImportReview,
   BankOneIntegration,
   Performance,

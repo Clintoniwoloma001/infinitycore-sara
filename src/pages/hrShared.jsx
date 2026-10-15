@@ -102,4 +102,11 @@ export const status = (value, good = ['active', 'published', 'completed', 'paid'
 }
 
 export const money = (value) => formatCurrency(Number(value) || 0)
+export const formatCompactCurrency = (value) => {
+  const v = Number(value) || 0
+  if (Math.abs(v) >= 1e9) return `${(v / 1e9).toFixed(2)}bn`
+  if (Math.abs(v) >= 1e6) return `${(v / 1e6).toFixed(2)}m`
+  if (Math.abs(v) >= 1e3) return `${(v / 1e3).toFixed(1)}k`
+  return String(v)
+}
 export const date = (value) => formatDate(value)

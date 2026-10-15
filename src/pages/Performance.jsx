@@ -11,7 +11,8 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, ErrorState } from '../components/PageStates'
-import { date, money, status } from './hrShared'
+import { date, money, status, formatCompactCurrency } from './hrShared'
+import { formatCurrency } from '../lib/utils'
 import { performanceService, PERFORMANCE_STATUS_LABELS, DEFAULT_GRADING_BANDS } from '../services/performanceService'
 import { performanceConfigService } from '../services/performanceConfigService'
 import { employeeService } from '../services/employeeService'
@@ -316,9 +317,17 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, portf
   }
 
   // One-click move of the whole view onto the newest published snapshot date.
+  // Jumps to the latest available date within the data-derived default period,
+  // never to a future-dated snapshot.
   const jumpToLatest = async () => {
     const latest = portfolio?.latestAvailable
     if (!latest) return
+    // Determine the valid date range: use the applied range if set, otherwise
+    // the data-derived default period (which ends on/or before the latest snapshot).
+    const effective = appliedRange ? appliedRange : deriveDefaultPeriod(results)
+    const effectiveEnd = effective ? effective.endDate : null
+    // Only jump if the latest available date is on or before the effective end date
+    if (effectiveEnd && new Date(latest) > new Date(effectiveEnd)) return
     const next = { preset: 'custom', custom: { from: latest, to: latest }, branchF, areaF, deptF, empF, classF }
     setPreset('custom')
     setCustomRange({ from: latest, to: latest })
@@ -531,7 +540,7 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, portf
                   setCustomRange({ from: isoDate(a), to: isoDate(b) })
                 }
               }}
-              className={inputCls}
+              className={`${inputCls} min-w-0`}
             >
               <option value="today">Today</option>
               <option value="week">This Week</option>
@@ -564,35 +573,35 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, portf
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Branch</label>
-            <select value={branchF} onChange={(e) => setBranchF(e.target.value)} className={inputCls}>
+            <select value={branchF} onChange={(e) => setBranchF(e.target.value)} className={`${inputCls} min-w-0`}>
               <option value="">All Branches</option>
               {branches.map((b) => (<option key={b} value={b}>{b}</option>))}
             </select>
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Area</label>
-            <select value={areaF} onChange={(e) => setAreaF(e.target.value)} className={inputCls}>
+            <select value={areaF} onChange={(e) => setAreaF(e.target.value)} className={`${inputCls} min-w-0`}>
               <option value="">All Areas</option>
               {areas.map((a) => (<option key={a} value={a}>{a}</option>))}
             </select>
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Department</label>
-            <select value={deptF} onChange={(e) => setDeptF(e.target.value)} className={inputCls}>
+            <select value={deptF} onChange={(e) => setDeptF(e.target.value)} className={`${inputCls} min-w-0`}>
               <option value="">All Departments</option>
               {depts.map((d) => (<option key={d} value={d}>{d}</option>))}
             </select>
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Employee</label>
-            <select value={empF} onChange={(e) => setEmpF(e.target.value)} className={inputCls}>
+            <select value={empF} onChange={(e) => setEmpF(e.target.value)} className={`${inputCls} min-w-0`}>
               <option value="">All Employees</option>
               {empChoices.map((e) => (<option key={e.id} value={e.id}>{e.name}</option>))}
             </select>
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Status</label>
-            <select value={classF} onChange={(e) => setClassF(e.target.value)} className={inputCls}>
+            <select value={classF} onChange={(e) => setClassF(e.target.value)} className={`${inputCls} min-w-0`}>
               <option value="">All</option>
               <option value="PASS">Pass</option>
               <option value="WATCH">Watch</option>
@@ -655,12 +664,12 @@ function DashboardView({ results, metrics, employees, config, caseMetrics, portf
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div data-testid="portfolio-outstanding">
               <p className="text-xs font-medium text-slate-500">Portfolio Outstanding</p>
-              <p className="text-xl font-bold mt-1 text-slate-900">{money(portfolio.snapshot.total_outstanding)}</p>
+              <p className="text-sm font-bold mt-1 text-slate-900" title={formatCurrency(portfolio.snapshot.total_outstanding)}>{formatCompactCurrency(portfolio.snapshot.total_outstanding)}</p>
               <p className="text-xs text-slate-400 mt-1">as at {formatDay(portfolio.snapshot.as_at_date)}</p>
             </div>
             <div data-testid="portfolio-par">
               <p className="text-xs font-medium text-slate-500">PAR %</p>
-              <p className="text-xl font-bold mt-1 text-[#d97706]">
+              <p className="text-sm font-bold mt-1 text-[#009944]" title={portfolio.snapshot.par_ratio == null ? '—' : `${Number(portfolio.snapshot.par_ratio).toFixed(2)}%`}>
                 {portfolio.snapshot.par_ratio == null ? '—' : `${Number(portfolio.snapshot.par_ratio).toFixed(2)}%`}
               </p>
               <p className="text-xs text-slate-400 mt-1">as at {formatDay(portfolio.snapshot.as_at_date)}</p>

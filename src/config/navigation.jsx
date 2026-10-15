@@ -50,7 +50,6 @@ export const routeConfig = [
     items: [
       { label: 'Dashboard', path: '/', icon: LayoutDashboard, element: 'Dashboard', permissions: [] },
       { label: 'Director Intelligence', path: '/director', icon: Crown, element: 'DirectorDashboard', permissions: [PERMISSIONS.DIRECTOR_EXECUTIVE_READ] },
-      { label: 'Director Intelligence Deep Dive', path: '/director-intelligence', icon: Crown, element: 'DirectorIntelligenceDeepDive', permissions: [PERMISSIONS.DIRECTOR_EXECUTIVE_READ] },
       { label: 'My Profile', path: '/profile', icon: UserCircle, element: 'Profile', permissions: [] },
       { label: 'Messages', path: '/chat', icon: MessageSquare, element: 'MessagesPage', permissions: [] },
       { label: 'Comm Admin', path: '/communication-admin', icon: Landmark, element: 'CommunicationAdmin', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
