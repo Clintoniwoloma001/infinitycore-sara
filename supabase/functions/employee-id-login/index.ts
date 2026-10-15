@@ -11,7 +11,9 @@
 //   archived employees only).
 //
 // Uniform response (security decision 3): every sign-in failure returns the
-// same 401 body with similar timing.
+// same 401 body with similar timing. Success sends a magic-link email — the
+// session is only created after the user clicks the emailed link, so no
+// session tokens (and never the resolved email) are exposed here.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAppUrl } from '../_shared/appUrl.ts'
@@ -31,6 +33,19 @@ function json(body, status = 200) {
 
 function text(value) {
   return String(value || '').trim()
+}
+
+// Same tolerant normalization as the server-side public.normalize_employee_id()
+// so the browser and the database can never disagree about what an ID means.
+// (resolve_employee_for_auth compares against normalize_employee_id(stored_id),
+// so the argument it receives must be normalized the same way here.)
+function normalizeEmployeeId(input) {
+  if (typeof input !== 'string') return ''
+  return input
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\s*\/\s*/g, '/')
+    .toUpperCase()
 }
 
 function clientIp(req) {
@@ -77,9 +92,10 @@ Deno.serve(async (req) => {
     return json({ error: 'invalid_credentials', message: 'Invalid Employee ID or email.' }, 401)
   }
 
-  // Normalize: employee IDs are case/whitespace/space-insensitive on the
-  // server (public.normalize_employee_id); emails are compared lowercased.
-  const normalized = raw.toUpperCase()
+  // Normalize: employee IDs are case/space-insensitive on the server
+  // (public.normalize_employee_id); emails keep their shape and are compared
+  // lowercased in the fallback lookup below.
+  const normalized = normalizeEmployeeId(raw)
 
   // 1) Employee-ID path: privileged resolver, exactly one active non-archived
   //    employee per normalized ID. Ambiguous matches are rejected safely.
@@ -128,9 +144,15 @@ Deno.serve(async (req) => {
     return json({ error: 'invalid_credentials', message }, 401)
   }
 
-  // Passwordless sign-in: magic-link OTP issued by the service role.
-  // `shouldCreateUser: false` refuses accounts that never claimed an invite.
-  const { data, error: otpError } = await admin.auth.admin.signInWithOtp({
+  // Passwordless sign-in: magic-link email issued through the PUBLIC auth
+  // endpoint (the admin namespace has no signInWithOtp). `shouldCreateUser:
+  // false` refuses accounts that never claimed an invite. The OTP endpoint
+  // does NOT return a session — the session is created when the user clicks
+  // the emailed link — so success here means "magic link sent".
+  const authClient = createClient(supabaseUrl, anonKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
+  const { error: otpError } = await authClient.auth.signInWithOtp({
     email: authEmail,
     options: {
       emailRedirectTo: getAppUrl(),
@@ -142,10 +164,5 @@ Deno.serve(async (req) => {
     return json({ error: 'invalid_credentials', message }, 401)
   }
 
-  const session = data?.session
-  if (!session) {
-    return json({ error: 'invalid_credentials', message }, 401)
-  }
-
-  return json({ ok: true, session })
+  return json({ ok: true, magicLink: true })
 })
