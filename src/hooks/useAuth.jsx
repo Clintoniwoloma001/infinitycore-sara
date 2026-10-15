@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { supabase } from '../supabaseClient'
 import { ROLES, ROLE_METADATA, ROLE_MODULES, ROLE_PERMISSIONS, isExecutiveViewerRole } from '../constants/roles'
 import { canTerminateEmployee, canArchiveEmployee, canDeleteEmployee } from '../services/terminationAuthorization'
-import { AUTH_REDIRECT_URL, SIGNUP_REDIRECT_URL } from '../config/siteUrl'
+import { APP_URL, SIGNUP_REDIRECT_URL } from '../config/siteUrl'
 
 const AuthContext = createContext(null)
 
@@ -254,10 +254,22 @@ export function AuthProvider({ children }) {
     return data
   }
 
+  // Password recovery. redirectTo is only a FALLBACK: the emailed link is
+  // built from the project's Site URL + the recovery template and opens
+  // #/reset-password with token_hash/type, which verifies server-side.
   const forgotPassword = async (email) => {
-    const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: AUTH_REDIRECT_URL,
-    })
+    const { data, error } = await supabase.auth.resetPasswordForEmail(
+      String(email || '').trim().toLowerCase(),
+      { redirectTo: `${APP_URL}/#/reset-password` },
+    )
+    if (error) throw error
+    return data
+  }
+
+  // Step 2 of the reset flow: requires the recovery session created by
+  // verifyOtp (or the redirect path) and sets the new password.
+  const completePasswordReset = async (newPassword) => {
+    const { data, error } = await supabase.auth.updateUser({ password: newPassword })
     if (error) throw error
     return data
   }
@@ -358,6 +370,7 @@ export function AuthProvider({ children }) {
     signInWithIdentifier,
     requestEmployeeIdSignup,
     forgotPassword,
+    completePasswordReset,
     refreshProfile,
     refreshPermissions,
     // Re-reads the live employee-tracking decision. Used by the tracking page on

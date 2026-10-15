@@ -1,11 +1,14 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { isLoginEmployeeId } from '../utils/employeeId'
+import { FORGOT_NEUTRAL_MESSAGE, isCooldownError } from '../utils/passwordReset'
 import Logo from '../components/Logo'
 
 export default function Login() {
-  const [mode, setMode] = useState('signin') // 'signin' | 'signup'
+  // Shareable alias #/forgot-password opens the page directly in forgot mode.
+  const location = useLocation()
+  const [mode, setMode] = useState(() => (location.pathname === '/forgot-password' ? 'forgot' : 'signin')) // 'signin' | 'signup' | 'forgot'
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -21,7 +24,12 @@ export default function Login() {
     setSent(false)
     try {
       if (mode === 'forgot') {
-        await forgotPassword(identifier)
+        // Neutral response by design: never reveal whether the email exists.
+        try {
+          await forgotPassword(identifier)
+        } catch (err) {
+          if (isCooldownError(err)) setError('Please wait a minute before requesting another link')
+        }
         setSent(true)
         return
       }
@@ -74,7 +82,7 @@ export default function Login() {
               {error && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg p-3 mb-4">{error}</div>}
               {sent ? (
                 <div className="space-y-4">
-                  <div className="text-sm text-emerald-700 bg-emerald-50 rounded-lg p-3">If that email is registered, a reset link is on its way. Check your inbox (and spam).</div>
+                  <div className="text-sm text-emerald-700 bg-emerald-50 rounded-lg p-3">{FORGOT_NEUTRAL_MESSAGE}</div>
                   <button type="button" onClick={backToSignIn} className="w-full h-11 rounded-lg bg-[#009944] hover:bg-[#007a35] text-white font-medium">Back to Sign In</button>
                 </div>
               ) : (

@@ -82,6 +82,7 @@ import ManHourIntelligence from './pages/ManHourIntelligence'
 import PerformanceImprovementPlans from './pages/PerformanceImprovementPlans'
 import CertificateVerification from './pages/CertificateVerification'
 import ActivateAccount from './pages/ActivateAccount'
+import ResetPassword from './pages/ResetPassword'
 import PrivilegeManagement from './pages/PrivilegeManagement'
 import EmployeeTracking from './pages/EmployeeTracking'
 import GeofenceSettings from './pages/GeofenceSettings'
@@ -252,6 +253,10 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/activate-account" element={<ActivateAccount />} />
+      {/* Public password-recovery routes — outside the auth guards so
+          pending/suspended and signed-out users can both reset. */}
+      <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/forgot-password" element={<Login />} />
       <Route path="/certificate/verify/:certificateNumber" element={<CertificateVerification />} />
       <Route path="/attendance-terminal" element={<AttendanceTerminal />} />
       <Route path="/leave-booking/:token" element={<LeaveBooking />} />
