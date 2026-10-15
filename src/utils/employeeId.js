@@ -19,6 +19,7 @@ export function normalizeEmployeeId(input) {
 }
 
 const OFFICIAL_PATTERN = /^[A-Z0-9]+\/\d+$/
+const MULTI_GROUP_IDENTIFIER_PATTERN = /^[A-Z0-9]+\/\d+\/\d+$/
 
 export function isEmployeeIdFormat(input) {
   const v = normalizeEmployeeId(input)
@@ -37,3 +38,41 @@ export function canonicalEmployeeId(input) {
   if (OFFICIAL_PATTERN.test(v) || /^\d{1,9}$/.test(v)) return v
   return null
 }
+
+// ---------------------------------------------------------------------------
+// Employee-ID sign-up / sign-in helpers (added for the employee-id-auth flow).
+// Existing exports below are unchanged.
+// ---------------------------------------------------------------------------
+
+// Normalized, case/space-insensitive employee or device identifier used for
+// the login endpoint (email or employee ID). Mirrors the server-side
+// normalizeEmployeeId behaviour so the browser and the database never disagree.
+export function normalizeLoginEmployeeId(input) {
+  if (!input || typeof input !== 'string') return ''
+  return input
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\s*\/\s*/g, '/')
+    .toUpperCase()
+}
+
+// True when the normalized value is an employee or device identifier — the
+// official /[A-Z0-9]+/\d+/ shape, a multi-group form such as IMFB/14/0046, or
+// a bare numeric PIN used by fingerprint devices (e.g. "238").
+export function isLoginEmployeeId(input) {
+  const v = normalizeLoginEmployeeId(input)
+  if (!v) return false
+  if (OFFICIAL_PATTERN.test(v)) return true
+  if (MULTI_GROUP_IDENTIFIER_PATTERN.test(v)) return true
+  // Fingerprint/device PIN-style ids (e.g. "238") so the terminal keeps working.
+  return /^\d{1,9}$/.test(v)
+}
+
+// True for a plausible email address — used by the login/sign-up UI to decide
+// the sign-up tab mode and to keep the two identifier families apart.
+export function looksLikeEmail(input) {
+  if (!input || typeof input !== 'string') return false
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.trim())
+}
+
+
