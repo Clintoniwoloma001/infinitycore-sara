@@ -255,6 +255,14 @@ otp_expiry = 3600
 # subject = "You have been invited"
 # content_path = "./supabase/templates/invite.html"
 
+# Password recovery (forgot/reset password) — hosted project must mirror this
+# in Dashboard → Authentication → Emails → Templates → Reset Password.
+# Link goes to the SPA reset page; {{ .SiteURL }}/{{ .TokenHash }} keep it
+# host-safe (never hard-code a host).
+[auth.email.template.recovery]
+subject = "Reset your Infinity Core password"
+content_path = "./supabase/templates/recovery.html"
+
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
 # enabled = true
@@ -507,3 +515,8 @@ entrypoint = "./functions/zoho-oauth-callback/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/zoho-mail-status/index.ts"
+
+[functions.zoho-mail-send]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/zoho-mail-send/index.ts"
