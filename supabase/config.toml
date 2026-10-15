@@ -473,6 +473,17 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/oauth-callback/index.ts"
 
+# --- Employee ID authentication (sign-up + sign-in) ---
+[functions.employee-id-signup]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/employee-id-signup/index.ts"
+
+[functions.employee-id-login]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/employee-id-login/index.ts"
+
 # --- Zoho Mail OAuth (Audit Automation) — server-based authorization-code flow ---
 # zoho-oauth-start: builds the authorize URL SERVER-SIDE and issues a
 #   single-use CSRF state (JWT required — only Head of Audit / admin).
