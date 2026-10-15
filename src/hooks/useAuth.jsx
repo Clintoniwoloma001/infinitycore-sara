@@ -218,6 +218,42 @@ export function AuthProvider({ children }) {
     return data
   }
 
+  // Employee-ID / email sign-in via the server-rendered identity layer.
+  // The browser never sees the resolved email: the edge function maps the
+  // identifier (employee ID or email) to an active, non-archived employee and
+  // sends a magic-link sign-in email. The session is created only after the
+  // user clicks that link; no tokens (and never the email) are exposed here.
+  const signInWithIdentifier = async (identifier, password) => {
+    // `password` is accepted for API shape compatibility with signIn; the
+    // server-rendered ID path is passwordless (magic-link email).
+    const { data, error } = await supabase.functions.invoke('employee-id-login', {
+      body: { identifier },
+    })
+    if (error) throw error
+    if (!data?.ok) {
+      const err = new Error(data?.error || 'Invalid credentials')
+      err.status = 401
+      throw err
+    }
+    return data
+  }
+
+  // Employee-ID sign-up (no password). The server resolves the ID, emails the
+  // employee on record and stores the employee-id token; the user sets their
+  // password on the existing activate-account page.
+  const requestEmployeeIdSignup = async (employeeId) => {
+    const { data, error } = await supabase.functions.invoke('employee-id-signup', {
+      body: { employeeId },
+    })
+    if (error) throw error
+    if (!data?.ok) {
+      const err = new Error(data?.message || 'Unable to start employee-ID sign-up')
+      err.status = 400
+      throw err
+    }
+    return data
+  }
+
   const forgotPassword = async (email) => {
     const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: AUTH_REDIRECT_URL,
@@ -319,6 +355,8 @@ export function AuthProvider({ children }) {
     profileError,
     signIn,
     signUp,
+    signInWithIdentifier,
+    requestEmployeeIdSignup,
     forgotPassword,
     refreshProfile,
     refreshPermissions,
