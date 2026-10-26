@@ -5,7 +5,7 @@ import { trainingService } from '../services/trainingService'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import ExcelJS from 'exceljs'
-import { LOGO_DATA_URL } from '../lib/manHourLogo.js'
+import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
 
 const inputCls = 'w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#009944]'
 const labelCls = 'block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1.5'
