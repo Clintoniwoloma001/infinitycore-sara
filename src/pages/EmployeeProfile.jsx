@@ -950,7 +950,7 @@ export default function EmployeeProfile() {
                     <div className="flex items-center justify-between mb-3">
                       <div>
                         <span className="text-sm font-medium text-slate-800">{v.guarantor_name}</span>
-                        <span className="text-xs text-slate-400 ml-2">{v.guarantor_email}</span>
+                        {v.submission_method && <span className="ml-2 text-xs text-slate-400">({v.submission_method})</span>}
                       </div>
                       {status(v.status, ['approved'])}
                     </div>
