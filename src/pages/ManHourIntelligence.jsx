@@ -20,6 +20,18 @@ export default function ManHourIntelligence() {
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState('')
+  const workingDays = (() => {
+    const start = new Date(filters.startDate)
+    const end = new Date(filters.endDate)
+    let count = 0
+    const d = new Date(start)
+    while (d <= end) {
+      const day = d.getDay()
+      if (day !== 0 && day !== 6) count++
+      d.setDate(d.getDate() + 1)
+    }
+    return count || 20
+  })()
 
   const load = async () => {
     setLoading(true); setError('')
@@ -52,7 +64,7 @@ export default function ManHourIntelligence() {
       ['Overtime hours', Number(summary.overtime_hours || 0).toFixed(2)],
       ['Absence hours', Number(summary.absence_hours || 0).toFixed(2)],
       ['Attendance Compliance', `${summary.attendance_compliance || 0}%`],
-      ['Working days in period', summary.working_days || 0],
+      ['Working days in period', workingDays],
       ['Total Employees', data?.by_employee?.length || 0],
       ['Employees with no attendance record', (data?.by_employee || []).filter((r) => !r.actual_hours).length],
     ]
@@ -143,7 +155,7 @@ export default function ManHourIntelligence() {
     const audit = [
       ['Report period start', filters.startDate],
       ['Report period end', filters.endDate],
-      ['Working days in period', summary.working_days || 0],
+      ['Working days in period', workingDays],
       ['Daily work hours', 8.5],
       ['Daily break hours', 1],
       ['Holidays excluded', 0],
