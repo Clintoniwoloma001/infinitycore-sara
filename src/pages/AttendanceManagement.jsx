@@ -550,9 +550,9 @@ function RecordsTab({ setNotice }) {
 
            // Auto table
            const tableStartY = filterY + (filterText.length > 0 ? 10 : 10);
-            autoTable(doc, {
-             column: tableColumn,
-             body: tableRows,
+             autoTable(doc, {
+              head: [tableColumn],
+              body: tableRows,
              startY: tableStartY,
              theme: 'striped',
              headStyles: { fillColor: [0, 153, 68] },
