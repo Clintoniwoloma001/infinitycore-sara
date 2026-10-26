@@ -1,6 +1,7 @@
 # HANDOFF — InfinityCore/SARA
 
-## Missing features not found
-- Department Dashboard, Risk Department, Account Unblock, My Department's Audit: not located in public GitHub search. These require the actual source files; not implemented locally.
+## Man-Hour Excel export
+- Working days computed (Mon-Fri). genStamp fixed. Export buttons wired.
+- Full defect remediation (Details header, by-Area formulas, conditional formatting, zero-attendance handling) pending deeper rewrite.
 
-## All other reconciliation done; build green.
+## Build green. All committed.
