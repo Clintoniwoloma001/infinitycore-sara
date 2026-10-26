@@ -83,6 +83,25 @@ export const auditService = {
     })
     return unwrap(data, error, {})
   },
+
+  // ---- Audit reminder sweep (Phase 4) ---------------------------------
+  async previewSweep({ limit = 100 } = {}) {
+    const { data, error } = await supabase.functions.invoke('audit-reminder-sweep', {
+      body: { mode: 'preview', limit },
+    })
+    return unwrap(data, error, { recipients: [] })
+  },
+
+  async runSweep({ reason, limit = 100 } = {}) {
+    const { data, error } = await supabase.functions.invoke('audit-reminder-sweep', {
+      body: { mode: 'run', reason, limit },
+    })
+    return unwrap(data, error, {})
+  },
+
+  async runReminderSweep() {
+    return this.runSweep({ reason: 'Manual trigger from Audit Command Center' })
+  },
 }
 
 export const REGULATORY_STATUS = {

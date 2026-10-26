@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
-import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw, Eye, Trash2, Pause, Play, Fingerprint, ShieldAlert, History, MessageSquare, ShieldCheck } from 'lucide-react'
+import { Users, CheckCircle2, XCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, MapPin, Pencil, X, Loader2, Check, Ban, AlertCircle, Clock3, Settings as SettingsIcon, QrCode, Copy, Download, Printer, RotateCcw, Eye, Trash2, Pause, Play, Fingerprint, ShieldAlert, History, MessageSquare, ShieldCheck, ArrowDownToLine } from 'lucide-react'
 import { attendanceService, platformDateKey, formatWorkedHours } from '../services/attendanceService'
 import { attendanceEngineService } from '../services/attendanceEngineService'
 import { platformSettingsService } from '../services/platformSettingsService'
@@ -129,6 +129,479 @@ function RecordsTab({ setNotice }) {
 
   useEffect(() => { load() }, [filters.date, filters.branchId, filters.department, filters.employeeId, filters.status])
 
+      const exportToExcel = async () => {
+        const startDate = window.prompt('Enter start date (YYYY-MM-DD):', filters.startDate || new Date().toISOString().slice(0, 8) + '01');
+        if (startDate === null) return;
+        const endDate = window.prompt('Enter end date (YYYY-MM-DD):', filters.endDate || new Date().toISOString().slice(0, 10));
+        if (endDate === null) return;
+        if (!startDate || !endDate) {
+          alert('Both dates are required');
+          return;
+        }
+        if (startDate > endDate) {
+          alert('Start date must be before or equal to end date');
+          return;
+        }
+        setLoading(true);
+        try {
+          const [data, emps, brs] = await Promise.all([
+            attendanceService.listAll({
+              startDate,
+              endDate,
+              branchId: filters.branchId || undefined,
+              department: filters.department || undefined,
+              employeeId: filters.employeeId || undefined,
+              status: filters.status || undefined,
+            }),
+            attendanceService.listEmployees(),
+            attendanceService.listBranches(),
+          ]);
+
+           // Try to load logo files in order of preference
+           let logoImgData = null;
+           try {
+             // 1. Try to load the provided 512px logo
+             const logoResponse = await fetch('/Infinity-logo-512px.png');
+             if (!logoResponse.ok) throw new Error('Failed to load Infinity-logo-512px.png');
+             const logoBlob = await logoResponse.blob();
+             logoImgData = await new Promise((resolve, reject) => {
+               const reader = new FileReader();
+               reader.onloadend = () => resolve(reader.result.split(',')[1]); // Get base64 data
+               reader.onerror = reject;
+               reader.readAsDataURL(logoBlob);
+             });
+           } catch (pngError1) {
+             try {
+               // 2. Try to load the PWA 512px logo as fallback
+               const logoResponse = await fetch('/pwa-512.png');
+               if (!logoResponse.ok) throw new Error('Failed to load pwa-512.png');
+               const logoBlob = await logoResponse.blob();
+               logoImgData = await new Promise((resolve, reject) => {
+                 const reader = new FileReader();
+                 reader.onloadend = () => resolve(reader.result.split(',')[1]); // Get base64 data
+                 reader.onerror = reject;
+                 reader.readAsDataURL(logoBlob);
+               });
+              } catch (pwaError) {
+                // 3. Fallback to SVG conversion
+                const logoSvg = brandLogoSvg(40);
+                const img = new Image();
+                img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(logoSvg);
+                await new Promise((resolve, reject) => {
+                  img.onload = () => resolve(img);
+                  img.onerror = reject;
+                });
+                // Calculate dimensions safely to avoid division by zero
+                let width = img.width || 100;
+                let height = img.height || 100;
+                if (width > 100) {
+                  height = Math.round(height * (100 / width));
+                  width = 100;
+                }
+                if (height > 100) {
+                  width = Math.round(width * (100 / height));
+                  height = 100;
+                }
+                // Ensure minimum dimensions
+                width = Math.max(width, 1);
+                height = Math.max(height, 1);
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                logoImgData = canvas.toDataURL('image/png').split(',')[1];
+              }
+            }
+
+            // Aggregate per employee
+          const employeeMap = new Map();
+          data.forEach(record => {
+            const empId = record.employee_id;
+            if (!employeeMap.has(empId)) {
+              const employee = record.employees || {};
+              const branchName = employee.branches?.branch_name ||
+                (brs.find(b => b.id === record.branch_id) || {}).branch_name ||
+                employee.branch || '—';
+              employeeMap.set(empId, {
+                employeeId: empId,
+                fullName: employee.full_name || empId || '—',
+                employeeNumber: employee.employee_number || employee.staff_id || employee.employee_code || '—',
+                branch: branchName,
+                presentDays: 0,
+                lateDays: 0,
+                absentDays: 0,
+                dates: new Set(),
+              });
+            }
+            const emp = employeeMap.get(empId);
+            emp.dates.add(record.attendance_date);
+            const isLate = record.status === 'late' || (record.late_minutes || 0) > 0;
+            if (record.status === 'present') {
+              emp.presentDays += 1;
+            } else if (isLate) {
+              emp.lateDays += 1;
+            } else if (record.status === 'absent') {
+              emp.absentDays += 1;
+            }
+          });
+
+          const workbook = new ExcelJS.Workbook();
+          workbook.creator = 'Infinity Bank';
+          workbook.created = new Date();
+
+          // Add logo - use pre-loaded logo data
+          const logoId = workbook.addImage({
+            buffer: logoImgData,
+            extension: 'png',
+          })
+
+          const sheet = workbook.addWorksheet('Attendance Records');
+
+           // Merge cells for logo and title
+           sheet.mergeCells('A1:G2');
+           sheet.addImage(logoId, 'A1:A2');
+           sheet.mergeCells('B1:H2');
+          sheet.getCell('B1').value = `Attendance Report`;
+          sheet.getCell('B1').font = { size: 16, bold: true };
+          sheet.getCell('B1').alignment = { vertical: 'middle', horizontal: 'left' };
+
+          // Add date range and filters info
+          const currentRow = 4;
+          sheet.getCell(`A${currentRow}`).value = `Period:`;
+          sheet.getCell(`B${currentRow}`).value = `${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}`;
+          sheet.getCell(`A${currentRow + 1}`).value = `Generated on:`;
+          sheet.getCell(`B${currentRow + 1}`).value = new Date().toLocaleString();
+
+          // Filter info
+          let filterText = [];
+          if (filters.branchId) {
+            const branch = brs.find(b => b.id === filters.branchId);
+            filterText.push(`Branch: ${branch?.branch_name || filters.branchId}`);
+          }
+          if (filters.department) {
+            filterText.push(`Department: ${filters.department}`);
+          }
+          if (filters.employeeId) {
+            const emp = emps.find(e => e.id === filters.employeeId);
+            filterText.push(`Employee: ${emp?.full_name || filters.employeeId}`);
+          }
+          if (filters.status) {
+            filterText.push(`Status: ${filters.status}`);
+          }
+          if (filterText.length > 0) {
+            sheet.getCell(`A${currentRow + 2}`).value = `Filters:`;
+            sheet.getCell(`B${currentRow + 2}`).value = filterText.join(', ');
+          }
+
+          // Table header
+          const headerRow = currentRow + 4;
+          sheet.columns = [
+            { header: 'Employee', key: 'employee', width: 30 },
+            { header: 'Employee Number', key: 'employeeNumber', width: 20 },
+            { header: 'Assigned Branch', key: 'branch', width: 20 },
+            { header: 'Present Days', key: 'presentDays', width: 15 },
+            { header: 'Late Days', key: 'lateDays', width: 15 },
+            { header: 'Absent Days', key: 'absentDays', width: 15 },
+            { header: 'Total Days', key: 'totalDays', width: 15 },
+            { header: 'Attendance %', key: 'attendancePct', width: 15 },
+          ];
+
+          const rows = [];
+          employeeMap.forEach(emp => {
+            const totalDays = emp.dates.size;
+            const attendancePct = totalDays > 0 ? ((emp.presentDays + emp.lateDays) / totalDays) * 100 : 0;
+            rows.push({
+              employee: emp.fullName,
+              employeeNumber: emp.employeeNumber,
+              branch: emp.branch,
+              presentDays: emp.presentDays,
+              lateDays: emp.lateDays,
+              absentDays: emp.absentDays,
+              totalDays,
+              attendancePct: Number(attendancePct.toFixed(2)),
+            });
+          });
+
+          sheet.addRows(rows);
+
+          // Add summary totals
+          const summaryRow = headerRow + rows.length + 2;
+          sheet.getCell(`A${summaryRow}`).value = 'Summary';
+          sheet.getCell(`A${summaryRow}`).font = { bold: true };
+          sheet.getCell(`A${summaryRow + 1}`).value = `Total Employees:`;
+          sheet.getCell(`B${summaryRow + 1}`).value = employeeMap.size;
+          sheet.getCell(`A${summaryRow + 2}`).value = `Total Present Days:`;
+          sheet.getCell(`B${summaryRow + 2}`).value = rows.reduce((sum, r) => sum + r.presentDays, 0);
+          sheet.getCell(`A${summaryRow + 3}`).value = `Total Late Days:`;
+          sheet.getCell(`B${summaryRow + 3}`).value = rows.reduce((sum, r) => sum + r.lateDays, 0);
+          sheet.getCell(`A${summaryRow + 4}`).value = `Total Absent Days:`;
+          sheet.getCell(`B${summaryRow + 4}`).value = rows.reduce((sum, r) => sum + r.absentDays, 0);
+          const totalPresentLate = rows.reduce((sum, r) => sum + r.presentDays + r.lateDays, 0);
+          const totalDaysAll = rows.reduce((sum, r) => sum + r.totalDays, 0);
+          const overallAttPct = totalDaysAll > 0 ? (totalPresentLate / totalDaysAll) * 100 : 0;
+          sheet.getCell(`A${summaryRow + 5}`).value = `Overall Attendance %:`;
+          sheet.getCell(`B${summaryRow + 5}`).value = `${overallAttPct.toFixed(1)}%`;
+
+          // Add HR sign-off block
+          const signOffRow = summaryRow + 7;
+          sheet.getCell(`A${signOffRow}`).value = 'HR Name:';
+          sheet.getCell(`B${signOffRow}`).value = '_____________________';
+          sheet.getCell(`A${signOffRow + 1}`).value = 'Signature:';
+          sheet.getCell(`B${signOffRow + 1}`).value = '_____________________';
+          sheet.getCell(`A${signOffRow + 2}`).value = 'Date:';
+          sheet.getCell(`B${signOffRow + 2}`).value = '_____________________';
+
+          // Generate Excel buffer
+          const buffer = await workbook.xlsx.writeBuffer();
+          const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `attendance_${startDate}_to_${endDate}.xlsx`;
+          a.click();
+          URL.revokeObjectURL(url);
+        } catch (e) {
+          alert('Export failed: ' + e?.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+        const exportToPDF = async () => {
+         const startDate = window.prompt('Enter start date (YYYY-MM-DD):', filters.startDate || new Date().toISOString().slice(0, 8) + '01');
+         if (startDate === null) return;
+         const endDate = window.prompt('Enter end date (YYYY-MM-DD):', filters.endDate || new Date().toISOString().slice(0, 10));
+         if (endDate === null) return;
+         if (!startDate || !endDate) {
+           alert('Both dates are required');
+           return;
+         }
+         if (startDate > endDate) {
+           alert('Start date must be before or equal to end date');
+           return;
+         }
+         setLoading(true);
+         try {
+           const [data, emps, brs] = await Promise.all([
+             attendanceService.listAll({
+               startDate,
+               endDate,
+               branchId: filters.branchId || undefined,
+               department: filters.department || undefined,
+               employeeId: filters.employeeId || undefined,
+               status: filters.status || undefined,
+             }),
+             attendanceService.listEmployees(),
+             attendanceService.listBranches(),
+           ]);
+
+           // Try to load logo files in order of preference
+           let logoImgData = null;
+           try {
+             // 1. Try to load the provided 512px logo
+             const logoResponse = await fetch('/Infinity-logo-512px.png');
+             if (!logoResponse.ok) throw new Error('Failed to load Infinity-logo-512px.png');
+             const logoBlob = await logoResponse.blob();
+             logoImgData = await new Promise((resolve, reject) => {
+               const reader = new FileReader();
+               reader.onloadend = () => resolve(reader.result.split(',')[1]); // Get base64 data
+               reader.onerror = reject;
+               reader.readAsDataURL(logoBlob);
+             });
+           } catch (pngError1) {
+             try {
+               // 2. Try to load the PWA 512px logo as fallback
+               const logoResponse = await fetch('/pwa-512.png');
+               if (!logoResponse.ok) throw new Error('Failed to load pwa-512.png');
+               const logoBlob = await logoResponse.blob();
+               logoImgData = await new Promise((resolve, reject) => {
+                 const reader = new FileReader();
+                 reader.onloadend = () => resolve(reader.result.split(',')[1]); // Get base64 data
+                 reader.onerror = reject;
+                 reader.readAsDataURL(logoBlob);
+               });
+              } catch (pwaError) {
+                // 3. Fallback to SVG conversion
+                const logoSvg = brandLogoSvg(40);
+                const img = new Image();
+                img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(logoSvg);
+                await new Promise((resolve, reject) => {
+                  img.onload = () => resolve(img);
+                  img.onerror = reject;
+                });
+                // Calculate dimensions safely to avoid division by zero
+                let width = img.width || 100;
+                let height = img.height || 100;
+                if (width > 100) {
+                  height = Math.round(height * (100 / width));
+                  width = 100;
+                }
+                if (height > 100) {
+                  width = Math.round(width * (100 / height));
+                  height = 100;
+                }
+                // Ensure minimum dimensions
+                width = Math.max(width, 1);
+                height = Math.max(height, 1);
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                logoImgData = canvas.toDataURL('image/png').split(',')[1];
+              }
+            }
+
+            // Aggregate per employee
+           const employeeMap = new Map();
+           data.forEach(record => {
+             const empId = record.employee_id;
+             if (!employeeMap.has(empId)) {
+               const employee = record.employees || {};
+               const branchName = employee.branches?.branch_name ||
+                 (brs.find(b => b.id === record.branch_id) || {}).branch_name ||
+                 employee.branch || '—';
+               employeeMap.set(empId, {
+                 employeeId: empId,
+                 fullName: employee.full_name || empId || '—',
+                 employeeNumber: employee.employee_number || employee.staff_id || employee.employee_code || '—',
+                 branch: branchName,
+                 presentDays: 0,
+                 lateDays: 0,
+                 absentDays: 0,
+                 dates: new Set(),
+               });
+             }
+             const emp = employeeMap.get(empId);
+             emp.dates.add(record.attendance_date);
+             const isLate = record.status === 'late' || (record.late_minutes || 0) > 0;
+             if (record.status === 'present') {
+               emp.presentDays += 1;
+             } else if (isLate) {
+               emp.lateDays += 1;
+             } else if (record.status === 'absent') {
+               emp.absentDays += 1;
+             }
+           });
+
+           const doc = new jsPDF();
+           // Add logo at top-left
+           doc.addImage(logoImgData, 'PNG', 10, 10, 20, 20);
+           // Title to the right of logo
+           doc.setFontSize(18);
+           doc.text('Attendance Report', 40, 20);
+           // Date range and generation info
+           doc.setFontSize(10);
+           doc.text(`Period: ${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}`, 10, 30);
+           doc.text(`Generated on: ${new Date().toLocaleString()}`, 10, 35);
+           // Filters info
+           let filterY = 40;
+           let filterText = [];
+           if (filters.branchId) {
+             const branch = brs.find(b => b.id === filters.branchId);
+             filterText.push(`Branch: ${branch?.branch_name || filters.branchId}`);
+           }
+           if (filters.department) {
+             filterText.push(`Department: ${filters.department}`);
+           }
+           if (filters.employeeId) {
+             const emp = emps.find(e => e.id === filters.employeeId);
+             filterText.push(`Employee: ${emp?.full_name || filters.employeeId}`);
+           }
+           if (filters.status) {
+             filterText.push(`Status: ${filters.status}`);
+           }
+           if (filterText.length > 0) {
+             doc.text(`Filters: ${filterText.join(', ')}`, 10, filterY);
+             filterY += 5;
+           }
+
+           // Prepare table data
+           const tableColumn = [
+             { header: 'Employee', key: 'employee' },
+             { header: 'Employee Number', key: 'employeeNumber' },
+             { header: 'Assigned Branch', key: 'branch' },
+             { header: 'Present Days', key: 'presentDays' },
+             { header: 'Late Days', key: 'lateDays' },
+             { header: 'Absent Days', key: 'absentDays' },
+             { header: 'Total Days', key: 'totalDays' },
+             { header: 'Attendance %', key: 'attendancePct' },
+           ];
+
+           const tableRows = [];
+           employeeMap.forEach(emp => {
+             const totalDays = emp.dates.size;
+             const attendancePct = totalDays > 0 ? ((emp.presentDays + emp.lateDays) / totalDays) * 100 : 0;
+             tableRows.push({
+               employee: emp.fullName,
+               employeeNumber: emp.employeeNumber,
+               branch: emp.branch,
+               presentDays: emp.presentDays,
+               lateDays: emp.lateDays,
+               absentDays: emp.absentDays,
+               totalDays,
+               attendancePct: Number(attendancePct.toFixed(2)),
+             });
+           });
+
+           // Auto table
+           const tableStartY = filterY + (filterText.length > 0 ? 10 : 10);
+           doc.autoTable({
+             column: tableColumn,
+             body: tableRows,
+             startY: tableStartY,
+             theme: 'striped',
+             headStyles: { fillColor: [0, 153, 68] },
+             bodyStyles: { fontSize: 9 },
+             columnStyles: {
+               employee: { cellWidth: 40 },
+               employeeNumber: { cellWidth: 30 },
+               branch: { cellWidth: 30 },
+               presentDays: { cellWidth: 20 },
+               lateDays: { cellWidth: 20 },
+               absentDays: { cellWidth: 20 },
+               totalDays: { cellWidth: 20 },
+               attendancePct: { cellWidth: 20 },
+             },
+           });
+
+           // Add summary totals
+           const finalY = doc.lastAutoTable.finalY + 20;
+           doc.setFontSize(10);
+           doc.text('Summary', 10, finalY);
+           doc.setFontSize(9);
+           doc.text(`Total Employees: ${employeeMap.size}`, 10, finalY + 10);
+           const totalPresentDays = tableRows.reduce((sum, r) => sum + r.presentDays, 0);
+           const totalLateDays = tableRows.reduce((sum, r) => sum + r.lateDays, 0);
+           const totalAbsentDays = tableRows.reduce((sum, r) => sum + r.absentDays, 0);
+           doc.text(`Total Present Days: ${totalPresentDays}`, 10, finalY + 20);
+           doc.text(`Total Late Days: ${totalLateDays}`, 10, finalY + 30);
+           doc.text(`Total Absent Days: ${totalAbsentDays}`, 10, finalY + 40);
+           const totalPresentLate = tableRows.reduce((sum, r) => sum + r.presentDays + r.lateDays, 0);
+           const totalDaysAll = tableRows.reduce((sum, r) => sum + r.totalDays, 0);
+           const overallAttPct = totalDaysAll > 0 ? (totalPresentLate / totalDaysAll) * 100 : 0;
+           doc.text(`Overall Attendance %: ${overallAttPct.toFixed(1)}%`, 10, finalY + 50);
+
+           // Add HR sign-off block
+           const signOffY = finalY + 70;
+           doc.setFontSize(9);
+           doc.text('HR Name:', 10, signOffY);
+           doc.text('_____________________', 30, signOffY);
+           doc.text('Signature:', 10, signOffY + 10);
+           doc.text('_____________________', 30, signOffY + 10);
+           doc.text('Date:', 10, signOffY + 20);
+           doc.text('_____________________', 30, signOffY + 20);
+
+           // Save the PDF
+           doc.save(`attendance_${startDate}_to_${endDate}.pdf`);
+         } catch (e) {
+           alert('Export failed: ' + e?.message);
+         } finally {
+           setLoading(false);
+         }
+       };
+
   // Trigger lazy auto-clock-out reconciliation once per management session.
   useEffect(() => {
     attendanceService.reconcileAutoClockouts().catch(() => { /* best-effort background reconciliation */ })
@@ -240,9 +713,17 @@ function RecordsTab({ setNotice }) {
           <h2 className="text-2xl font-semibold text-slate-900">Attendance Management</h2>
           <p className="text-sm text-slate-500 mt-1">Organization-wide attendance oversight and corrections.</p>
         </div>
-        <button onClick={load} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">
-          <RefreshCw className="w-4 h-4" /> Refresh
-        </button>
+        <div className="flex gap-2">
+          <button onClick={exportToExcel} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">
+            <ArrowDownToLine className="w-4 h-4" /> Export to Excel
+          </button>
+          <button onClick={exportToPDF} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">
+            <ArrowDownToLine className="w-4 h-4" /> Export to PDF
+          </button>
+          <button onClick={load} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-600 hover:bg-slate-50">
+            <RefreshCw className="w-4 h-4" /> Refresh
+          </button>
+        </div>
       </div>
 
       {error && <ErrorState message={error} />}
