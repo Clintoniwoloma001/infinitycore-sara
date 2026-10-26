@@ -50,6 +50,7 @@ export const routeConfig = [
       { label: 'Dashboard', path: '/', icon: LayoutDashboard, element: 'Dashboard', permissions: [] },
       { label: 'Director Intelligence', path: '/director', icon: Crown, element: 'DirectorDashboard', permissions: [PERMISSIONS.DIRECTOR_EXECUTIVE_READ] },
       { label: 'My Profile', path: '/profile', icon: UserCircle, element: 'Profile', permissions: [] },
+      { label: 'Leave Requests', path: '/leave-requests', icon: CalendarDays, element: 'LeaveRequests', permissions: [] },
       { label: 'Messages', path: '/chat', icon: MessageSquare, element: 'MessagesPage', permissions: [] },
       { label: 'Comm Admin', path: '/communication-admin', icon: Landmark, element: 'CommunicationAdmin', permissions: [PERMISSIONS.ADMIN_MANAGE_USERS] },
       { label: 'BankOne Imports', path: '/bankone-imports', icon: Database, element: 'BankOneImportCenter', permissions: [PERMISSIONS.BANKONE_READ] },
@@ -62,7 +63,6 @@ export const routeConfig = [
     department: DEPARTMENTS.HR,
     items: [
       { label: 'Employees', path: '/employees', icon: UserCheck, element: 'Employees', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
-      { label: 'Leave Requests', path: '/leave-requests', icon: CalendarDays, element: 'LeaveRequests', permissions: [] },
       { label: 'Leave Balances', path: '/leave-balances', icon: ListChecks, element: 'LeaveBalances', permissions: [PERMISSIONS.HR_LEAVE_MANAGE] },
       { label: 'Leave Planner', path: '/leave-planner', icon: CalendarRange, element: 'LeaveSchedulePlanner', permissions: [PERMISSIONS.LEAVE_SCHEDULE_VIEW] },
       { label: 'Attendance Mgmt', path: '/attendance-management', icon: ClipboardList, element: 'AttendanceManagement', permissions: [PERMISSIONS.HR_ATTENDANCE_MANAGE] },
@@ -100,7 +100,6 @@ export const routeConfig = [
       { label: 'Salary Structure', path: '/salary-structure', icon: Wallet, element: 'SalaryStructure', permissions: [PERMISSIONS.HR_PAYROLL_READ] },
       { label: 'Payroll & BankOne', path: '/payroll-bankone', icon: Wallet, element: 'PayrollBankOne', permissions: [PERMISSIONS.PAYROLL_PUSH] },
       { label: 'Settings', path: '/settings', icon: Settings, element: 'Settings', permissions: [PERMISSIONS.HR_SETTINGS_MANAGE] },
-      { label: 'Data Import', path: '/data-import', icon: Database, element: 'DataImport', permissions: [PERMISSIONS.DATA_IMPORT_VIEW] },
       { label: 'Training & Development', path: '/training', icon: GraduationCap, element: 'Training', permissions: [PERMISSIONS.HR_TRAINING_READ] },
       { label: 'Man-Hour Intelligence', path: '/man-hour-intelligence', icon: Gauge, element: 'ManHourIntelligence', permissions: [PERMISSIONS.WORKFORCE_MANHOUR_READ] },
     ],
@@ -113,9 +112,16 @@ export const routeConfig = [
     ],
   },
   {
+    section: 'Communications',
+    items: [
+      { label: 'My Zoho Mail', path: '/zoho-mail', icon: Mail, element: 'ZohoMail', permissions: [] },
+    ],
+  },
+  {
     section: 'Management',
     items: [
       { label: 'Reports', path: '/reports', icon: BarChart3, element: 'Reports', permissions: [PERMISSIONS.REPORTS_READ] },
+      { label: 'Data Import', path: '/data-import', icon: Database, element: 'DataImport', permissions: [PERMISSIONS.DATA_IMPORT_VIEW] },
       { label: 'Audit Logs', path: '/audit-logs', icon: ScrollText, element: 'AuditLogs', permissions: [PERMISSIONS.ADMIN_VIEW_AUDIT] },
       { label: 'Employee Tracking', path: '/employee-tracking', icon: MapPin, element: 'EmployeeTracking', permissions: [PERMISSIONS.TRACKING_VIEW], trackingGate: true },
       // Geofence Settings & Management. Gated on a FIXED role list rather than
@@ -150,7 +156,7 @@ export const routeConfig = [
       { label: 'My Work', path: '/my-work', icon: ListChecks, element: 'MyWork', permissions: [] },
       { label: 'Attendance', path: '/attendance', icon: Clock3, element: 'Attendance', permissions: [PERMISSIONS.HR_ATTENDANCE_SELF] },
       { label: 'Work Management', path: '/work-management', icon: Target, element: 'WorkManagement', permissions: [PERMISSIONS.HR_APPLICATIONS_READ] },
-      { label: 'My Zoho Mail', path: '/zoho-mail', icon: Mail, element: 'ZohoMail', permissions: [] },
+      { label: 'My Training', path: '/my-training', icon: GraduationCap, element: 'MyTraining', permissions: [] },
       { label: 'I-Meet', path: '/imeet', icon: Mic, element: 'IMeet', permissions: [] },
     ],
   },
