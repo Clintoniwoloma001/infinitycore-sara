@@ -79,14 +79,17 @@ $$;
 do $$
 begin
   if exists (select 1 from pg_extension where extname = 'pg_cron') then
-    -- Remove any prior job with the same name
-    perform cron.unschedule('infinitycore-audit-sweep')
-    where exists (select 1 from cron.job where jobname = 'infinitycore-audit-sweep');
+    -- Remove any prior job with the same name (ignore errors if not present)
+    begin
+      perform cron.unschedule('infinitycore-audit-sweep');
+    exception when others then
+      null;
+    end;
 
     perform cron.schedule(
       'infinitycore-audit-sweep',
       '0 6 * * *',  -- 06:00 UTC = 07:00 Africa/Lagos
-      $$select public.audit_sweep_cron();$$
+      $cron$select public.audit_sweep_cron();$cron$
     );
   else
     raise notice 'pg_cron extension not installed; skipping job registration';
