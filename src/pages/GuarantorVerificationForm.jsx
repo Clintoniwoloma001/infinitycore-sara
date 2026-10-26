@@ -7,7 +7,7 @@ import {
 import Logo from '../components/Logo'
 import CameraCapture from '../components/CameraCapture'
 import { guarantorVerificationService } from '../services/guarantorVerificationService'
-import { LoadingState } from '../components/PageStates'
+import SignatureInput from '../components/shared/SignatureInput'
 
 const STEPS = [
   { id: 1, title: 'Identity', short: 'Identity', icon: User },
@@ -64,7 +64,7 @@ export default function GuarantorVerificationForm() {
   const [form, setForm] = useState({})
   const [documents, setDocuments] = useState([])
   const [selfie, setSelfie] = useState(null)
-  const [signature, setSignature] = useState(null)
+  const [route, setRoute] = useState('online') // 'online' | 'upload'
   const [uploading, setUploading] = useState(false)
   const [fileError, setFileError] = useState('')
 
@@ -288,26 +288,8 @@ export default function GuarantorVerificationForm() {
           <p className="mt-1 text-blue-700">Type your full legal name or initials below to sign this guarantor form. This electronic signature has the same effect as a handwritten signature.</p>
         </div>
         <div className="space-y-3">
-          <Field label="Type your signature" required>
-            <div className="relative">
-              <input
-                className={`${inputCls} pr-20`}
-                value={signature || ''}
-                onChange={(e) => setSignature(e.target.value)}
-                placeholder="e.g. John Doe or J.D."
-                maxLength={120}
-                autoComplete="off"
-              />
-              {signature && (
-                <button
-                  type="button"
-                  onClick={() => setSignature('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-rose-600 hover:text-rose-700 px-2 py-1 rounded hover:bg-rose-50 transition-colors"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
+          <Field label="Signature" required>
+            <SignatureInput onChange={(v) => setSignature(v?.dataUrl || null)} />
           </Field>
           {signature ? (
             <div className="transition-all duration-300 ease-out">
@@ -446,6 +428,10 @@ export default function GuarantorVerificationForm() {
           <p className="text-emerald-700 mt-0.5">Position: {details.position || 'N/A'}</p>
         </div>
       )}
+      <div className="mb-4 flex gap-2">
+        <button type="button" onClick={() => setRoute('online')} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${route==='online'?'bg-[#009944] text-white':'bg-slate-100 text-slate-700'}`}>Fill form online</button>
+        <button type="button" onClick={() => setRoute('upload')} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${route==='upload'?'bg-[#009944] text-white':'bg-slate-100 text-slate-700'}`}>Upload completed form</button>
+      </div>
       <div className="flex gap-2 overflow-x-auto pb-3 mb-6 border-b border-slate-200">
         {STEPS.map((s) => {
           const Icon = s.icon
