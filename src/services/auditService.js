@@ -112,3 +112,5 @@ const fmtDate = (d) => (d
   : '—')
 
 export { fmtDate }
+
+export { auditCommandCenterService } from './auditCommandCenterService'

@@ -134,6 +134,7 @@ export const routeConfig = [
     department: DEPARTMENTS.AUDIT,
     items: [
       { label: 'Audit Workspace', path: '/audit', icon: ShieldCheck, element: 'Audit', permissions: [PERMISSIONS.AUDIT_MONITORING_READ] },
+      { label: 'Audit Command Centre', path: '/audit-command-center', icon: ShieldCheck, element: 'AuditCommandCenter', permissions: [PERMISSIONS.AUDIT_MONITORING_READ] },
     ],
   },
   {
