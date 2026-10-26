@@ -14,7 +14,7 @@ import {
 } from '../services/leaveApprovalsService'
 import { formatDate, StatusBadge } from '../lib/utils'
 import { useAuth } from '../hooks/useAuth'
-import SignaturePad from '../components/SignaturePad'
+import SignatureInput from '../components/shared/SignatureInput'
 import {
   LEAVE_ENTITLEMENTS,
   LEAVE_TYPE_LABELS,
@@ -505,7 +505,7 @@ export default function LeaveRequests() {
             <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 mb-4" />
 
             <label className="text-sm font-medium text-slate-700">Sign to confirm *</label>
-            <div className="mt-1"><SignaturePad onChange={setSignature} /></div>
+            <div className="mt-1"><SignatureInput onChange={(v) => setSignature(v?.dataUrl || null)} /></div>
 
             {formError && <p className="text-sm text-rose-600 mt-3">{formError}</p>}
 
