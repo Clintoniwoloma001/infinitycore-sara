@@ -472,3 +472,23 @@ entrypoint = "./functions/bankone-name-enquiry/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/oauth-callback/index.ts"
+
+[functions.ingest-audit-email-replies]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/ingest-audit-email-replies/index.ts"
+
+[functions.email-reply-ingestion]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/email-reply-ingestion/index.ts"
+
+[functions.audit-email-reply-ingest]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/audit-email-reply-ingest/index.ts"
+
+[functions.poll-audit-mailbox]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/poll-audit-mailbox/index.ts"
