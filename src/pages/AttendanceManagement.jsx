@@ -164,7 +164,7 @@ function RecordsTab({ setNotice }) {
            let logoImgData = null;
            try {
              // 1. Try to load the provided 512px logo
-             const logoResponse = await fetch('/Infinity-logo-512px.png');
+             const logoResponse = await fetch('/Infinity-logo-64px.png');
              if (!logoResponse.ok) throw new Error('Failed to load Infinity-logo-512px.png');
              const logoBlob = await logoResponse.blob();
              logoImgData = await new Promise((resolve, reject) => {
@@ -262,7 +262,7 @@ function RecordsTab({ setNotice }) {
           const sheet = workbook.addWorksheet('Attendance Records');
 
            // Merge cells for logo and title
-           sheet.mergeCells('A1:G2');
+            sheet.mergeCells('A1:A2');
            sheet.addImage(logoId, 'A1:A2');
            sheet.mergeCells('B1:H2');
           sheet.getCell('B1').value = `Attendance Report`;
@@ -403,7 +403,7 @@ function RecordsTab({ setNotice }) {
            let logoImgData = null;
            try {
              // 1. Try to load the provided 512px logo
-             const logoResponse = await fetch('/Infinity-logo-512px.png');
+             const logoResponse = await fetch('/Infinity-logo-64px.png');
              if (!logoResponse.ok) throw new Error('Failed to load Infinity-logo-512px.png');
              const logoBlob = await logoResponse.blob();
              logoImgData = await new Promise((resolve, reject) => {
